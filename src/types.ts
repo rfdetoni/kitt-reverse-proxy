@@ -23,6 +23,7 @@ export interface AppConfig {
   maxQueue: number;
   minIntervalMs: number;
   allowedEndpointHosts: string[];
+  followRedirects: boolean;
 }
 
 export interface CapturedExchange {
@@ -146,6 +147,21 @@ export interface OpenAiCompletion {
     message: {
       role: 'assistant';
       content: string;
+    };
+    finish_reason: string | null;
+  }>;
+}
+
+export interface OpenAiCompletionChunk {
+  id: string;
+  object: 'chat.completion.chunk';
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    delta: {
+      role?: 'assistant';
+      content?: string;
     };
     finish_reason: string | null;
   }>;

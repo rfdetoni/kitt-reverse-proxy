@@ -17,19 +17,25 @@ export class BrowserUpstreamClient {
     private readonly context: BrowserContext,
     private readonly endpointUrl: string,
     capturedHeaders: Record<string, string>,
-    private readonly timeoutMs: number
+    private readonly timeoutMs: number,
+    private readonly followRedirects = true
   ) {
     this.headers = { ...capturedHeaders };
   }
 
   async post(body: JsonObject): Promise<UpstreamResult> {
+    const isForm = /application\/x-www-form-urlencoded/i.test(this.headers['content-type'] || '');
+    const data = isForm
+      ? new URLSearchParams(Object.entries(body).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)])).toString()
+      : body;
+
     const response = await this.context.request.fetch(this.endpointUrl, {
       method: 'POST',
       headers: this.headers,
-      data: body,
+      data,
       timeout: this.timeoutMs,
       failOnStatusCode: false,
-      maxRedirects: 0,
+      maxRedirects: this.followRedirects ? 5 : 0,
       maxRetries: 0
     });
 

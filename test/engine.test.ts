@@ -45,3 +45,15 @@ test('message_array transform supports nested target message shapes', () => {
   const mapped = adapter.mapRequest({ messages: [{ role: 'user', content: 'nested' }] });
   assert.deepEqual(mapped.contents, [{ role: 'user', parts: [{ text: 'nested' }] }]);
 });
+
+test('mapResponseDeltas extracts incremental deltas from cumulative stream', () => {
+  const adapter = new DeclarativeAdapter(profile, { payload: { text: '', messageId: 'old' } }, 'web');
+  const deltas = adapter.mapResponseDeltas({ eventStream: [{ delta: 'Hel' }, { delta: 'Hello' }, { delta: 'Hello world' }] });
+  assert.deepEqual(deltas, ['Hel', 'lo', ' world']);
+});
+
+test('mapResponseDeltas extracts pure deltas from stream', () => {
+  const adapter = new DeclarativeAdapter(profile, { payload: { text: '', messageId: 'old' } }, 'web');
+  const deltas = adapter.mapResponseDeltas({ eventStream: [{ delta: 'Hello ' }, { delta: 'world' }] });
+  assert.deepEqual(deltas, ['Hello ', 'world']);
+});

@@ -106,11 +106,12 @@ curl http://127.0.0.1:3000/v1/chat/completions \
     "model": "adaptive-web-chat",
     "messages": [
       {"role":"user","content":"Olá"}
-    ]
+    ],
+    "stream": true
   }'
 ```
 
-`stream: true` produz SSE compatível, porém a resposta upstream é agregada antes do envio do chunk.
+`stream: true` produz fluxo Server-Sent Events (SSE) com emissão progressiva de deltas em tempo real conforme retornados ou gerados pelo upstream.
 
 ### Responses API
 
@@ -119,11 +120,12 @@ curl http://127.0.0.1:3000/v1/responses \
   -H 'content-type: application/json' \
   -d '{
     "model": "adaptive-web-chat",
-    "input": "Olá"
+    "input": "Olá",
+    "stream": false
   }'
 ```
 
-O shim de `/v1/responses` é voltado a texto e não implementa streaming nesse endpoint.
+O endpoint `/v1/responses` suporta tanto requisições completas com `stream: false` quanto streaming SSE com eventos padrão (`response.created`, `response.text.delta`, `response.completed`, `[DONE]`) quando `stream: true`.
 
 ## Profiles reutilizáveis
 
@@ -179,7 +181,7 @@ Exemplo:
 }
 ```
 
-Fontes aceitas incluem mensagens OpenAI, último texto do usuário, transcript, model/temperature, UUID/request ID e timestamps. Não existe uma fonte que execute código.
+Fontes aceitas incluem mensagens OpenAI, último texto do usuário, transcript, model/temperature, UUID/request ID e timestamps. Não existe uma fonte que execute código. Suporta payloads JSON e `application/x-www-form-urlencoded`.
 
 ## Uso com agentes
 
@@ -209,6 +211,8 @@ A compatibilidade oferecida é de transporte/mensagem. O chat web alvo continua 
 --headless
 --headed
 --no-cors
+--follow-redirects
+--no-redirects
 ```
 
 Variáveis:
@@ -221,6 +225,7 @@ PROXY_PORT
 PROXY_API_KEY
 PROXY_MAX_QUEUE
 PROXY_MIN_INTERVAL_MS
+PROXY_FOLLOW_REDIRECTS
 CAPTURE_TIMEOUT_MS
 CAPTURE_SETTLE_MS
 RESPONSE_SAMPLE_TIMEOUT_MS
@@ -230,11 +235,7 @@ UPSTREAM_TIMEOUT_MS
 
 ## Limitações intencionais
 
-- somente requests de chat `POST` com body JSON entram na descoberta automática;
 - não há CAPTCHA solving, stealth plugin ou bypass de WAF/anti-bot;
-- redirects upstream não são seguidos;
-- SSE upstream é agregado, não retransmitido byte a byte;
-- `/v1/responses` cobre o caminho textual básico;
 - endpoints que assinam cada request com JavaScript proprietário podem exigir integração específica e não devem ser contornados por técnicas de bypass.
 
 ## Desenvolvimento

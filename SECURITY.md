@@ -33,7 +33,7 @@ CORS, when enabled, accepts only localhost/loopback browser origins. Non-browser
 
 - the endpoint must be HTTP(S);
 - discovery only accepts endpoints under the same approximate site domain as the page;
-- redirects are disabled (`maxRedirects: 0`);
+- redirects are bounded and configurable (`--no-redirects` / `--follow-redirects`);
 - request queue is bounded;
 - stateful calls are serialized;
 - response body size is capped before parsing;

@@ -12,7 +12,8 @@ const DEFAULTS = Object.freeze({
   upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || 120_000),
   maxQueue: Number(process.env.PROXY_MAX_QUEUE || 64),
   minIntervalMs: Number(process.env.PROXY_MIN_INTERVAL_MS || 0),
-  apiKey: process.env.PROXY_API_KEY || undefined
+  apiKey: process.env.PROXY_API_KEY || undefined,
+  followRedirects: process.env.PROXY_FOLLOW_REDIRECTS !== 'false'
 });
 
 function readValue(args: string[], index: number, flag: string): string {
@@ -68,6 +69,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     maxQueue: DEFAULTS.maxQueue,
     minIntervalMs: DEFAULTS.minIntervalMs,
     allowedEndpointHosts: [],
+    followRedirects: DEFAULTS.followRedirects,
     ...(DEFAULTS.apiKey ? { apiKey: DEFAULTS.apiKey } : {})
   };
 
@@ -93,11 +95,13 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--headless': config.headed = false; break;
       case '--headed': config.headed = true; break;
       case '--no-cors': config.cors = false; break;
+      case '--follow-redirects': config.followRedirects = true; break;
+      case '--no-redirects': config.followRedirects = false; break;
       default: throw new Error(`Argumento desconhecido: ${arg}`);
     }
   }
 
-  if (!targetUrl) throw new Error('Informe a URL do chat. Ex.: adaptive-chat-proxy https://exemplo.com/chat');
+  if (!targetUrl) throw new Error('Informe a URL do chat. Ex.: kitt-reverse-proxy https://exemplo.com/chat');
   config.targetUrl = validateHttpUrl(targetUrl, 'URL alvo');
   config.ollamaUrl = validateHttpUrl(config.ollamaUrl, 'URL do Ollama');
   if (config.port > 65_535) throw new Error('--port deve estar entre 1 e 65535.');
@@ -108,5 +112,5 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
 }
 
 export function printHelp(): void {
-  console.log(`\nAdaptive OpenAI Web Proxy v2\n\nUso:\n  adaptive-chat-proxy <URL-do-chat> [opções]\n\nFluxo:\n  1. Abre o chat no Chromium.\n  2. Envie UMA mensagem manualmente para ensinar o endpoint.\n  3. O proxy aprende um mapping declarativo e mantém a sessão do browser viva.\n\nOpções:\n  --model <nome>              Modelo Ollama (default: ${DEFAULTS.model})\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para interação/captura (default: ${DEFAULTS.captureTimeoutMs / 1000})\n  --upstream-timeout <seg>    Timeout por chamada upstream (default: ${DEFAULTS.upstreamTimeoutMs / 1000})\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva o profile aprendido (sem cookies/headers)\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza explicitamente host externo do endpoint (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada (default: ${DEFAULTS.maxQueue})\n  --headless                  Chromium invisível; útil apenas quando não há interação manual\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  -h, --help                  Ajuda\n`);
+  console.log(`\nkitt-reverse-proxy (Adaptive OpenAI Web Proxy v2)\n\nUso:\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nFluxo:\n  1. Abre o chat no Chromium.\n  2. Envie UMA mensagem manualmente para ensinar o endpoint.\n  3. O proxy aprende um mapping declarativo e mantém a sessão do browser viva.\n\nOpções:\n  --model <nome>              Modelo Ollama (default: ${DEFAULTS.model})\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para interação/captura (default: ${DEFAULTS.captureTimeoutMs / 1000})\n  --upstream-timeout <seg>    Timeout por chamada upstream (default: ${DEFAULTS.upstreamTimeoutMs / 1000})\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva o profile aprendido (sem cookies/headers)\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza explicitamente host externo do endpoint (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada (default: ${DEFAULTS.maxQueue})\n  --headless                  Chromium invisível; útil apenas quando não há interação manual\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite seguir redirecionamentos HTTP (default: true)\n  --no-redirects              Desabilita redirecionamentos upstream\n  -h, --help                  Ajuda\n`);
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completionToResponses, responsesBodyToChat } from '../src/proxy/openai.js';
+import { completionToResponses, responsesBodyToChat, sendChatStream, sendResponsesStream } from '../src/proxy/openai.js';
 
 test('Responses API input converts to chat messages', () => {
   const chat = responsesBodyToChat({ model: 'x', input: 'hello' });
@@ -22,4 +22,51 @@ test('Responses API instructions become a system message', () => {
     { role: 'system', content: 'be concise' },
     { role: 'user', content: 'hello' }
   ]);
+});
+
+test('sendChatStream outputs progressive SSE chunks with deltas', () => {
+  const written: string[] = [];
+  const fakeRes = {
+    status: () => fakeRes,
+    setHeader: () => fakeRes,
+    write: (chunk: string) => { written.push(chunk); return true; },
+    end: (chunk?: string) => { if (chunk) written.push(chunk); }
+  };
+
+  const completion = {
+    id: 'chatcmpl-test',
+    object: 'chat.completion' as const,
+    created: 123456,
+    model: 'gpt-test',
+    choices: [{ index: 0, message: { role: 'assistant' as const, content: 'Hello world' }, finish_reason: 'stop' }]
+  };
+
+  sendChatStream(fakeRes as never, completion, ['Hello', ' world']);
+  assert.ok(written.some((w) => w.includes('"content":"Hello"')));
+  assert.ok(written.some((w) => w.includes('"content":" world"')));
+  assert.ok(written.some((w) => w.includes('[DONE]')));
+});
+
+test('sendResponsesStream outputs response stream events', () => {
+  const written: string[] = [];
+  const fakeRes = {
+    status: () => fakeRes,
+    setHeader: () => fakeRes,
+    write: (chunk: string) => { written.push(chunk); return true; },
+    end: (chunk?: string) => { if (chunk) written.push(chunk); }
+  };
+
+  const completion = {
+    id: 'chatcmpl-test',
+    object: 'chat.completion' as const,
+    created: 123456,
+    model: 'gpt-test',
+    choices: [{ index: 0, message: { role: 'assistant' as const, content: 'Hello world' }, finish_reason: 'stop' }]
+  };
+
+  sendResponsesStream(fakeRes as never, completion, ['Hello', ' world']);
+  assert.ok(written.some((w) => w.includes('response.created')));
+  assert.ok(written.some((w) => w.includes('response.text.delta')));
+  assert.ok(written.some((w) => w.includes('response.completed')));
+  assert.ok(written.some((w) => w.includes('[DONE]')));
 });

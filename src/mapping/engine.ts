@@ -152,6 +152,62 @@ export class DeclarativeAdapter {
     };
   }
 
+  mapResponseDeltas(siteResponse: JsonValue): string[] {
+    const rawEvents = (siteResponse && typeof siteResponse === 'object' && !Array.isArray(siteResponse))
+      ? (Array.isArray(siteResponse.eventStream) ? siteResponse.eventStream : (Array.isArray(siteResponse.ndjson) ? siteResponse.ndjson : null))
+      : null;
+
+    if (!rawEvents || rawEvents.length === 0) {
+      try {
+        const full = this.mapResponse(siteResponse);
+        const text = full.choices[0]?.message.content || '';
+        return text ? [text] : [];
+      } catch {
+        return [];
+      }
+    }
+
+    const deltas: string[] = [];
+    let accumulated = '';
+
+    for (const event of rawEvents) {
+      const collected: string[] = [];
+      for (const path of this.profile.response.contentPaths) {
+        const eventPath = path.replace(/^\$\.(eventStream|ndjson)\[\*\]/, '$');
+        for (const value of getPathValues(event, eventPath)) {
+          collected.push(...textFromValue(value));
+        }
+      }
+      if (collected.length === 0) collected.push(...genericExtract(event));
+      const text = collected.filter(Boolean).join(this.profile.response.separator ?? '');
+      if (!text) continue;
+
+      if (text.startsWith(accumulated)) {
+        const delta = text.slice(accumulated.length);
+        if (delta) {
+          deltas.push(delta);
+          accumulated = text;
+        }
+      } else if (accumulated.endsWith(text) || text === accumulated) {
+        continue;
+      } else {
+        deltas.push(text);
+        accumulated += text;
+      }
+    }
+
+    if (deltas.length === 0) {
+      try {
+        const full = this.mapResponse(siteResponse);
+        const text = full.choices[0]?.message.content || '';
+        if (text) deltas.push(text);
+      } catch {
+        // ignore
+      }
+    }
+    return deltas;
+  }
+
   applyState(siteResponse: JsonValue): void {
     for (const update of this.profile.state?.updates || []) {
       const value = getPathValues(siteResponse, update.responsePath)[0];

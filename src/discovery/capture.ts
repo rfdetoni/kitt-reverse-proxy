@@ -24,10 +24,29 @@ function parseRequestBody(request: Request): JsonObject | null {
   if (!text) return null;
   try {
     const parsed = JSON.parse(text) as unknown;
-    return isJsonObject(parsed) ? parsed : null;
+    if (isJsonObject(parsed)) return parsed;
   } catch {
-    return null;
+    // Continue to fallback parsers
   }
+  try {
+    const params = new URLSearchParams(text);
+    const entries = [...params.entries()];
+    if (entries.length > 0 && entries.some(([_, v]) => v.length > 0)) {
+      const obj: JsonObject = {};
+      for (const [k, v] of entries) {
+        try {
+          const inner = JSON.parse(v);
+          obj[k] = isJsonObject(inner) || Array.isArray(inner) ? inner : v;
+        } catch {
+          obj[k] = v;
+        }
+      }
+      return obj;
+    }
+  } catch {
+    // Non-parseable body
+  }
+  return null;
 }
 
 async function readResponse(response: Response): Promise<{ body: JsonValue; headers: Record<string, string>; contentType: string }> {

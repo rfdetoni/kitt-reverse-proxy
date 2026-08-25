@@ -1,13 +1,12 @@
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import type { Server } from 'node:http';
-import type { AdapterProfile, AppConfig, CapturedExchange, JsonObject } from '../types.js';
+import type { AdapterProfile, AppConfig, CapturedExchange, JsonObject, LiveBrowserSession } from '../types.js';
 import { logger } from '../logger.js';
 import { DeclarativeAdapter } from '../mapping/engine.js';
 import { BrowserUpstreamClient, UpstreamHttpError } from '../runtime/upstream.js';
 import { QueueFullError, SerialQueue } from '../runtime/serial-queue.js';
-import type { LiveBrowserSession } from '../types.js';
-import { apiKeyMiddleware, completionToResponses, responsesBodyToChat, sendOpenAiError, sendSyntheticChatStream, validateChatBody } from './openai.js';
+import { apiKeyMiddleware, completionToResponses, responsesBodyToChat, sendChatStream, sendOpenAiError, sendResponsesStream, sendSyntheticChatStream, validateChatBody } from './openai.js';
 
 function statusForError(error: unknown): number {
   if (error instanceof QueueFullError) return 429;
@@ -30,7 +29,13 @@ export async function startProxyServer(input: {
   const { capture, session, adapter, profile, profileSource, config } = input;
   const app = express();
   const queue = new SerialQueue(config.maxQueue, config.minIntervalMs);
-  const upstream = new BrowserUpstreamClient(session.context, capture.endpointUrl, capture.headers, config.upstreamTimeoutMs);
+  const upstream = new BrowserUpstreamClient(
+    session.context,
+    capture.endpointUrl,
+    capture.headers,
+    config.upstreamTimeoutMs,
+    config.followRedirects
+  );
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '2mb', strict: true }));
@@ -54,8 +59,9 @@ export async function startProxyServer(input: {
     const mapped = adapter.mapRequest(body);
     const result = await upstream.post(mapped);
     const completion = adapter.mapResponse(result.body, typeof body.model === 'string' ? body.model : config.model);
+    const deltas = adapter.mapResponseDeltas(result.body);
     adapter.applyState(result.body);
-    return completion;
+    return { completion, deltas };
   });
 
   app.get('/healthz', (_req: Request, res: Response) => {
@@ -64,7 +70,8 @@ export async function startProxyServer(input: {
       targetOrigin: new URL(capture.endpointUrl).origin,
       profileSource,
       stateful: Boolean(profile.state?.updates?.length),
-      queueDepth: queue.depth
+      queueDepth: queue.depth,
+      followRedirects: config.followRedirects
     });
   });
 
@@ -75,8 +82,8 @@ export async function startProxyServer(input: {
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
       const body = validateChatBody(req.body);
-      const completion = await execute(body);
-      if (body.stream === true) sendSyntheticChatStream(res, completion);
+      const { completion, deltas } = await execute(body);
+      if (body.stream === true) sendChatStream(res, completion, deltas);
       else res.json(completion);
     } catch (error) {
       const status = error instanceof Error && /Body|messages/.test(error.message) ? 400 : statusForError(error);
@@ -88,13 +95,13 @@ export async function startProxyServer(input: {
 
   app.post('/v1/responses', async (req: Request, res: Response) => {
     try {
-      if (req.body?.stream === true) {
-        sendOpenAiError(res, 400, 'Streaming do endpoint /v1/responses ainda não é suportado; use stream=false.', 'unsupported_streaming');
-        return;
-      }
       const body = responsesBodyToChat(req.body);
-      const completion = await execute(body);
-      res.json(completionToResponses(completion));
+      const { completion, deltas } = await execute(body);
+      if (req.body?.stream === true) {
+        sendResponsesStream(res, completion, deltas);
+      } else {
+        res.json(completionToResponses(completion));
+      }
     } catch (error) {
       const status = error instanceof Error && /Body|input/.test(error.message) ? 400 : statusForError(error);
       logger.warn(`responses: ${error instanceof Error ? error.message : String(error)}`);
