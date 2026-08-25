@@ -1,0 +1,34 @@
+{
+  "name": "kitt-reverse-proxy",
+  "version": "2.0.0",
+  "description": "Local OpenAI-compatible adapter for authorized public web chat sessions.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "kitt-reverse-proxy": "./dist/cli.js",
+    "adaptive-chat-proxy": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node ./dist/cli.js",
+    "dev": "tsx ./src/cli.ts",
+    "test": "rm -rf dist-test && tsc -p tsconfig.json && node --test dist-test/test/*.test.js",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "playwright": "^1.55.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
