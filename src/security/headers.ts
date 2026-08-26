@@ -12,6 +12,8 @@ const FORWARD_DENYLIST = new Set([
   'upgrade'
 ]);
 
+const SENSITIVE_FORWARD_HEADER = /(authorization|token|secret|api[-_]?key|csrf|xsrf|session)/i;
+
 export function sanitizeCapturedHeaders(headers: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(headers)
@@ -20,15 +22,18 @@ export function sanitizeCapturedHeaders(headers: Record<string, string>): Record
   );
 }
 
+export function hasSensitiveForwardHeaders(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some((name) => SENSITIVE_FORWARD_HEADER.test(name));
+}
+
 export function mergeRotatingHeaders(
   current: Record<string, string>,
   responseHeaders: Record<string, string>
 ): Record<string, string> {
   const next = { ...current };
   for (const name of Object.keys(current)) {
-    if (name in responseHeaders && !FORWARD_DENYLIST.has(name)) {
-      next[name] = responseHeaders[name]!;
-    }
+    const normalized = name.toLowerCase();
+    if (normalized in responseHeaders && !FORWARD_DENYLIST.has(normalized)) next[normalized] = responseHeaders[normalized]!;
   }
   return next;
 }

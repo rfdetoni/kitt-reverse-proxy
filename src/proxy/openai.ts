@@ -25,9 +25,7 @@ export function responsesBodyToChat(value: unknown): JsonObject {
   else if (Array.isArray(input)) messages = input.map(inputItemToMessage).filter((v): v is JsonValue => v !== null);
   else throw new Error('"input" deve ser string ou array.');
   if (!messages.length) throw new Error('"input" não contém mensagens utilizáveis.');
-  if (typeof value.instructions === 'string' && value.instructions.trim()) {
-    messages.unshift({ role: 'system', content: value.instructions });
-  }
+  if (typeof value.instructions === 'string' && value.instructions.trim()) messages.unshift({ role: 'system', content: value.instructions });
   return {
     messages,
     ...(value.model !== undefined ? { model: value.model } : {}),
@@ -69,8 +67,6 @@ export function sendChatStream(res: Response, completion: OpenAiCompletion, delt
   res.setHeader('connection', 'keep-alive');
 
   const chunks = (deltas && deltas.length > 0) ? deltas : [completion.choices[0]?.message.content || ''];
-
-  // Send initial delta with role
   res.write(`data: ${JSON.stringify({
     id: completion.id,
     object: 'chat.completion.chunk',
@@ -79,7 +75,6 @@ export function sendChatStream(res: Response, completion: OpenAiCompletion, delt
     choices: [{ index: 0, delta: { role: 'assistant', content: chunks[0] || '' }, finish_reason: null }]
   })}\n\n`);
 
-  // Send subsequent content deltas
   for (let i = 1; i < chunks.length; i += 1) {
     res.write(`data: ${JSON.stringify({
       id: completion.id,
@@ -90,7 +85,6 @@ export function sendChatStream(res: Response, completion: OpenAiCompletion, delt
     })}\n\n`);
   }
 
-  // Send final finish reason
   res.write(`data: ${JSON.stringify({
     id: completion.id,
     object: 'chat.completion.chunk',
@@ -99,10 +93,6 @@ export function sendChatStream(res: Response, completion: OpenAiCompletion, delt
     choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || 'stop' }]
   })}\n\n`);
   res.end('data: [DONE]\n\n');
-}
-
-export function sendSyntheticChatStream(res: Response, completion: OpenAiCompletion): void {
-  sendChatStream(res, completion);
 }
 
 export function sendResponsesStream(res: Response, completion: OpenAiCompletion, deltas?: string[]): void {
@@ -116,71 +106,35 @@ export function sendResponsesStream(res: Response, completion: OpenAiCompletion,
   const chunks = (deltas && deltas.length > 0) ? deltas : [completion.choices[0]?.message.content || ''];
   const fullText = completion.choices[0]?.message.content || '';
 
-  // 1. response.created
   res.write(`event: response.created\ndata: ${JSON.stringify({
     type: 'response.created',
     response: { id: responseId, object: 'response', status: 'in_progress', model: completion.model }
   })}\n\n`);
-
-  // 2. output_item.added
   res.write(`event: response.output_item.added\ndata: ${JSON.stringify({
-    type: 'response.output_item.added',
-    output_index: 0,
+    type: 'response.output_item.added', output_index: 0,
     item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] }
   })}\n\n`);
-
-  // 3. content_part.added
   res.write(`event: response.content_part.added\ndata: ${JSON.stringify({
-    type: 'response.content_part.added',
-    output_index: 0,
-    content_index: 0,
+    type: 'response.content_part.added', output_index: 0, content_index: 0,
     part: { type: 'output_text', text: '', annotations: [] }
   })}\n\n`);
-
-  // 4. deltas
   for (const delta of chunks) {
     if (!delta) continue;
     res.write(`event: response.text.delta\ndata: ${JSON.stringify({
-      type: 'response.text.delta',
-      output_index: 0,
-      content_index: 0,
-      delta
+      type: 'response.text.delta', output_index: 0, content_index: 0, delta
     })}\n\n`);
   }
-
-  // 5. text.done
   res.write(`event: response.text.done\ndata: ${JSON.stringify({
-    type: 'response.text.done',
-    output_index: 0,
-    content_index: 0,
-    text: fullText
+    type: 'response.text.done', output_index: 0, content_index: 0, text: fullText
   })}\n\n`);
-
-  // 6. output_item.done
   res.write(`event: response.output_item.done\ndata: ${JSON.stringify({
-    type: 'response.output_item.done',
-    output_index: 0,
-    item: {
-      id: itemId,
-      type: 'message',
-      status: 'completed',
-      role: 'assistant',
-      content: [{ type: 'output_text', text: fullText, annotations: [] }]
-    }
+    type: 'response.output_item.done', output_index: 0,
+    item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }
   })}\n\n`);
-
-  // 7. completed
   res.write(`event: response.completed\ndata: ${JSON.stringify({
     type: 'response.completed',
-    response: {
-      id: responseId,
-      object: 'response',
-      status: 'completed',
-      model: completion.model,
-      output_text: fullText
-    }
+    response: { id: responseId, object: 'response', status: 'completed', model: completion.model, output_text: fullText }
   })}\n\n`);
-
   res.end('data: [DONE]\n\n');
 }
 

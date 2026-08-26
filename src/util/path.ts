@@ -1,8 +1,38 @@
 import type { JsonValue } from '../types.js';
 
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+const SIMPLE_KEY = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
 
 type Segment = string | number | '*';
+
+function validateKey(key: string): string {
+  if (FORBIDDEN_SEGMENTS.has(key)) throw new Error(`Segmento proibido em JSON path: ${key}`);
+  return key;
+}
+
+function parseQuotedKey(token: string, path: string): string {
+  if (token.startsWith('"')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(token) as unknown;
+    } catch {
+      throw new Error(`Chave entre colchetes inválida em ${path}`);
+    }
+    if (typeof parsed !== 'string') throw new Error(`Chave entre colchetes inválida em ${path}`);
+    return validateKey(parsed);
+  }
+  if (token.startsWith("'") && token.endsWith("'")) {
+    const inner = token.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+    return validateKey(inner);
+  }
+  throw new Error(`Índice inválido em ${path}`);
+}
+
+export function appendJsonPath(base: string, key: string | number): string {
+  if (typeof key === 'number') return `${base}[${key}]`;
+  validateKey(key);
+  return SIMPLE_KEY.test(key) ? `${base}.${key}` : `${base}[${JSON.stringify(key)}]`;
+}
 
 export function parseJsonPath(path: string): Segment[] {
   if (!path.startsWith('$')) throw new Error(`JSON path deve começar com $: ${path}`);
@@ -14,18 +44,29 @@ export function parseJsonPath(path: string): Segment[] {
       const start = i;
       while (i < path.length && /[A-Za-z0-9_$-]/.test(path[i]!)) i += 1;
       if (start === i) throw new Error(`Segmento inválido em ${path}`);
-      const key = path.slice(start, i);
-      if (FORBIDDEN_SEGMENTS.has(key)) throw new Error(`Segmento proibido em JSON path: ${key}`);
-      segments.push(key);
+      segments.push(validateKey(path.slice(start, i)));
       continue;
     }
     if (path[i] === '[') {
-      const end = path.indexOf(']', i);
-      if (end < 0) throw new Error(`Colchete não fechado em ${path}`);
+      let end = i + 1;
+      let quote: string | undefined;
+      let escaped = false;
+      for (; end < path.length; end += 1) {
+        const char = path[end]!;
+        if (escaped) { escaped = false; continue; }
+        if (char === '\\') { escaped = true; continue; }
+        if (quote) {
+          if (char === quote) quote = undefined;
+          continue;
+        }
+        if (char === '"' || char === "'") { quote = char; continue; }
+        if (char === ']') break;
+      }
+      if (end >= path.length || path[end] !== ']') throw new Error(`Colchete não fechado em ${path}`);
       const token = path.slice(i + 1, end).trim();
       if (token === '*') segments.push('*');
       else if (/^\d+$/.test(token)) segments.push(Number(token));
-      else throw new Error(`Índice inválido em ${path}`);
+      else segments.push(parseQuotedKey(token, path));
       i = end + 1;
       continue;
     }
@@ -48,7 +89,7 @@ export function getPathValues(root: JsonValue, path: string): JsonValue[] {
         if (Array.isArray(value) && segment < value.length) next.push(value[segment]!);
         continue;
       }
-      if (value && typeof value === 'object' && !Array.isArray(value) && segment in value) {
+      if (value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, segment)) {
         next.push(value[segment]!);
       }
     }
@@ -104,10 +145,10 @@ export function deleteJsonPath(root: JsonValue, path: string): void {
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index]!;
     if (typeof segment === 'number') {
-      if (!Array.isArray(cursor) || !cursor[segment]) return;
+      if (!Array.isArray(cursor) || cursor[segment] == null) return;
       cursor = cursor[segment]!;
     } else {
-      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor) || !(segment in cursor)) return;
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor) || !Object.prototype.hasOwnProperty.call(cursor, segment)) return;
       cursor = cursor[segment]!;
     }
   }

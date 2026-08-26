@@ -4,8 +4,3 @@ dist-test/
 *.log
 .DS_Store
 *.tgz
-.env
-.env.*
-!.env.example
-coverage/
-.playwright/

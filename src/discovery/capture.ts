@@ -1,9 +1,10 @@
-import { chromium, type Request, type Response } from 'playwright';
+import type { Request, Response } from 'playwright';
 import { logger } from '../logger.js';
-import type { AppConfig, CapturedExchange, JsonObject, JsonValue, LiveBrowserSession } from '../types.js';
-import { isJsonObject } from '../util/json.js';
-import { assertAllowedEndpoint } from '../security/url-policy.js';
+import { openBrowserSession, navigateSession } from '../runtime/browser-session.js';
 import { sanitizeCapturedHeaders } from '../security/headers.js';
+import { assertAllowedEndpoint } from '../security/url-policy.js';
+import type { AppConfig, CapturedExchange, JsonValue, LiveBrowserSession, ProviderId, RequestBodyCodecDescriptor } from '../types.js';
+import { decodeRequestBody } from './body-codec.js';
 import { decodeTextBody } from './decoder.js';
 import { scoreRequestCandidate, scoreResponseCandidate } from './scoring.js';
 
@@ -11,42 +12,13 @@ interface Candidate {
   request: Request;
   endpointUrl: string;
   headers: Record<string, string>;
-  requestSample: JsonObject;
+  requestSample: CapturedExchange['requestSample'];
+  requestCodec: RequestBodyCodecDescriptor;
   requestContentType: string;
   responseSample: JsonValue | null;
   responseHeaders: Record<string, string>;
   responseContentType: string;
   score: number;
-}
-
-function parseRequestBody(request: Request): JsonObject | null {
-  const text = request.postData();
-  if (!text) return null;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (isJsonObject(parsed)) return parsed;
-  } catch {
-    // Continue to fallback parsers
-  }
-  try {
-    const params = new URLSearchParams(text);
-    const entries = [...params.entries()];
-    if (entries.length > 0 && entries.some(([_, v]) => v.length > 0)) {
-      const obj: JsonObject = {};
-      for (const [k, v] of entries) {
-        try {
-          const inner = JSON.parse(v);
-          obj[k] = isJsonObject(inner) || Array.isArray(inner) ? inner : v;
-        } catch {
-          obj[k] = v;
-        }
-      }
-      return obj;
-    }
-  } catch {
-    // Non-parseable body
-  }
-  return null;
 }
 
 async function readResponse(response: Response): Promise<{ body: JsonValue; headers: Record<string, string>; contentType: string }> {
@@ -57,10 +29,12 @@ async function readResponse(response: Response): Promise<{ body: JsonValue; head
   return { body: decodeTextBody(text, contentType), headers, contentType };
 }
 
-export async function captureChatExchange(config: AppConfig): Promise<{ capture: CapturedExchange; session: LiveBrowserSession }> {
-  const browser = await chromium.launch({ headless: !config.headed });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+export async function captureChatExchange(
+  config: AppConfig,
+  provider: ProviderId = 'generic'
+): Promise<{ capture: CapturedExchange; session: LiveBrowserSession }> {
+  const session = await openBrowserSession(config);
+  const page = session.page;
   const candidates = new Map<Request, Candidate>();
   const blockedHosts = new Set<string>();
   let best: Candidate | null = null;
@@ -68,7 +42,7 @@ export async function captureChatExchange(config: AppConfig): Promise<{ capture:
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveCapture!: (candidate: Candidate) => void;
   let rejectCapture!: (error: Error) => void;
-  let settled = false;
+  let selected = false;
 
   const done = new Promise<Candidate>((resolve, reject) => {
     resolveCapture = resolve;
@@ -77,28 +51,33 @@ export async function captureChatExchange(config: AppConfig): Promise<{ capture:
 
   const consider = (candidate: Candidate): void => {
     if (!best || candidate.score > best.score) best = candidate;
-    if (candidate.score < 60) return;
+    if (candidate.score < 60 || selected) return;
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
-      if (!settled && best) {
-        settled = true;
+      if (!selected && best) {
+        selected = true;
         resolveCapture(best);
       }
     }, config.settleAfterCandidateMs);
   };
 
-  page.on('request', (request: Request) => {
-    if (settled || request.method() !== 'POST') return;
+  const onRequest = (request: Request): void => {
+    if (selected || request.method() !== 'POST') return;
     void (async () => {
-      const body = parseRequestBody(request);
-      if (!body) return;
+      const postData = request.postData();
+      if (!postData) return;
+      const allHeaders = await request.allHeaders();
+      const contentType = allHeaders['content-type'] || '';
+      const decoded = decodeRequestBody(postData, contentType);
+      if (!decoded) return;
+
       const rawUrl = request.url();
-      const preliminaryScore = scoreRequestCandidate(rawUrl, body, request.resourceType());
+      const preliminaryScore = scoreRequestCandidate(rawUrl, decoded.body, request.resourceType(), provider);
       let endpointUrl: string;
       try {
         endpointUrl = assertAllowedEndpoint(config.targetUrl, rawUrl, config.allowedEndpointHosts).toString();
       } catch {
-        if (preliminaryScore >= 60) {
+        if (preliminaryScore >= 55) {
           const host = new URL(rawUrl).hostname;
           if (!blockedHosts.has(host)) {
             blockedHosts.add(host);
@@ -107,40 +86,43 @@ export async function captureChatExchange(config: AppConfig): Promise<{ capture:
         }
         return;
       }
-      const score = preliminaryScore;
-      if (score < 35) return;
-      const allHeaders = await request.allHeaders();
+      if (preliminaryScore < 35) return;
+
       const candidate: Candidate = {
         request,
         endpointUrl,
         headers: sanitizeCapturedHeaders(allHeaders),
-        requestSample: body,
-        requestContentType: allHeaders['content-type'] || 'application/json',
+        requestSample: decoded.body,
+        requestCodec: decoded.codec,
+        requestContentType: contentType || (decoded.codec.kind === 'form' ? 'application/x-www-form-urlencoded' : 'application/json'),
         responseSample: null,
         responseHeaders: {},
         responseContentType: '',
-        score
+        score: preliminaryScore
       };
       candidates.set(request, candidate);
       consider(candidate);
     })().catch((error: unknown) => logger.warn(`Falha ao inspecionar request: ${String(error)}`));
-  });
+  };
 
-  page.on('response', (response: Response) => {
+  const onResponse = (response: Response): void => {
     const candidate = candidates.get(response.request());
-    if (!candidate || settled) return;
+    if (!candidate) return;
     void readResponse(response).then((decoded) => {
       candidate.responseSample = decoded.body;
       candidate.responseHeaders = decoded.headers;
       candidate.responseContentType = decoded.contentType;
       candidate.score += scoreResponseCandidate(decoded.contentType, decoded.body);
-      consider(candidate);
+      if (!selected) consider(candidate);
     }).catch((error: unknown) => logger.warn(`Falha ao ler response candidata: ${String(error)}`));
-  });
+  };
+
+  page.on('request', onRequest);
+  page.on('response', onResponse);
 
   timeoutTimer = setTimeout(() => {
-    if (settled) return;
-    settled = true;
+    if (selected) return;
+    selected = true;
     if (best && best.score >= 45) {
       resolveCapture(best);
       return;
@@ -151,36 +133,33 @@ export async function captureChatExchange(config: AppConfig): Promise<{ capture:
     ));
   }, config.captureTimeoutMs);
 
+  const cleanup = (): void => {
+    if (settleTimer) clearTimeout(settleTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    page.off('request', onRequest);
+    page.off('response', onResponse);
+  };
+
   try {
     logger.info(config.headed
-      ? 'Chromium aberto. Envie uma mensagem no chat para ensinar o endpoint.'
+      ? 'Chromium aberto. Envie uma mensagem no chat para ensinar o endpoint de rede.'
       : 'Modo headless: aguardando uma requisição de chat emitida pela página.');
-    await page.goto(config.targetUrl, { waitUntil: 'domcontentloaded', timeout: Math.min(config.captureTimeoutMs, 60_000) })
+    await navigateSession(session, config.targetUrl, config.captureTimeoutMs)
       .catch((error: unknown) => logger.warn(`Navegação não concluiu normalmente: ${error instanceof Error ? error.message : String(error)}`));
-    const candidate = await done;
 
+    const candidate = await done;
     if (!candidate.responseSample) {
       const deadline = Date.now() + config.responseSampleTimeoutMs;
-      while (!candidate.responseSample && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      while (!candidate.responseSample && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    const session: LiveBrowserSession = {
-      browser,
-      context,
-      page,
-      async close(): Promise<void> {
-        await context.close().catch(() => undefined);
-        await browser.close().catch(() => undefined);
-      }
-    };
-
+    cleanup();
     return {
       capture: Object.freeze({
         endpointUrl: candidate.endpointUrl,
         headers: Object.freeze({ ...candidate.headers }),
         requestSample: candidate.requestSample,
+        requestCodec: Object.freeze({ ...candidate.requestCodec, jsonStringPaths: Object.freeze([...candidate.requestCodec.jsonStringPaths]) }) as RequestBodyCodecDescriptor,
         responseSample: candidate.responseSample,
         responseHeaders: Object.freeze({ ...candidate.responseHeaders }),
         score: candidate.score,
@@ -190,11 +169,8 @@ export async function captureChatExchange(config: AppConfig): Promise<{ capture:
       session
     };
   } catch (error) {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    cleanup();
+    await session.close();
     throw error;
-  } finally {
-    if (settleTimer) clearTimeout(settleTimer);
-    if (timeoutTimer) clearTimeout(timeoutTimer);
   }
 }

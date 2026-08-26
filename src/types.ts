@@ -4,9 +4,13 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
+export type TransportMode = 'auto' | 'network' | 'ui';
+export type ProviderId = 'auto' | 'generic' | 'chatgpt' | 'claude' | 'gemini' | 'kimi' | 'deepseek';
+
 export interface AppConfig {
   targetUrl: string;
   model: string;
+  apiModel?: string;
   ollamaUrl: string;
   host: string;
   port: number;
@@ -15,21 +19,33 @@ export interface AppConfig {
   responseSampleTimeoutMs: number;
   ollamaTimeoutMs: number;
   upstreamTimeoutMs: number;
+  uiResponseTimeoutMs: number;
+  uiSettleMs: number;
+  manualInterventionTimeoutMs: number;
   headed: boolean;
   cors: boolean;
   apiKey?: string;
   profilePath?: string;
   saveProfilePath?: string;
+  userDataDir?: string;
   maxQueue: number;
   minIntervalMs: number;
   allowedEndpointHosts: string[];
   followRedirects: boolean;
+  provider: ProviderId;
+  transport: TransportMode;
+}
+
+export interface RequestBodyCodecDescriptor {
+  kind: 'json' | 'form';
+  jsonStringPaths: string[];
 }
 
 export interface CapturedExchange {
   endpointUrl: string;
   headers: Record<string, string>;
   requestSample: JsonObject;
+  requestCodec: RequestBodyCodecDescriptor;
   responseSample: JsonValue | null;
   responseHeaders: Record<string, string>;
   score: number;
@@ -38,9 +54,10 @@ export interface CapturedExchange {
 }
 
 export interface LiveBrowserSession {
-  browser: Browser;
+  browser?: Browser;
   context: BrowserContext;
   page: Page;
+  persistent: boolean;
   close(): Promise<void>;
 }
 
@@ -172,4 +189,17 @@ export interface UpstreamResult {
   headers: Record<string, string>;
   contentType: string;
   body: JsonValue;
+}
+
+export interface ChatExecutionResult {
+  completion: OpenAiCompletion;
+  deltas: string[];
+}
+
+export interface ChatExecutor {
+  readonly modelId: string;
+  readonly transport: 'network' | 'ui';
+  execute(body: JsonObject): Promise<ChatExecutionResult>;
+  describe(): JsonObject;
+  reset?(): Promise<void>;
 }

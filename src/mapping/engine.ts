@@ -11,7 +11,7 @@ function sourceValue(binding: RequestBinding, body: JsonObject): JsonValue | und
     case 'openai.last_user_text': return messages.filter((m) => m.role === 'user').map(messageToText).at(-1) ?? '';
     case 'openai.last_message_text': return messages.length ? messageToText(messages.at(-1)!) : '';
     case 'openai.transcript': return transcript(messages);
-    case 'openai.system_text': return messages.filter((m) => m.role === 'system').map(messageToText).join('\n');
+    case 'openai.system_text': return messages.filter((m) => m.role === 'system' || m.role === 'developer').map(messageToText).join('\n');
     case 'openai.model': return body.model;
     case 'openai.temperature': return body.temperature;
     case 'openai.top_p': return body.top_p;
@@ -154,7 +154,9 @@ export class DeclarativeAdapter {
 
   mapResponseDeltas(siteResponse: JsonValue): string[] {
     const rawEvents = (siteResponse && typeof siteResponse === 'object' && !Array.isArray(siteResponse))
-      ? (Array.isArray(siteResponse.eventStream) ? siteResponse.eventStream : (Array.isArray(siteResponse.ndjson) ? siteResponse.ndjson : null))
+      ? (Array.isArray(siteResponse.eventStream) ? siteResponse.eventStream
+        : Array.isArray(siteResponse.ndjson) ? siteResponse.ndjson
+          : Array.isArray(siteResponse.frames) ? siteResponse.frames : null)
       : null;
 
     if (!rawEvents || rawEvents.length === 0) {
@@ -169,14 +171,11 @@ export class DeclarativeAdapter {
 
     const deltas: string[] = [];
     let accumulated = '';
-
     for (const event of rawEvents) {
       const collected: string[] = [];
       for (const path of this.profile.response.contentPaths) {
-        const eventPath = path.replace(/^\$\.(eventStream|ndjson)\[\*\]/, '$');
-        for (const value of getPathValues(event, eventPath)) {
-          collected.push(...textFromValue(value));
-        }
+        const eventPath = path.replace(/^\$\.(eventStream|ndjson|frames)\[\*\]/, '$');
+        for (const value of getPathValues(event, eventPath)) collected.push(...textFromValue(value));
       }
       if (collected.length === 0) collected.push(...genericExtract(event));
       const text = collected.filter(Boolean).join(this.profile.response.separator ?? '');
@@ -202,7 +201,7 @@ export class DeclarativeAdapter {
         const text = full.choices[0]?.message.content || '';
         if (text) deltas.push(text);
       } catch {
-        // ignore
+        // ignore fallback failure
       }
     }
     return deltas;

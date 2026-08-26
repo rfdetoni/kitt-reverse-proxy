@@ -34,6 +34,7 @@ Schema:
 }
 
 Rules:
+- JSON paths support numeric indexes and quoted keys, e.g. $["f.req"][0][1].
 - Start from the captured request shape conceptually; bindings overwrite dynamic fields. Do not include the captured request body itself in the profile.
 - At least one request binding MUST carry user conversation content.
 - Prefer openai.messages if the target accepts an array of chat messages.
@@ -50,6 +51,7 @@ Rules:
 TARGET HOST: ${endpoint.hostname}
 TARGET ENDPOINT PATH: ${endpoint.pathname}
 REQUEST CONTENT TYPE: ${capture.requestContentType}
+REQUEST BODY CODEC: ${capture.requestCodec.kind}
 RESPONSE CONTENT TYPE: ${capture.responseContentType}
 REQUEST HEADERS SHAPE: ${JSON.stringify(redactHeadersForModel(capture.headers), null, 2)}
 REQUEST SAMPLE (values redacted where appropriate):

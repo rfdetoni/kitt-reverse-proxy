@@ -1,15 +1,25 @@
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import type { Server } from 'node:http';
-import type { AdapterProfile, AppConfig, CapturedExchange, JsonObject, LiveBrowserSession } from '../types.js';
 import { logger } from '../logger.js';
-import { DeclarativeAdapter } from '../mapping/engine.js';
-import { BrowserUpstreamClient, UpstreamHttpError } from '../runtime/upstream.js';
+import { ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
+import { UpstreamHttpError } from '../runtime/upstream.js';
 import { QueueFullError, SerialQueue } from '../runtime/serial-queue.js';
-import { apiKeyMiddleware, completionToResponses, responsesBodyToChat, sendChatStream, sendOpenAiError, sendResponsesStream, sendSyntheticChatStream, validateChatBody } from './openai.js';
+import type { AppConfig, ChatExecutor, JsonObject } from '../types.js';
+import {
+  apiKeyMiddleware,
+  completionToResponses,
+  responsesBodyToChat,
+  sendChatStream,
+  sendOpenAiError,
+  sendResponsesStream,
+  validateChatBody
+} from './openai.js';
 
 function statusForError(error: unknown): number {
   if (error instanceof QueueFullError) return 429;
+  if (error instanceof ManualInterventionRequiredError) return 503;
+  if (error instanceof UiAutomationError) return /em \d+s|timeout|tempo/i.test(error.message) ? 504 : 502;
   if (error instanceof UpstreamHttpError) {
     if (error.status === 429) return 429;
     if (error.status === 401 || error.status === 403) return 502;
@@ -18,28 +28,29 @@ function statusForError(error: unknown): number {
   return 500;
 }
 
+function codeForError(error: unknown): string {
+  if (error instanceof QueueFullError) return 'queue_full';
+  if (error instanceof ManualInterventionRequiredError) return 'manual_intervention_required';
+  if (error instanceof UiAutomationError) return 'ui_automation_error';
+  if (error instanceof UpstreamHttpError) return 'upstream_error';
+  return 'proxy_error';
+}
+
+function isInvalidRequest(error: unknown, route: 'chat' | 'responses'): boolean {
+  if (!(error instanceof Error)) return false;
+  return route === 'chat' ? /Body|messages|mensagem/i.test(error.message) : /Body|input|mensagem/i.test(error.message);
+}
+
 export async function startProxyServer(input: {
-  capture: CapturedExchange;
-  session: LiveBrowserSession;
-  adapter: DeclarativeAdapter;
-  profile: AdapterProfile;
-  profileSource: string;
+  executor: ChatExecutor;
   config: AppConfig;
 }): Promise<Server> {
-  const { capture, session, adapter, profile, profileSource, config } = input;
+  const { executor, config } = input;
   const app = express();
   const queue = new SerialQueue(config.maxQueue, config.minIntervalMs);
-  const upstream = new BrowserUpstreamClient(
-    session.context,
-    capture.endpointUrl,
-    capture.headers,
-    config.upstreamTimeoutMs,
-    config.followRedirects
-  );
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '2mb', strict: true }));
-  app.use(apiKeyMiddleware(config.apiKey));
   if (config.cors) {
     app.use(cors({
       origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
@@ -54,29 +65,34 @@ export async function startProxyServer(input: {
       }
     }));
   }
+  app.use(apiKeyMiddleware(config.apiKey));
 
-  const execute = async (body: JsonObject) => queue.run(async () => {
-    const mapped = adapter.mapRequest(body);
-    const result = await upstream.post(mapped);
-    const completion = adapter.mapResponse(result.body, typeof body.model === 'string' ? body.model : config.model);
-    const deltas = adapter.mapResponseDeltas(result.body);
-    adapter.applyState(result.body);
-    return { completion, deltas };
-  });
+  const execute = async (body: JsonObject) => queue.run(() => executor.execute(body));
 
   app.get('/healthz', (_req: Request, res: Response) => {
-    res.json({
-      status: 'ok',
-      targetOrigin: new URL(capture.endpointUrl).origin,
-      profileSource,
-      stateful: Boolean(profile.state?.updates?.length),
-      queueDepth: queue.depth,
-      followRedirects: config.followRedirects
-    });
+    res.json({ status: 'ok', transport: executor.transport, model: executor.modelId, queueDepth: queue.depth });
   });
 
   app.get('/v1/models', (_req: Request, res: Response) => {
-    res.json({ object: 'list', data: [{ id: 'adaptive-web-chat', object: 'model', owned_by: 'local-proxy' }] });
+    res.json({ object: 'list', data: [{ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' }] });
+  });
+
+  app.get('/v1/kitt/status', (_req: Request, res: Response) => {
+    res.json({ ...executor.describe(), queueDepth: queue.depth, model: executor.modelId });
+  });
+
+  app.post('/v1/kitt/reset', async (_req: Request, res: Response) => {
+    try {
+      if (!executor.reset) {
+        sendOpenAiError(res, 501, 'O transporte atual não oferece reset de conversa.', 'reset_not_supported');
+        return;
+      }
+      await queue.run(() => executor.reset!());
+      res.json({ status: 'ok' });
+    } catch (error) {
+      logger.warn(`reset: ${error instanceof Error ? error.message : String(error)}`);
+      sendOpenAiError(res, statusForError(error), error instanceof Error ? error.message : 'Erro ao resetar conversa.', codeForError(error));
+    }
   });
 
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
@@ -86,9 +102,9 @@ export async function startProxyServer(input: {
       if (body.stream === true) sendChatStream(res, completion, deltas);
       else res.json(completion);
     } catch (error) {
-      const status = error instanceof Error && /Body|messages/.test(error.message) ? 400 : statusForError(error);
+      const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
       logger.warn(`chat/completions: ${error instanceof Error ? error.message : String(error)}`);
-      if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.');
+      if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
       else res.end();
     }
   });
@@ -97,20 +113,19 @@ export async function startProxyServer(input: {
     try {
       const body = responsesBodyToChat(req.body);
       const { completion, deltas } = await execute(body);
-      if (req.body?.stream === true) {
-        sendResponsesStream(res, completion, deltas);
-      } else {
-        res.json(completionToResponses(completion));
-      }
+      if (req.body?.stream === true) sendResponsesStream(res, completion, deltas);
+      else res.json(completionToResponses(completion));
     } catch (error) {
-      const status = error instanceof Error && /Body|input/.test(error.message) ? 400 : statusForError(error);
+      const status = isInvalidRequest(error, 'responses') ? 400 : statusForError(error);
       logger.warn(`responses: ${error instanceof Error ? error.message : String(error)}`);
-      sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.');
+      if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
+      else res.end();
     }
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: unknown) => {
     if (error instanceof SyntaxError) { sendOpenAiError(res, 400, 'JSON inválido.', 'invalid_request_error'); return; }
+    if (error instanceof Error && /^CORS/.test(error.message)) { sendOpenAiError(res, 403, error.message, 'cors_not_allowed'); return; }
     sendOpenAiError(res, 500, error instanceof Error ? error.message : 'Erro interno do proxy.');
   });
 

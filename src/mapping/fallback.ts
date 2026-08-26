@@ -1,4 +1,5 @@
 import type { AdapterProfile, JsonObject, JsonValue, RequestBinding, StateUpdate } from '../types.js';
+import { appendJsonPath } from '../util/path.js';
 
 interface FoundPath { path: string; key: string; value: JsonValue }
 
@@ -10,7 +11,7 @@ function walk(value: JsonValue, path = '$', output: FoundPath[] = [], depth = 0)
   }
   if (typeof value !== 'object') return output;
   for (const [key, child] of Object.entries(value)) {
-    const childPath = `${path}.${key}`;
+    const childPath = appendJsonPath(path, key);
     output.push({ path: childPath, key: key.toLowerCase(), value: child });
     walk(child, childPath, output, depth + 1);
   }
