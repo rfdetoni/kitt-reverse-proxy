@@ -45,7 +45,7 @@ Esse diretório pode conter cookies, tokens, localStorage e outros dados de sess
 
 - não coloque dentro do repositório;
 - não faça commit;
-- proteja permissões do diretório;
+- proteja permissões do diretório; o runtime cria/ajusta o diretório para `0700` em plataformas POSIX quando possível;
 - use um diretório separado por conta/provider quando possível;
 - apague-o quando não precisar mais da sessão persistida.
 
@@ -84,7 +84,7 @@ O BrowserContext pode conter cookies, authorization, CSRF/XSRF e outros valores 
 
 Network redirects são desabilitados por padrão.
 
-`--follow-redirects` é opt-in e limitado. Se o conjunto de headers capturados tiver nomes potencialmente sensíveis (authorization, token, CSRF/XSRF, secret, API key, session etc.), o runtime impede seguir redirects para reduzir risco de vazamento por replay manual de headers.
+`--follow-redirects` é opt-in. O runtime mantém `maxRedirects: 0` no Playwright e segue redirects manualmente, no máximo cinco vezes, somente quando o próximo URL possui o **mesmo origin** do endpoint inicial. Redirect cross-origin é sempre bloqueado, independentemente do nome dos headers capturados.
 
 ## Endpoint allowlist
 
@@ -101,18 +101,21 @@ O servidor escuta em `127.0.0.1` por padrão.
 
 Bind não-loopback é rejeitado sem `--api-key`/`PROXY_API_KEY`.
 
-A comparação da chave é timing-safe para buffers de mesmo tamanho.
+A comparação da chave calcula SHA-256 de ambos os valores e usa `timingSafeEqual` sobre buffers de tamanho constante.
 
 CORS, quando habilitado, aceita apenas origens browser loopback (`localhost`, `127.0.0.1`, `::1`). Clientes CLI não dependem de CORS.
 
 ## Limites de recursos
 
 - body Express limitado;
-- resposta upstream limitada antes do parsing;
+- request candidato de discovery limitado antes do parsing e quantidade de candidatos retidos limitada;
+- resposta candidata/upstream limitada antes do parsing;
 - fila serial limitada;
 - timeouts separados para discovery, upstream, UI e intervenção manual;
 - máximo de prompt UI;
-- limites de profundidade/quantidade em profiles e parsing de frames.
+- limites de profundidade/quantidade em profiles e parsing de frames;
+- redaction enviada ao modelo possui orçamento global de nós/chaves/arrays e o envelope do Ollama é limitado;
+- URLs em logs têm query string e fragmento removidos para evitar exposição acidental de assinaturas/tokens em query.
 
 ## Function calling
 

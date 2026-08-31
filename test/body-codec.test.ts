@@ -29,3 +29,23 @@ test('JSON codec remains an object', () => {
   assert.equal(decoded.codec.kind, 'json');
   assert.deepEqual(encodeRequestBody(decoded.body, decoded.codec), { prompt: 'hello' });
 });
+
+test('form codec preserves duplicate keys and original order', () => {
+  const original = 'tag=a&payload=%7B%22prompt%22%3A%22hello%22%7D&tag=b&empty=';
+  const decoded = decodeRequestBody(original, 'application/x-www-form-urlencoded');
+  if (!decoded) throw new Error('decode failed');
+  assert.deepEqual(decoded.body.tag, ['a', 'b']);
+  assert.deepEqual(decoded.codec.repeatedFormKeys, ['tag']);
+  assert.deepEqual(decoded.codec.formFieldOrder, ['tag', 'payload', 'tag', 'empty']);
+  const encoded = encodeRequestBody(decoded.body, decoded.codec);
+  assert.equal(encoded, original);
+});
+
+test('JSON codec exposes and re-encodes nested serialized JSON strings', () => {
+  const decoded = decodeRequestBody(JSON.stringify({ payload: JSON.stringify({ prompt: 'hello' }) }), 'application/json');
+  if (!decoded) throw new Error('decode failed');
+  assert.deepEqual(decoded.body.payload, { prompt: 'hello' });
+  setJsonPath(decoded.body, '$.payload.prompt', 'changed');
+  const encoded = encodeRequestBody(decoded.body, decoded.codec) as Record<string, unknown>;
+  assert.equal(encoded.payload, JSON.stringify({ prompt: 'changed' }));
+});

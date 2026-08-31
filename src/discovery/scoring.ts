@@ -67,8 +67,10 @@ export function scoreRequestCandidate(url: string, body: JsonObject, resourceTyp
   return score;
 }
 
-export function scoreResponseCandidate(contentType: string, body: JsonValue | null): number {
+export function scoreResponseCandidate(contentType: string, body: JsonValue | null, status = 200): number {
   let score = 0;
+  if (status >= 400) score -= status >= 500 ? 35 : 20;
+  else if (status >= 200 && status < 300) score += 5;
   if (/json|event-stream|ndjson|json-seq/i.test(contentType)) score += 10;
   if (body == null) return score;
   const keys = collectKeys(body);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseCliArgs, printHelp } from './config.js';
 import { captureChatExchange } from './discovery/capture.js';
-import { logger } from './logger.js';
+import { logger, safeUrlForLog, sanitizeLogMessage } from './logger.js';
 import { createAdapter } from './mapping/factory.js';
 import { detectProvider, resolveTransport } from './providers/catalog.js';
 import { startProxyServer } from './proxy/server.js';
@@ -37,7 +37,7 @@ async function createRuntime(config: Exclude<ReturnType<typeof parseCliArgs>, { 
 
   logger.step(1, 3, 'Descobrindo endpoint e sessão do chat...');
   const { capture, session } = await captureChatExchange(config, provider.id);
-  logger.success(`Endpoint encontrado: ${capture.endpointUrl} (score ${capture.score}, codec ${capture.requestCodec.kind})`);
+  logger.success(`Endpoint encontrado: ${safeUrlForLog(capture.endpointUrl)} (score ${capture.score}, codec ${capture.requestCodec.kind})`);
   try {
     logger.step(2, 3, config.profilePath ? 'Validando profile declarativo...' : 'Aprendendo mapping declarativo...');
     const { adapter, profile, source } = await createAdapter(capture, config);
@@ -68,7 +68,14 @@ async function main(): Promise<void> {
       if (shuttingDown) return;
       shuttingDown = true;
       logger.info(`${signal} recebido. Encerrando servidor e sessão browser...`);
+      let forced = false;
+      const forceTimer = setTimeout(() => {
+        forced = true;
+        server.closeAllConnections?.();
+      }, 5_000);
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      clearTimeout(forceTimer);
+      if (forced) logger.warn('Conexões HTTP remanescentes foram encerradas durante shutdown.');
       await session.close();
     };
     process.once('SIGINT', () => void shutdown('SIGINT'));
@@ -81,6 +88,6 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   logger.error(error instanceof Error ? error.message : String(error));
-  if (process.env.DEBUG === '1' && error instanceof Error && error.stack) console.error(error.stack);
+  if (process.env.DEBUG === '1' && error instanceof Error && error.stack) console.error(sanitizeLogMessage(error.stack));
   process.exitCode = 1;
 });

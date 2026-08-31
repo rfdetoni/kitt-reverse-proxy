@@ -8,6 +8,10 @@ import { decodeRequestBody } from './body-codec.js';
 import { decodeTextBody } from './decoder.js';
 import { scoreRequestCandidate, scoreResponseCandidate } from './scoring.js';
 
+const MAX_CAPTURE_REQUEST_BYTES = 2 * 1024 * 1024;
+const MAX_CAPTURE_RESPONSE_BYTES = 5 * 1024 * 1024;
+const MAX_CANDIDATES = 128;
+
 interface Candidate {
   request: Request;
   endpointUrl: string;
@@ -21,12 +25,14 @@ interface Candidate {
   score: number;
 }
 
-async function readResponse(response: Response): Promise<{ body: JsonValue; headers: Record<string, string>; contentType: string }> {
+async function readResponse(response: Response): Promise<{ body: JsonValue; headers: Record<string, string>; contentType: string; status: number }> {
   await response.finished();
   const headers = await response.allHeaders();
   const contentType = headers['content-type'] || '';
+  const contentLength = Number(headers['content-length'] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_CAPTURE_RESPONSE_BYTES) throw new Error(`Resposta candidata excede ${MAX_CAPTURE_RESPONSE_BYTES} bytes.`);
   const text = await response.text();
-  return { body: decodeTextBody(text, contentType), headers, contentType };
+  return { body: decodeTextBody(text, contentType), headers, contentType, status: response.status() };
 }
 
 export async function captureChatExchange(
@@ -65,7 +71,7 @@ export async function captureChatExchange(
     if (selected || request.method() !== 'POST') return;
     void (async () => {
       const postData = request.postData();
-      if (!postData) return;
+      if (!postData || Buffer.byteLength(postData, 'utf8') > MAX_CAPTURE_REQUEST_BYTES) return;
       const allHeaders = await request.allHeaders();
       const contentType = allHeaders['content-type'] || '';
       const decoded = decodeRequestBody(postData, contentType);
@@ -101,6 +107,11 @@ export async function captureChatExchange(
         score: preliminaryScore
       };
       candidates.set(request, candidate);
+      while (candidates.size > MAX_CANDIDATES) {
+        const oldest = candidates.keys().next().value as Request | undefined;
+        if (!oldest) break;
+        candidates.delete(oldest);
+      }
       consider(candidate);
     })().catch((error: unknown) => logger.warn(`Falha ao inspecionar request: ${String(error)}`));
   };
@@ -112,7 +123,7 @@ export async function captureChatExchange(
       candidate.responseSample = decoded.body;
       candidate.responseHeaders = decoded.headers;
       candidate.responseContentType = decoded.contentType;
-      candidate.score += scoreResponseCandidate(decoded.contentType, decoded.body);
+      candidate.score += scoreResponseCandidate(decoded.contentType, decoded.body, decoded.status);
       if (!selected) consider(candidate);
     }).catch((error: unknown) => logger.warn(`Falha ao ler response candidata: ${String(error)}`));
   };
@@ -159,7 +170,12 @@ export async function captureChatExchange(
         endpointUrl: candidate.endpointUrl,
         headers: Object.freeze({ ...candidate.headers }),
         requestSample: candidate.requestSample,
-        requestCodec: Object.freeze({ ...candidate.requestCodec, jsonStringPaths: Object.freeze([...candidate.requestCodec.jsonStringPaths]) }) as RequestBodyCodecDescriptor,
+        requestCodec: Object.freeze({
+          ...candidate.requestCodec,
+          jsonStringPaths: Object.freeze([...candidate.requestCodec.jsonStringPaths]),
+          ...(candidate.requestCodec.repeatedFormKeys ? { repeatedFormKeys: Object.freeze([...candidate.requestCodec.repeatedFormKeys]) } : {}),
+          ...(candidate.requestCodec.formFieldOrder ? { formFieldOrder: Object.freeze([...candidate.requestCodec.formFieldOrder]) } : {})
+        }) as RequestBodyCodecDescriptor,
         responseSample: candidate.responseSample,
         responseHeaders: Object.freeze({ ...candidate.responseHeaders }),
         score: candidate.score,

@@ -15,3 +15,10 @@ test('Gemini-style batchexecute receives provider-aware boost', () => {
   assert.ok(gemini > generic);
   assert.ok(gemini >= 60);
 });
+
+test('failed candidate responses are penalized', async () => {
+  const { scoreResponseCandidate } = await import('../src/discovery/scoring.js');
+  const ok = scoreResponseCandidate('application/json', { answer: 'a useful answer' }, 200);
+  const failed = scoreResponseCandidate('application/json', { answer: 'a useful answer' }, 500);
+  assert.ok(ok > failed + 30);
+});

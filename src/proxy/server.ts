@@ -3,16 +3,16 @@ import express, { type Request, type Response } from 'express';
 import type { Server } from 'node:http';
 import { logger } from '../logger.js';
 import { ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
-import { UpstreamHttpError } from '../runtime/upstream.js';
+import { UpstreamHttpError, UpstreamRedirectError } from '../runtime/upstream.js';
 import { QueueFullError, SerialQueue } from '../runtime/serial-queue.js';
-import type { AppConfig, ChatExecutor, JsonObject } from '../types.js';
+import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../types.js';
 import {
   apiKeyMiddleware,
+  ChatStreamWriter,
   completionToResponses,
+  ResponsesStreamWriter,
   responsesBodyToChat,
-  sendChatStream,
   sendOpenAiError,
-  sendResponsesStream,
   validateChatBody
 } from './openai.js';
 
@@ -20,6 +20,7 @@ function statusForError(error: unknown): number {
   if (error instanceof QueueFullError) return 429;
   if (error instanceof ManualInterventionRequiredError) return 503;
   if (error instanceof UiAutomationError) return /em \d+s|timeout|tempo/i.test(error.message) ? 504 : 502;
+  if (error instanceof UpstreamRedirectError) return 502;
   if (error instanceof UpstreamHttpError) {
     if (error.status === 429) return 429;
     if (error.status === 401 || error.status === 403) return 502;
@@ -32,6 +33,8 @@ function codeForError(error: unknown): string {
   if (error instanceof QueueFullError) return 'queue_full';
   if (error instanceof ManualInterventionRequiredError) return 'manual_intervention_required';
   if (error instanceof UiAutomationError) return 'ui_automation_error';
+  if (error instanceof UpstreamRedirectError) return 'upstream_redirect_blocked';
+  if (error instanceof UpstreamHttpError && (error.status === 401 || error.status === 403)) return 'upstream_auth_required';
   if (error instanceof UpstreamHttpError) return 'upstream_error';
   return 'proxy_error';
 }
@@ -67,7 +70,7 @@ export async function startProxyServer(input: {
   }
   app.use(apiKeyMiddleware(config.apiKey));
 
-  const execute = async (body: JsonObject) => queue.run(() => executor.execute(body));
+  const execute = async (body: JsonObject, options?: ChatExecutionOptions) => queue.run(() => executor.execute(body, options));
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({ status: 'ok', transport: executor.transport, model: executor.modelId, queueDepth: queue.depth });
@@ -98,9 +101,15 @@ export async function startProxyServer(input: {
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
       const body = validateChatBody(req.body);
-      const { completion, deltas } = await execute(body);
-      if (body.stream === true) sendChatStream(res, completion, deltas);
-      else res.json(completion);
+      if (body.stream === true) {
+        const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+        const writer = new ChatStreamWriter(res, model);
+        const result = await execute(body, { onDelta: (delta) => writer.delta(delta) });
+        writer.finish(result.completion, result.deltas);
+      } else {
+        const { completion } = await execute(body);
+        res.json(completion);
+      }
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
       logger.warn(`chat/completions: ${error instanceof Error ? error.message : String(error)}`);
@@ -112,9 +121,15 @@ export async function startProxyServer(input: {
   app.post('/v1/responses', async (req: Request, res: Response) => {
     try {
       const body = responsesBodyToChat(req.body);
-      const { completion, deltas } = await execute(body);
-      if (req.body?.stream === true) sendResponsesStream(res, completion, deltas);
-      else res.json(completionToResponses(completion));
+      if (req.body?.stream === true) {
+        const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+        const writer = new ResponsesStreamWriter(res, model);
+        const result = await execute(body, { onDelta: (delta) => writer.delta(delta) });
+        writer.finish(result.completion, result.deltas);
+      } else {
+        const { completion } = await execute(body);
+        res.json(completionToResponses(completion));
+      }
     } catch (error) {
       const status = isInvalidRequest(error, 'responses') ? 400 : statusForError(error);
       logger.warn(`responses: ${error instanceof Error ? error.message : String(error)}`);

@@ -21,3 +21,8 @@ test('unknown chat defaults to generic network discovery', () => {
   assert.equal(provider.id, 'generic');
   assert.equal(resolveTransport('auto', provider), 'network');
 });
+
+test('explicit known provider cannot be bound to an unrelated host', () => {
+  assert.throws(() => detectProvider('https://example.com/chat', 'chatgpt'), /não corresponde ao host/);
+  assert.equal(detectProvider('https://example.com/chat', 'generic').id, 'generic');
+});

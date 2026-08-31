@@ -15,7 +15,7 @@ function sourceValue(binding: RequestBinding, body: JsonObject): JsonValue | und
     case 'openai.model': return body.model;
     case 'openai.temperature': return body.temperature;
     case 'openai.top_p': return body.top_p;
-    case 'openai.max_tokens': return body.max_tokens;
+    case 'openai.max_tokens': return body.max_tokens ?? body.max_completion_tokens;
     case 'openai.stream': return body.stream;
     case 'openai.tools_json': return body.tools === undefined ? undefined : JSON.stringify(body.tools);
     case 'openai.tool_choice_json': return body.tool_choice === undefined ? undefined : JSON.stringify(body.tool_choice);
@@ -33,10 +33,11 @@ function applyTransform(value: JsonValue, transform: BindingTransform | undefine
   const includeSystem = transform.includeSystem !== false;
   const roleMap = transform.roleMap || {};
   return toJsonValue(messages
-    .filter((message) => includeSystem || message.role !== 'system')
+    .filter((message) => includeSystem || (message.role !== 'system' && message.role !== 'developer'))
     .map((message) => {
       const target: JsonObject = {};
-      setJsonPath(target, transform.rolePath, roleMap[message.role as keyof typeof roleMap] || message.role);
+      const defaultRole = message.role === 'developer' ? 'system' : message.role;
+      setJsonPath(target, transform.rolePath, roleMap[message.role as keyof typeof roleMap] || defaultRole);
       setJsonPath(target, transform.contentPath, messageToText(message));
       return target;
     }));

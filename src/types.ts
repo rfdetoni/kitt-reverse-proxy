@@ -39,6 +39,8 @@ export interface AppConfig {
 export interface RequestBodyCodecDescriptor {
   kind: 'json' | 'form';
   jsonStringPaths: string[];
+  repeatedFormKeys?: string[];
+  formFieldOrder?: string[];
 }
 
 export interface CapturedExchange {
@@ -83,7 +85,7 @@ export interface MessageArrayTransform {
   type: 'message_array';
   rolePath: string;
   contentPath: string;
-  roleMap?: Partial<Record<'system' | 'user' | 'assistant' | 'tool', string>>;
+  roleMap?: Partial<Record<'system' | 'developer' | 'user' | 'assistant' | 'tool', string>>;
   includeSystem?: boolean;
 }
 
@@ -150,6 +152,7 @@ export interface OpenAiChatBody extends JsonObject {
   temperature?: JsonValue;
   top_p?: JsonValue;
   max_tokens?: JsonValue;
+  max_completion_tokens?: JsonValue;
   tools?: JsonValue;
   tool_choice?: JsonValue;
 }
@@ -191,6 +194,10 @@ export interface UpstreamResult {
   body: JsonValue;
 }
 
+export interface ChatExecutionOptions {
+  onDelta?: (delta: string) => void | Promise<void>;
+}
+
 export interface ChatExecutionResult {
   completion: OpenAiCompletion;
   deltas: string[];
@@ -199,7 +206,7 @@ export interface ChatExecutionResult {
 export interface ChatExecutor {
   readonly modelId: string;
   readonly transport: 'network' | 'ui';
-  execute(body: JsonObject): Promise<ChatExecutionResult>;
+  execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult>;
   describe(): JsonObject;
   reset?(): Promise<void>;
 }

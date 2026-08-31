@@ -41,7 +41,7 @@ function validateTransform(value: unknown, label: string): BindingTransform | un
     const roleMapInput = object(input.roleMap, `${label}.roleMap`);
     const roleMap: Record<string, string> = {};
     for (const [key, roleValue] of Object.entries(roleMapInput)) {
-      if (!['system', 'user', 'assistant', 'tool'].includes(key)) throw new Error(`${label}.roleMap contém role inválido: ${key}`);
+      if (!['system', 'developer', 'user', 'assistant', 'tool'].includes(key)) throw new Error(`${label}.roleMap contém role inválido: ${key}`);
       roleMap[key] = string(roleValue, `${label}.roleMap.${key}`);
     }
     result.roleMap = roleMap;

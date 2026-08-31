@@ -1,6 +1,14 @@
 node_modules/
 dist/
 dist-test/
+coverage/
+.playwright/
+.kitt-reverse-proxy/
+browser-data/
+browser-profile/
+.env
+.env.*
+!.env.example
 *.log
 .DS_Store
 *.tgz

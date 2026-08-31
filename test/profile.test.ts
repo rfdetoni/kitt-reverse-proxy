@@ -18,3 +18,16 @@ test('profile validator rejects executable/unknown sources', () => {
     response: { contentPaths: [] }
   }), /não suportado/);
 });
+
+test('profile validator accepts developer role remapping', async () => {
+  const { validateProfile } = await import('../src/mapping/profile.js');
+  const profile = validateProfile({
+    version: 2,
+    request: { bindings: [{
+      target: '$.messages', source: 'openai.messages',
+      transform: { type: 'message_array', rolePath: '$.role', contentPath: '$.content', roleMap: { developer: 'system' } }
+    }] },
+    response: { contentPaths: ['$.answer'] }
+  });
+  assert.equal(profile.request.bindings[0]?.transform?.type, 'message_array');
+});

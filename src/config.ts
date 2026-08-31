@@ -57,6 +57,17 @@ function isLoopback(host: string): boolean {
   return ['127.0.0.1', 'localhost', '::1'].includes(host.toLowerCase());
 }
 
+function endpointHost(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\.$/, '');
+  if (!normalized || normalized.includes('://') || normalized.includes('/') || normalized.includes('*') || normalized.includes('@') || normalized.includes(':')) {
+    throw new Error(`Host inválido para --allow-endpoint-host: ${value}. Informe apenas o hostname.`);
+  }
+  if (!/^[a-z0-9.-]+$/.test(normalized) || normalized.startsWith('.') || normalized.endsWith('.') || normalized.includes('..')) {
+    throw new Error(`Host inválido para --allow-endpoint-host: ${value}.`);
+  }
+  return normalized;
+}
+
 function provider(value: string): ProviderId {
   const normalized = value.toLowerCase() as ProviderId;
   if (!PROVIDERS.has(normalized)) throw new Error(`Provider inválido: ${value}. Use: ${[...PROVIDERS].join(', ')}.`);
@@ -138,7 +149,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--api-key': config.apiKey = readValue(args, index, arg); index += 1; break;
       case '--provider': config.provider = provider(readValue(args, index, arg)); index += 1; break;
       case '--transport': config.transport = transport(readValue(args, index, arg)); index += 1; break;
-      case '--allow-endpoint-host': config.allowedEndpointHosts.push(readValue(args, index, arg).toLowerCase()); index += 1; break;
+      case '--allow-endpoint-host': config.allowedEndpointHosts.push(endpointHost(readValue(args, index, arg))); index += 1; break;
       case '--headless': config.headed = false; break;
       case '--headed': config.headed = true; break;
       case '--no-cors': config.cors = false; break;

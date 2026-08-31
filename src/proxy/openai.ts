@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 import { isJsonObject, toJsonValue } from '../util/json.js';
@@ -31,7 +31,8 @@ export function responsesBodyToChat(value: unknown): JsonObject {
     ...(value.model !== undefined ? { model: value.model } : {}),
     ...(value.temperature !== undefined ? { temperature: value.temperature } : {}),
     ...(value.top_p !== undefined ? { top_p: value.top_p } : {}),
-    ...(value.max_output_tokens !== undefined ? { max_tokens: value.max_output_tokens } : {}),
+    ...(value.max_output_tokens !== undefined ? { max_completion_tokens: value.max_output_tokens } : {}),
+    ...(value.stream !== undefined ? { stream: value.stream } : {}),
     ...(value.tools !== undefined ? { tools: value.tools } : {}),
     ...(value.tool_choice !== undefined ? { tool_choice: value.tool_choice } : {})
   };
@@ -44,6 +45,8 @@ export function completionToResponses(completion: OpenAiCompletion): JsonObject 
     object: 'response',
     created_at: completion.created,
     status: 'completed',
+    error: null,
+    incomplete_details: null,
     model: completion.model,
     output: [{
       type: 'message',
@@ -60,88 +63,170 @@ export function sendOpenAiError(res: Response, status: number, message: string, 
   res.status(status).json({ error: { message, type: 'proxy_error', param: null, code } });
 }
 
-export function sendChatStream(res: Response, completion: OpenAiCompletion, deltas?: string[]): void {
+function prepareSse(res: Response): void {
   res.status(200);
   res.setHeader('content-type', 'text/event-stream; charset=utf-8');
-  res.setHeader('cache-control', 'no-cache');
+  res.setHeader('cache-control', 'no-cache, no-transform');
   res.setHeader('connection', 'keep-alive');
+  res.setHeader('x-accel-buffering', 'no');
+  res.flushHeaders?.();
+}
 
-  const chunks = (deltas && deltas.length > 0) ? deltas : [completion.choices[0]?.message.content || ''];
-  res.write(`data: ${JSON.stringify({
-    id: completion.id,
-    object: 'chat.completion.chunk',
-    created: completion.created,
-    model: completion.model,
-    choices: [{ index: 0, delta: { role: 'assistant', content: chunks[0] || '' }, finish_reason: null }]
-  })}\n\n`);
+export class ChatStreamWriter {
+  private readonly id = `chatcmpl-web-${randomUUID()}`;
+  private readonly created = Math.floor(Date.now() / 1000);
+  private started = false;
+  private accumulated = '';
 
-  for (let i = 1; i < chunks.length; i += 1) {
-    res.write(`data: ${JSON.stringify({
-      id: completion.id,
+  constructor(private readonly res: Response, private readonly model: string) {}
+
+  begin(): void {
+    if (this.started) return;
+    this.started = true;
+    prepareSse(this.res);
+    this.res.write(`data: ${JSON.stringify({
+      id: this.id,
       object: 'chat.completion.chunk',
-      created: completion.created,
-      model: completion.model,
-      choices: [{ index: 0, delta: { content: chunks[i] }, finish_reason: null }]
+      created: this.created,
+      model: this.model,
+      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
     })}\n\n`);
   }
 
-  res.write(`data: ${JSON.stringify({
-    id: completion.id,
-    object: 'chat.completion.chunk',
-    created: completion.created,
-    model: completion.model,
-    choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || 'stop' }]
-  })}\n\n`);
-  res.end('data: [DONE]\n\n');
+  delta(text: string): void {
+    if (!text) return;
+    this.begin();
+    this.accumulated += text;
+    this.res.write(`data: ${JSON.stringify({
+      id: this.id,
+      object: 'chat.completion.chunk',
+      created: this.created,
+      model: this.model,
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }]
+    })}\n\n`);
+  }
+
+  finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
+    this.begin();
+    const fullText = completion.choices[0]?.message.content || '';
+    if (!this.accumulated) {
+      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) this.delta(delta);
+    } else if (fullText.startsWith(this.accumulated)) {
+      this.delta(fullText.slice(this.accumulated.length));
+    }
+    this.res.write(`data: ${JSON.stringify({
+      id: this.id,
+      object: 'chat.completion.chunk',
+      created: this.created,
+      model: completion.model || this.model,
+      choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || 'stop' }]
+    })}\n\n`);
+    this.res.end('data: [DONE]\n\n');
+  }
+}
+
+export class ResponsesStreamWriter {
+  private readonly responseId = `resp_${randomUUID()}`;
+  private readonly itemId = `msg_${randomUUID()}`;
+  private sequence = 0;
+  private started = false;
+  private accumulated = '';
+
+  constructor(private readonly res: Response, private readonly model: string) {}
+
+  private event(type: string, payload: Record<string, unknown>): void {
+    this.sequence += 1;
+    this.res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: this.sequence, ...payload })}\n\n`);
+  }
+
+  begin(): void {
+    if (this.started) return;
+    this.started = true;
+    prepareSse(this.res);
+    this.event('response.created', {
+      response: { id: this.responseId, object: 'response', status: 'in_progress', model: this.model }
+    });
+    this.event('response.output_item.added', {
+      output_index: 0,
+      item: { id: this.itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] }
+    });
+    this.event('response.content_part.added', {
+      item_id: this.itemId,
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text: '', annotations: [] }
+    });
+  }
+
+  delta(text: string): void {
+    if (!text) return;
+    this.begin();
+    this.accumulated += text;
+    this.event('response.output_text.delta', {
+      item_id: this.itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: text
+    });
+  }
+
+  finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
+    this.begin();
+    const fullText = completion.choices[0]?.message.content || '';
+    if (!this.accumulated) {
+      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) this.delta(delta);
+    } else if (fullText.startsWith(this.accumulated)) {
+      this.delta(fullText.slice(this.accumulated.length));
+    }
+    this.event('response.output_text.done', {
+      item_id: this.itemId,
+      output_index: 0,
+      content_index: 0,
+      text: fullText,
+      logprobs: []
+    });
+    const part = { type: 'output_text', text: fullText, annotations: [] };
+    this.event('response.content_part.done', {
+      item_id: this.itemId,
+      output_index: 0,
+      content_index: 0,
+      part
+    });
+    const item = { id: this.itemId, type: 'message', status: 'completed', role: 'assistant', content: [part] };
+    this.event('response.output_item.done', { output_index: 0, item });
+    this.event('response.completed', {
+      response: {
+        id: this.responseId,
+        object: 'response',
+        created_at: completion.created,
+        status: 'completed',
+        error: null,
+        incomplete_details: null,
+        model: completion.model || this.model,
+        output: [item],
+        output_text: fullText
+      }
+    });
+    this.res.end();
+  }
+}
+
+export function sendChatStream(res: Response, completion: OpenAiCompletion, deltas?: string[]): void {
+  const writer = new ChatStreamWriter(res, completion.model);
+  writer.finish(completion, deltas);
 }
 
 export function sendResponsesStream(res: Response, completion: OpenAiCompletion, deltas?: string[]): void {
-  res.status(200);
-  res.setHeader('content-type', 'text/event-stream; charset=utf-8');
-  res.setHeader('cache-control', 'no-cache');
-  res.setHeader('connection', 'keep-alive');
+  const writer = new ResponsesStreamWriter(res, completion.model);
+  writer.finish(completion, deltas);
+}
 
-  const responseId = `resp_${randomUUID()}`;
-  const itemId = `msg_${randomUUID()}`;
-  const chunks = (deltas && deltas.length > 0) ? deltas : [completion.choices[0]?.message.content || ''];
-  const fullText = completion.choices[0]?.message.content || '';
-
-  res.write(`event: response.created\ndata: ${JSON.stringify({
-    type: 'response.created',
-    response: { id: responseId, object: 'response', status: 'in_progress', model: completion.model }
-  })}\n\n`);
-  res.write(`event: response.output_item.added\ndata: ${JSON.stringify({
-    type: 'response.output_item.added', output_index: 0,
-    item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] }
-  })}\n\n`);
-  res.write(`event: response.content_part.added\ndata: ${JSON.stringify({
-    type: 'response.content_part.added', output_index: 0, content_index: 0,
-    part: { type: 'output_text', text: '', annotations: [] }
-  })}\n\n`);
-  for (const delta of chunks) {
-    if (!delta) continue;
-    res.write(`event: response.text.delta\ndata: ${JSON.stringify({
-      type: 'response.text.delta', output_index: 0, content_index: 0, delta
-    })}\n\n`);
-  }
-  res.write(`event: response.text.done\ndata: ${JSON.stringify({
-    type: 'response.text.done', output_index: 0, content_index: 0, text: fullText
-  })}\n\n`);
-  res.write(`event: response.output_item.done\ndata: ${JSON.stringify({
-    type: 'response.output_item.done', output_index: 0,
-    item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }
-  })}\n\n`);
-  res.write(`event: response.completed\ndata: ${JSON.stringify({
-    type: 'response.completed',
-    response: { id: responseId, object: 'response', status: 'completed', model: completion.model, output_text: fullText }
-  })}\n\n`);
-  res.end('data: [DONE]\n\n');
+function digest(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
 }
 
 function secureEqual(left: string, right: string): boolean {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return timingSafeEqual(digest(left), digest(right));
 }
 
 export function apiKeyMiddleware(apiKey?: string): (req: Request, res: Response, next: NextFunction) => void {

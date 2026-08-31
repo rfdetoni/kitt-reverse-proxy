@@ -63,3 +63,43 @@ test('developer role participates in system_text mapping', () => {
   ] });
   assert.equal(mapped.system, 'follow policy');
 });
+
+test('message_array maps developer to system by default and can exclude system instructions', () => {
+  const includeProfile: AdapterProfile = {
+    version: 2,
+    request: { bindings: [{ target: '$.messages', source: 'openai.messages', transform: { type: 'message_array', rolePath: '$.role', contentPath: '$.content' } }] },
+    response: { contentPaths: ['$.answer'] }
+  };
+  const include = new DeclarativeAdapter(includeProfile, { messages: [] }, 'web');
+  assert.deepEqual(include.mapRequest({ messages: [
+    { role: 'developer', content: 'policy' },
+    { role: 'user', content: 'hello' }
+  ] }).messages, [
+    { role: 'system', content: 'policy' },
+    { role: 'user', content: 'hello' }
+  ]);
+
+  const excludeProfile: AdapterProfile = {
+    ...includeProfile,
+    request: { bindings: [{ target: '$.messages', source: 'openai.messages', transform: { type: 'message_array', rolePath: '$.role', contentPath: '$.content', includeSystem: false } }] }
+  };
+  const exclude = new DeclarativeAdapter(excludeProfile, { messages: [] }, 'web');
+  assert.deepEqual(exclude.mapRequest({ messages: [
+    { role: 'system', content: 's' },
+    { role: 'developer', content: 'd' },
+    { role: 'user', content: 'hello' }
+  ] }).messages, [{ role: 'user', content: 'hello' }]);
+});
+
+test('openai.max_tokens falls back to max_completion_tokens', () => {
+  const tokenProfile: AdapterProfile = {
+    version: 2,
+    request: { bindings: [
+      { target: '$.prompt', source: 'openai.last_user_text' },
+      { target: '$.limit', source: 'openai.max_tokens' }
+    ] },
+    response: { contentPaths: ['$.answer'] }
+  };
+  const adapter = new DeclarativeAdapter(tokenProfile, { prompt: '', limit: 1 }, 'web');
+  assert.equal(adapter.mapRequest({ messages: [{ role: 'user', content: 'x' }], max_completion_tokens: 321 }).limit, 321);
+});

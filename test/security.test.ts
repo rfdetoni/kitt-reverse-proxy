@@ -22,3 +22,12 @@ test('sensitive replay headers are detected before redirect opt-in', () => {
   assert.equal(hasSensitiveForwardHeaders({ 'x-csrf-token': 'x' }), true);
   assert.equal(hasSensitiveForwardHeaders({ 'content-type': 'application/json' }), false);
 });
+
+test('model redaction applies global object and node budgets', () => {
+  const huge: Record<string, string> = {};
+  for (let i = 0; i < 200; i += 1) huge[`key${i}`] = `value-${i}`;
+  const redacted = redactForModel(huge);
+  assert.equal(typeof redacted, 'object');
+  assert.equal(Array.isArray(redacted), false);
+  assert.equal((redacted as Record<string, unknown>).__truncated__, 120);
+});

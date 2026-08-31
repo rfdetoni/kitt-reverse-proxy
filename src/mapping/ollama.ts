@@ -2,9 +2,12 @@ import type { AdapterProfile, AppConfig, CapturedExchange } from '../types.js';
 import { redactForModel, redactHeadersForModel } from '../security/redaction.js';
 import { parseProfileText } from './profile.js';
 
+const MAX_PROMPT_BYTES = 256 * 1024;
+const MAX_OLLAMA_ENVELOPE_BYTES = 256 * 1024;
+
 function buildPrompt(capture: CapturedExchange): string {
   const endpoint = new URL(capture.endpointUrl);
-  return `You are generating a DECLARATIVE mapping profile for a local OpenAI-compatible adapter.
+  const prompt = `You are generating a DECLARATIVE mapping profile for a local OpenAI-compatible adapter.
 Return STRICT JSON only. No markdown. Never return JavaScript or executable code.
 
 Schema:
@@ -16,7 +19,7 @@ Schema:
         "target": "$.target.path",
         "source": "openai.last_user_text | openai.last_message_text | openai.messages | openai.transcript | openai.system_text | openai.model | openai.temperature | openai.top_p | openai.max_tokens | openai.stream | openai.tools_json | openai.tool_choice_json | generated.uuid | generated.request_id | generated.timestamp_ms | generated.timestamp_s",
         "optional": true,
-        "transform": {"type":"identity|string|message_array","rolePath":"$.role","contentPath":"$.content","roleMap":{"user":"user","assistant":"assistant","system":"system","tool":"tool"},"includeSystem":true}
+        "transform": {"type":"identity|string|message_array","rolePath":"$.role","contentPath":"$.content","roleMap":{"user":"user","assistant":"assistant","system":"system","developer":"system","tool":"tool"},"includeSystem":true}
       }
     ],
     "removePaths": []
@@ -59,6 +62,8 @@ ${JSON.stringify(redactForModel(capture.requestSample), null, 2)}
 RESPONSE SAMPLE (values redacted where appropriate):
 ${JSON.stringify(capture.responseSample == null ? null : redactForModel(capture.responseSample), null, 2)}
 `;
+  if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) throw new Error(`Prompt de mapping excede ${MAX_PROMPT_BYTES} bytes.`);
+  return prompt;
 }
 
 export async function generateProfile(capture: CapturedExchange, config: AppConfig): Promise<AdapterProfile> {
@@ -79,7 +84,9 @@ export async function generateProfile(capture: CapturedExchange, config: AppConf
       redirect: 'error'
     });
     if (!response.ok) throw new Error(`Ollama respondeu HTTP ${response.status}: ${(await response.text()).slice(0, 400)}`);
-    const envelope = await response.json() as { response?: unknown };
+    const envelopeText = await response.text();
+    if (Buffer.byteLength(envelopeText, 'utf8') > MAX_OLLAMA_ENVELOPE_BYTES) throw new Error(`Resposta Ollama excede ${MAX_OLLAMA_ENVELOPE_BYTES} bytes.`);
+    const envelope = JSON.parse(envelopeText) as { response?: unknown };
     if (typeof envelope.response !== 'string') throw new Error('Resposta Ollama sem campo string "response".');
     return parseProfileText(envelope.response);
   } catch (error) {

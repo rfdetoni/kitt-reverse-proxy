@@ -1,6 +1,6 @@
 import type { JsonObject, JsonValue, RequestBodyCodecDescriptor } from '../types.js';
 import { cloneJson, isJsonObject } from '../util/json.js';
-import { appendJsonPath, getPathValues, setJsonPath } from '../util/path.js';
+import { appendJsonPath, getPathValues, parseJsonPath, setJsonPath } from '../util/path.js';
 
 const MAX_NESTED_JSON_BYTES = 1024 * 1024;
 const STRUCTURED_FORM_FIELDS = /^(f\.req|payload|data|request|params|variables|body)$/i;
@@ -18,7 +18,7 @@ function isStructured(value: JsonValue | undefined): value is JsonObject | JsonV
 }
 
 function decodeNestedJsonStrings(value: JsonValue, path: string, paths: string[], depth = 0): JsonValue {
-  if (depth > 5 || value == null) return value;
+  if (depth > 6 || value == null) return value;
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (Buffer.byteLength(trimmed, 'utf8') > MAX_NESTED_JSON_BYTES || !/^[\[{]/.test(trimmed)) return value;
@@ -40,27 +40,46 @@ function decodeNestedJsonStrings(value: JsonValue, path: string, paths: string[]
   return value;
 }
 
+function decodeFormValue(key: string, raw: string, path: string, jsonStringPaths: string[]): JsonValue {
+  if (!STRUCTURED_FORM_FIELDS.test(key)) return raw;
+  const parsed = parseJson(raw);
+  if (!isStructured(parsed)) return raw;
+  return decodeNestedJsonStrings(parsed, path, jsonStringPaths);
+}
+
 function decodeForm(text: string): { body: JsonObject; codec: RequestBodyCodecDescriptor } | null {
-  const params = new URLSearchParams(text);
-  const entries = [...params.entries()];
+  const entries = [...new URLSearchParams(text).entries()];
   if (!entries.length) return null;
+
+  const grouped = new Map<string, string[]>();
+  const formFieldOrder: string[] = [];
+  for (const [key, raw] of entries) {
+    formFieldOrder.push(key);
+    const values = grouped.get(key) ?? [];
+    values.push(raw);
+    grouped.set(key, values);
+  }
 
   const body: JsonObject = {};
   const jsonStringPaths: string[] = [];
-  for (const [key, raw] of entries) {
-    const rootPath = appendJsonPath('$', key);
-    if (!STRUCTURED_FORM_FIELDS.test(key)) {
-      body[key] = raw;
-      continue;
+  const repeatedFormKeys: string[] = [];
+  for (const [key, values] of grouped) {
+    if (values.length > 1) {
+      repeatedFormKeys.push(key);
+      body[key] = values.map((raw, index) => decodeFormValue(key, raw, appendJsonPath(appendJsonPath('$', key), index), jsonStringPaths));
+    } else {
+      body[key] = decodeFormValue(key, values[0]!, appendJsonPath('$', key), jsonStringPaths);
     }
-    const parsed = parseJson(raw);
-    if (!isStructured(parsed)) {
-      body[key] = raw;
-      continue;
-    }
-    body[key] = decodeNestedJsonStrings(parsed, rootPath, jsonStringPaths);
   }
-  return { body, codec: { kind: 'form', jsonStringPaths } };
+  return {
+    body,
+    codec: {
+      kind: 'form',
+      jsonStringPaths,
+      ...(repeatedFormKeys.length ? { repeatedFormKeys } : {}),
+      formFieldOrder
+    }
+  };
 }
 
 export function decodeRequestBody(text: string, contentType = ''): { body: JsonObject; codec: RequestBodyCodecDescriptor } | null {
@@ -68,19 +87,25 @@ export function decodeRequestBody(text: string, contentType = ''): { body: JsonO
 
   if (!/application\/x-www-form-urlencoded/i.test(contentType)) {
     const parsed = parseJson(text);
-    if (isJsonObject(parsed)) return { body: parsed, codec: { kind: 'json', jsonStringPaths: [] } };
+    if (isJsonObject(parsed)) {
+      const jsonStringPaths: string[] = [];
+      return { body: decodeNestedJsonStrings(parsed, '$', jsonStringPaths) as JsonObject, codec: { kind: 'json', jsonStringPaths } };
+    }
   }
 
   const form = decodeForm(text);
   if (form) return form;
 
   const parsed = parseJson(text);
-  if (isJsonObject(parsed)) return { body: parsed, codec: { kind: 'json', jsonStringPaths: [] } };
+  if (isJsonObject(parsed)) {
+    const jsonStringPaths: string[] = [];
+    return { body: decodeNestedJsonStrings(parsed, '$', jsonStringPaths) as JsonObject, codec: { kind: 'json', jsonStringPaths } };
+  }
   return null;
 }
 
 function pathDepth(path: string): number {
-  return (path.match(/\.|\[/g) || []).length;
+  return parseJsonPath(path).length;
 }
 
 function reencodeJsonStrings(body: JsonObject, paths: string[]): JsonObject {
@@ -94,16 +119,47 @@ function reencodeJsonStrings(body: JsonObject, paths: string[]): JsonObject {
   return output;
 }
 
+function formScalar(value: JsonValue): string {
+  if (value === null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
+}
+
 export function encodeRequestBody(body: JsonObject, codec: RequestBodyCodecDescriptor): JsonObject | string {
   const encoded = reencodeJsonStrings(body, codec.jsonStringPaths);
   if (codec.kind === 'json') return encoded;
 
   const params = new URLSearchParams();
+  const order = codec.formFieldOrder;
+  if (order?.length) {
+    const offsets = new Map<string, number>();
+    const seen = new Set<string>();
+    for (const key of order) {
+      seen.add(key);
+      const value = encoded[key];
+      if (Array.isArray(value) && codec.repeatedFormKeys?.includes(key)) {
+        const offset = offsets.get(key) ?? 0;
+        if (offset < value.length) params.append(key, formScalar(value[offset]!));
+        offsets.set(key, offset + 1);
+      } else if (value !== undefined) {
+        if ((offsets.get(key) ?? 0) === 0) params.append(key, formScalar(value));
+        offsets.set(key, 1);
+      }
+    }
+    for (const [key, value] of Object.entries(encoded)) {
+      if (seen.has(key)) continue;
+      if (Array.isArray(value) && codec.repeatedFormKeys?.includes(key)) {
+        for (const item of value) params.append(key, formScalar(item));
+      } else params.append(key, formScalar(value));
+    }
+    return params.toString();
+  }
+
   for (const [key, value] of Object.entries(encoded)) {
-    if (value === null) params.set(key, '');
-    else if (typeof value === 'string') params.set(key, value);
-    else if (typeof value === 'number' || typeof value === 'boolean') params.set(key, String(value));
-    else params.set(key, JSON.stringify(value));
+    if (Array.isArray(value) && codec.repeatedFormKeys?.includes(key)) {
+      for (const item of value) params.append(key, formScalar(item));
+    } else params.append(key, formScalar(value));
   }
   return params.toString();
 }

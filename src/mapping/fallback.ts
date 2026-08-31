@@ -57,7 +57,7 @@ function optionalBindings(sample: JsonObject): RequestBinding[] {
   const paths = walk(sample);
   const mappings: Array<[string, RequestBinding['source']]> = [
     ['model', 'openai.model'], ['temperature', 'openai.temperature'], ['top_p', 'openai.top_p'],
-    ['max_tokens', 'openai.max_tokens'], ['stream', 'openai.stream']
+    ['max_tokens', 'openai.max_tokens'], ['max_completion_tokens', 'openai.max_tokens'], ['stream', 'openai.stream']
   ];
   const result: RequestBinding[] = [];
   for (const [key, source] of mappings) {

@@ -226,12 +226,15 @@ function hostMatches(hostname: string, candidate: string): boolean {
 }
 
 export function detectProvider(targetUrl: string, requested: ProviderId = 'auto'): ProviderPreset {
+  const hostname = new URL(targetUrl).hostname;
   if (requested !== 'auto') {
     const explicit = PROVIDERS.find((provider) => provider.id === requested);
     if (!explicit) throw new Error(`Provider não suportado: ${requested}`);
+    if (explicit.id !== 'generic' && !explicit.hosts.some((host) => hostMatches(hostname, host))) {
+      throw new Error(`Provider ${explicit.id} não corresponde ao host ${hostname}. Para UIs customizadas/mirrors use --provider generic --transport ui.`);
+    }
     return explicit;
   }
-  const hostname = new URL(targetUrl).hostname;
   return PROVIDERS.find((provider) => provider.id !== 'generic' && provider.hosts.some((host) => hostMatches(hostname, host)))
     ?? PROVIDERS.find((provider) => provider.id === 'generic')!;
 }

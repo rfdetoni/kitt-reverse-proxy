@@ -168,7 +168,7 @@ curl http://127.0.0.1:3000/v1/chat/completions \
   }'
 ```
 
-Com `stream: true`, o proxy responde usando SSE OpenAI-compatible. No UI transport, os chunks são derivados das atualizações visuais observadas enquanto a resposta é renderizada; no network transport, são derivados dos eventos/frames decodificados quando disponíveis.
+Com `stream: true`, o proxy responde usando SSE OpenAI-compatible. No **UI transport**, os deltas são enviados progressivamente conforme o DOM da resposta cresce. No **network transport**, o `BrowserContext.request` agrega a resposta upstream; depois disso o proxy converte SSE/NDJSON/frames capturados em chunks compatíveis, sem afirmar streaming byte-a-byte que o transporte não oferece.
 
 ### Responses API
 
@@ -182,6 +182,8 @@ curl http://127.0.0.1:3000/v1/responses \
     "stream": false
   }'
 ```
+
+Em streaming, `/v1/responses` usa os eventos atuais `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done` e `response.completed`.
 
 ### Status
 
@@ -202,6 +204,7 @@ No UI transport, o reset navega para a URL de nova conversa configurada para o p
 Clientes OpenAI normalmente reenviam o histórico completo. O UI transport mantém um histórico canônico local para não reenviar turnos já presentes no chat web.
 
 - se o histórico recebido é uma extensão do histórico conhecido, somente os novos turnos são enviados;
+- retries idênticos de clientes que reenviam histórico completo retornam o último resultado em vez de duplicar o turno no chat web;
 - se o cliente envia apenas o novo turno, o proxy o aceita e confia no estado do chat web;
 - se o histórico diverge, o proxy inicia uma nova conversa e reaplica o contexto recebido;
 - mensagens `system`/`developer`, `user`, `assistant` e `tool` são convertidas para texto quando precisam ser enviadas pela UI;
@@ -349,7 +352,7 @@ Redirects no network transport são **bloqueados por padrão**.
 --follow-redirects
 ```
 
-é opt-in. O runtime impede habilitar redirects quando headers capturados com aparência sensível (Authorization, CSRF/XSRF, token, API key, session etc.) seriam manualmente reenviados, evitando vazamento para outro destino.
+é opt-in. Mesmo habilitados, redirects são tratados manualmente com `maxRedirects: 0`, limitados a cinco saltos e **somente dentro do mesmo origin** do endpoint inicial. Redirect cross-origin é bloqueado antes de qualquer replay de headers capturados.
 
 ## Opções CLI
 
@@ -422,12 +425,10 @@ Veja [SECURITY.md](./SECURITY.md).
 
 ```bash
 npm install
-npm run check
-npm test
-npm run build
+npm run verify
 ```
 
-A suíte v3 contém testes para codec form/RPC, XSSI/framing, mapping, state, OpenAI shims, JSON Path seguro, providers, queue, scoring, redaction, headers/redirects e URL policy.
+A suíte revisada cobre codec form/RPC (incluindo chaves repetidas), XSSI/framing, mapping/state, roles `developer`, OpenAI shims/streaming, JSON Path seguro, providers, histórico UI, snapshots DOM, queue, scoring, redaction, logs, redirects same-origin e URL policy. O CI executa `npm run verify` em Node 20 e 22.
 
 ## Estrutura
 
@@ -458,6 +459,7 @@ src/
     network-executor.ts
     serial-queue.ts
     ui-dom.ts
+    ui-history.ts
     ui-executor.ts
     upstream.ts
   security/
@@ -489,6 +491,6 @@ test/
 
 Interfaces web mudam. Os seletores de provider devem ser tratados como compatibilidade best-effort e podem exigir manutenção quando o DOM do site mudar.
 
-O UI transport converte texto. Ele não transforma automaticamente recursos proprietários do site (uploads, artifacts, search modes, voice, function calling etc.) em capacidades OpenAI equivalentes.
+O UI transport converte texto. Ele não transforma automaticamente recursos proprietários do site (uploads, artifacts, search modes, voice, function calling etc.) em capacidades OpenAI equivalentes. Streaming visual é best-effort: se o site reescrever a resposta inteira de forma não cumulativa, o proxy evita emitir deltas potencialmente duplicados e usa o texto final como fonte canônica.
 
 Este projeto não garante que o uso automatizado seja permitido pelos termos de um site. A autorização e conformidade são responsabilidade de quem executa o proxy.
