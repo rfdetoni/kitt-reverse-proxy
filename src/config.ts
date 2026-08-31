@@ -1,12 +1,21 @@
 import { providerIds } from './providers/catalog.js';
 import type { AppConfig, ProviderId, TransportMode } from './types.js';
+import {
+  boolSetting,
+  controlCenterSection,
+  numberSetting,
+  stringSetting
+} from './control-center.js';
+
+const CENTER = controlCenterSection('reverse_proxy.runtime');
+const secretEnv = stringSetting(CENTER, 'api_key_env');
 
 const DEFAULTS = Object.freeze({
-  model: process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b',
+  model: process.env.OLLAMA_MODEL || stringSetting(CENTER, 'model') || 'qwen2.5-coder:7b',
   apiModel: process.env.PROXY_MODEL_ID || undefined,
-  ollamaUrl: process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generate',
-  host: process.env.PROXY_HOST || '127.0.0.1',
-  port: Number(process.env.PROXY_PORT || 3000),
+  ollamaUrl: process.env.OLLAMA_URL || stringSetting(CENTER, 'ollama_url') || 'http://127.0.0.1:11434/api/generate',
+  host: process.env.PROXY_HOST || stringSetting(CENTER, 'host') || '127.0.0.1',
+  port: Number(process.env.PROXY_PORT || numberSetting(CENTER, 'port') || 3000),
   captureTimeoutMs: Number(process.env.CAPTURE_TIMEOUT_MS || 120_000),
   settleAfterCandidateMs: Number(process.env.CAPTURE_SETTLE_MS || 1_500),
   responseSampleTimeoutMs: Number(process.env.RESPONSE_SAMPLE_TIMEOUT_MS || 8_000),
@@ -15,13 +24,14 @@ const DEFAULTS = Object.freeze({
   uiResponseTimeoutMs: Number(process.env.UI_RESPONSE_TIMEOUT_MS || 180_000),
   uiSettleMs: Number(process.env.UI_SETTLE_MS || 1_200),
   manualInterventionTimeoutMs: Number(process.env.MANUAL_INTERVENTION_TIMEOUT_MS || 300_000),
-  maxQueue: Number(process.env.PROXY_MAX_QUEUE || 64),
+  maxQueue: Number(process.env.PROXY_MAX_QUEUE || numberSetting(CENTER, 'max_queue') || 64),
   minIntervalMs: Number(process.env.PROXY_MIN_INTERVAL_MS || 0),
-  apiKey: process.env.PROXY_API_KEY || undefined,
+  apiKey: process.env.PROXY_API_KEY || (secretEnv ? process.env[secretEnv] : undefined),
   userDataDir: process.env.BROWSER_USER_DATA_DIR || undefined,
-  followRedirects: process.env.PROXY_FOLLOW_REDIRECTS === 'true',
-  provider: (process.env.PROXY_PROVIDER || 'auto') as ProviderId,
-  transport: (process.env.PROXY_TRANSPORT || 'auto') as TransportMode
+  followRedirects: process.env.PROXY_FOLLOW_REDIRECTS ? process.env.PROXY_FOLLOW_REDIRECTS === 'true' : (boolSetting(CENTER, 'follow_redirects') ?? false),
+  headed: boolSetting(CENTER, 'headed') ?? true,
+  provider: (process.env.PROXY_PROVIDER || stringSetting(CENTER, 'provider') || 'auto') as ProviderId,
+  transport: (process.env.PROXY_TRANSPORT || stringSetting(CENTER, 'transport') || 'auto') as TransportMode
 });
 
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
@@ -114,7 +124,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     uiResponseTimeoutMs: DEFAULTS.uiResponseTimeoutMs,
     uiSettleMs: DEFAULTS.uiSettleMs,
     manualInterventionTimeoutMs: DEFAULTS.manualInterventionTimeoutMs,
-    headed: true,
+    headed: DEFAULTS.headed,
     cors: true,
     maxQueue: DEFAULTS.maxQueue,
     minIntervalMs: DEFAULTS.minIntervalMs,
