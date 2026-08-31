@@ -383,6 +383,27 @@ Redirects no network transport são **bloqueados por padrão**.
 --no-redirects
 ```
 
+## Integração com o KITT Control Center
+
+O `kitt-reverse-proxy` lê automaticamente as configurações padrão do **KITT Control Center** através da seção `reverse_proxy.runtime` em `${XDG_CONFIG_HOME:-~/.config}/kitt/control-center/overrides.json`.
+
+### Precedência de Configuração:
+```text
+defaults nativos < KITT Control Center overlay < variáveis de ambiente < flags CLI
+```
+
+Campos gerenciados pelo Control Center (`reverse_proxy.runtime`):
+- `model`: modelo Ollama usado no network mapping (`qwen2.5-coder:7b`).
+- `ollama_url`: endpoint Ollama (`http://127.0.0.1:11434/api/generate`).
+- `host`: bind host (`127.0.0.1`).
+- `port`: porta HTTP (`3000`).
+- `provider`: provider padrão (`auto`, `chatgpt`, `claude`, `gemini`, etc.).
+- `transport`: transporte padrão (`auto`, `ui`, `network`).
+- `headed`: abrir navegador visível (`true` / `false`).
+- `follow_redirects`: permitir redirects same-origin (`false`).
+- `max_queue`: capacidade da fila serial (`64`).
+- `api_key_env`: nome da variável de ambiente com a chave de API (nunca salva a chave em texto plano no overlay).
+
 Variáveis equivalentes relevantes:
 
 ```text
@@ -406,6 +427,7 @@ UPSTREAM_TIMEOUT_MS
 UI_RESPONSE_TIMEOUT_MS
 UI_SETTLE_MS
 MANUAL_INTERVENTION_TIMEOUT_MS
+KITT_CONTROL_CENTER_CONFIG
 ```
 
 ## Segurança operacional
