@@ -1,5 +1,5 @@
 import cors from 'cors';
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import type { Server } from 'node:http';
 import { logger } from '../logger.js';
 import { ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
@@ -44,6 +44,17 @@ function isInvalidRequest(error: unknown, route: 'chat' | 'responses'): boolean 
   return route === 'chat' ? /Body|messages|mensagem/i.test(error.message) : /Body|input|mensagem/i.test(error.message);
 }
 
+export function isTrustedBrowserOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function startProxyServer(input: {
   executor: ChatExecutor;
   config: AppConfig;
@@ -53,18 +64,23 @@ export async function startProxyServer(input: {
   const queue = new SerialQueue(config.maxQueue, config.minIntervalMs);
 
   app.disable('x-powered-by');
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const unsafe = req.method === 'POST'
+      || req.method === 'PUT'
+      || req.method === 'PATCH'
+      || req.method === 'DELETE';
+    if (unsafe && !isTrustedBrowserOrigin(req.get('origin'))) {
+      sendOpenAiError(res, 403, 'Origin não permitida.', 'origin_not_allowed');
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '2mb', strict: true }));
   if (config.cors) {
     app.use(cors({
       origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
-        if (!origin) { callback(null, true); return; }
-        try {
-          const host = new URL(origin).hostname;
-          const allowed = ['127.0.0.1', 'localhost', '::1'].includes(host);
-          callback(allowed ? null : new Error('CORS origin não permitida.'), allowed);
-        } catch {
-          callback(new Error('CORS origin inválida.'));
-        }
+        const allowed = isTrustedBrowserOrigin(origin);
+        callback(allowed ? null : new Error('CORS origin não permitida.'), allowed);
       }
     }));
   }

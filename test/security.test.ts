@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hasSensitiveForwardHeaders, sanitizeCapturedHeaders } from '../src/security/headers.js';
+import { isTrustedBrowserOrigin } from '../src/proxy/server.js';
 import { redactForModel } from '../src/security/redaction.js';
+
+test('browser origins are limited to local loopback for mutable routes', () => {
+  assert.equal(isTrustedBrowserOrigin(undefined), true);
+  assert.equal(isTrustedBrowserOrigin('http://localhost:3000'), true);
+  assert.equal(isTrustedBrowserOrigin('https://127.0.0.1:8443'), true);
+  assert.equal(isTrustedBrowserOrigin('http://[::1]:3000'), true);
+  assert.equal(isTrustedBrowserOrigin('https://evil.example'), false);
+  assert.equal(isTrustedBrowserOrigin('null'), false);
+  assert.equal(isTrustedBrowserOrigin('file:///tmp/test.html'), false);
+});
 
 test('captured cookies and hop-by-hop headers are not replayed manually', () => {
   const headers = sanitizeCapturedHeaders({ cookie: 'secret', host: 'x', authorization: 'Bearer x', 'x-custom': 'y' });
