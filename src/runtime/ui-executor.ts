@@ -117,7 +117,8 @@ export class UiChatExecutor implements ChatExecutor {
     const input = await firstVisibleLocator(this.session.page, this.provider.ui.inputSelectors);
     if (!input) throw new UiAutomationError('Campo de entrada do chat não foi localizado.');
 
-    await input.click({ timeout: 5_000 }).catch(() => undefined);
+    await input.focus().catch(() => undefined);
+    await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
 
     // Modern Lexical/ProseMirror editors require true input/keyboard events
     const isContentEditable = await input.getAttribute('contenteditable').catch(() => null);
@@ -127,7 +128,7 @@ export class UiChatExecutor implements ChatExecutor {
       await this.session.page.keyboard.insertText(prompt);
     } else {
       try {
-        await input.fill(prompt, { timeout: 3_000 });
+        await input.fill(prompt, { timeout: 2_000 });
       } catch {
         await input.press('ControlOrMeta+A').catch(() => undefined);
         await input.press('Backspace').catch(() => undefined);
@@ -140,10 +141,10 @@ export class UiChatExecutor implements ChatExecutor {
 
     const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
     if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ timeout: 5_000 }).catch(() => input.press('Enter'));
+      await send.click({ force: true, timeout: 3_000 }).catch(() => input.press('Enter'));
       return;
     }
-    await input.press('Enter', { timeout: 5_000 }).catch(() => undefined);
+    await input.press('Enter', { timeout: 3_000 }).catch(() => undefined);
   }
 
   private async awaitResponse(
