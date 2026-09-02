@@ -10,14 +10,6 @@ export interface UiTextSnapshot {
 const EMPTY_SNAPSHOT: UiTextSnapshot = Object.freeze({ selector: '', frameIndex: -1, count: 0, text: '' });
 const MAX_SNAPSHOT_CHARS = 2 * 1024 * 1024;
 
-async function visible(locator: Locator): Promise<boolean> {
-  try {
-    return await locator.isVisible({ timeout: 250 });
-  } catch {
-    return false;
-  }
-}
-
 function frames(page: Page): Frame[] {
   return page.frames().filter((frame: Frame) => !frame.isDetached());
 }
@@ -27,7 +19,9 @@ export async function firstVisibleLocator(page: Page, selectors: readonly string
     for (const selector of selectors) {
       try {
         const locator = frame.locator(selector).last();
-        if (await locator.count() > 0 && await visible(locator)) return locator;
+        if (await locator.count() > 0 && await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+          return locator;
+        }
       } catch {
         // UI can mutate while we inspect it; try the next selector/frame.
       }
@@ -37,33 +31,51 @@ export async function firstVisibleLocator(page: Page, selectors: readonly string
 }
 
 export async function anyVisible(page: Page, selectors: readonly string[]): Promise<boolean> {
-  return Boolean(await firstVisibleLocator(page, selectors));
+  try {
+    return await page.evaluate((selectorList) => {
+      for (const selector of selectorList) {
+        try {
+          const elements = document.querySelectorAll(selector);
+          for (const el of Array.from(elements)) {
+            const htmlEl = el as HTMLElement;
+            if (htmlEl && (htmlEl.offsetParent !== null || htmlEl.clientHeight > 0 || (htmlEl.getAttribute('aria-hidden') !== 'true' && htmlEl.style.display !== 'none'))) {
+              return true;
+            }
+          }
+        } catch {}
+      }
+      return false;
+    }, selectors as string[]);
+  } catch {
+    return false;
+  }
 }
 
 export async function collectVisibleSnapshots(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot[]> {
-  const output: UiTextSnapshot[] = [];
-  const pageFrames = frames(page);
-  for (const selector of selectors) {
-    for (let frameIndex = 0; frameIndex < pageFrames.length; frameIndex += 1) {
-      const frame = pageFrames[frameIndex]!;
-      try {
-        const locator = frame.locator(selector);
-        const count = await locator.count();
-        for (let index = count - 1; index >= Math.max(0, count - 5); index -= 1) {
-          const item = locator.nth(index);
-          if (!await visible(item)) continue;
-          const text = (await item.innerText({ timeout: 500 }).catch(() => '')).trim().slice(0, MAX_SNAPSHOT_CHARS);
-          if (text) {
-            output.push({ selector, frameIndex, count, text });
-            break;
+  try {
+    const raw = await page.evaluate(({ selectorList, maxChars }) => {
+      const results: Array<{ selector: string; frameIndex: number; count: number; text: string }> = [];
+      for (const selector of selectorList) {
+        try {
+          const nodes = Array.from(document.querySelectorAll(selector));
+          if (!nodes.length) continue;
+          for (let i = nodes.length - 1; i >= Math.max(0, nodes.length - 3); i--) {
+            const el = nodes[i] as HTMLElement;
+            if (!el) continue;
+            const text = (el.innerText || el.textContent || '').trim().slice(0, maxChars);
+            if (text) {
+              results.push({ selector, frameIndex: 0, count: nodes.length, text });
+              break;
+            }
           }
-        }
-      } catch {
-        // Ignore transient DOM/frame errors.
+        } catch {}
       }
-    }
+      return results;
+    }, { selectorList: selectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
+    return raw;
+  } catch {
+    return [];
   }
-  return output;
 }
 
 export function selectChangedSnapshot(
@@ -85,7 +97,7 @@ export function selectChangedSnapshot(
     score += Math.min(20, snapshot.text.length / 1000);
     if (!best || score > best.score) best = { snapshot, score };
   }
-  return best?.snapshot;
+  return best?.snapshot ?? current.find((c) => c.text && c.text.trim() !== prompt);
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {
@@ -94,8 +106,8 @@ export async function latestVisibleSnapshot(page: Page, selectors: readonly stri
 
 export async function bodyText(page: Page, maxChars = 20_000): Promise<string> {
   try {
-    const text = await page.locator('body').innerText({ timeout: 500 });
-    return text.slice(0, maxChars);
+    const text = await page.evaluate((max) => (document.body?.innerText || '').slice(0, max), maxChars);
+    return text;
   } catch {
     return '';
   }
