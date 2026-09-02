@@ -17,25 +17,28 @@ export interface ParsedModelOutput {
 
 export function formatToolsInstruction(tools: JsonValue[] | undefined): string {
   if (!Array.isArray(tools) || tools.length === 0) return '';
-  return `[INSTRUCTION: You have access to the following tools/functions:
+  return `[SYSTEM DIRECTIVE: Act strictly as an AI API engine with function calling capabilities.
+Available Tools:
 ${JSON.stringify(tools, null, 2)}
 
-To call a tool, respond ONLY with a JSON block in this exact format:
+API PROTOCOL RULES:
+1. When you need to execute one or more tools, output ONLY the tool invocation block without conversational preamble or trailing remarks.
+2. Format tool invocations using this exact JSON structure:
 \`\`\`json
 {
   "tool_calls": [
     {
-      "name": "function_name",
-      "arguments": { "arg_name": "value" }
+      "name": "tool_name",
+      "arguments": { "param_key": "param_value" }
     }
   ]
 }
 \`\`\`
 Or using tags:
 <tool_call>
-{"name": "function_name", "arguments": { ... }}
+{"name": "tool_name", "arguments": { ... }}
 </tool_call>
-If no tool is needed, respond with standard text.]\n\n`;
+3. If no tool is required, respond directly with your normal answer.]\n\n`;
 }
 
 export function injectToolsIntoPrompt(prompt: string, tools: JsonValue[] | undefined): string {
