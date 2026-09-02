@@ -15,12 +15,42 @@ async function prepareUserDataDir(directory: string): Promise<string> {
 }
 
 export async function openBrowserSession(config: AppConfig): Promise<LiveBrowserSession> {
+  if (config.cdpUrl) {
+    const browser = await chromium.connectOverCDP(config.cdpUrl);
+    const contexts = browser.contexts();
+    const context = contexts[0] ?? await browser.newContext({ acceptDownloads: false });
+    let targetHostname = '';
+    try {
+      targetHostname = new URL(config.targetUrl).hostname;
+    } catch {
+      // ignore
+    }
+    const matchingPage = targetHostname
+      ? context.pages().find((p: Page) => !p.isClosed() && p.url().includes(targetHostname))
+      : undefined;
+    const page = matchingPage ?? firstUsablePage(context) ?? await context.newPage();
+    return {
+      browser,
+      context,
+      page,
+      persistent: true,
+      async close(): Promise<void> {
+        await browser.close().catch(() => undefined);
+      }
+    };
+  }
+
   if (config.userDataDir) {
     const userDataDir = await prepareUserDataDir(config.userDataDir);
-    const context = await chromium.launchPersistentContext(userDataDir, {
+    const launchOptions = {
       headless: !config.headed,
-      acceptDownloads: false
-    });
+      acceptDownloads: false,
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: ['--disable-blink-features=AutomationControlled']
+    };
+    const context = await chromium
+      .launchPersistentContext(userDataDir, { ...launchOptions, channel: 'chrome' })
+      .catch(() => chromium.launchPersistentContext(userDataDir, launchOptions));
     const page = firstUsablePage(context) ?? await context.newPage();
     return {
       context,
@@ -32,7 +62,12 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     };
   }
 
-  const browser = await chromium.launch({ headless: !config.headed });
+  const browser = await chromium.launch({
+    headless: !config.headed,
+    channel: 'chrome',
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled']
+  }).catch(() => chromium.launch({ headless: !config.headed }));
   const context = await browser.newContext({ acceptDownloads: false });
   const page = await context.newPage();
   return {

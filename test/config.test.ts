@@ -41,3 +41,10 @@ test('preset list is derived from supported browser providers', () => {
     ['chatgpt', 'claude', 'gemini', 'kimi', 'deepseek'],
   );
 });
+
+test('cdp-url flag configures remote debugging endpoint', () => {
+  const config = parseCliArgs(['chatgpt', '--cdp-url', 'http://127.0.0.1:9222']);
+  if ('help' in config) throw new Error('unexpected help');
+  assert.equal(config.cdpUrl, 'http://127.0.0.1:9222/');
+});
+

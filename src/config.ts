@@ -31,6 +31,7 @@ const DEFAULTS = Object.freeze({
   minIntervalMs: Number(process.env.PROXY_MIN_INTERVAL_MS || numberSetting(CENTER, 'min_interval_ms') || 0),
   apiKey: process.env.PROXY_API_KEY || (secretEnv ? process.env[secretEnv] : undefined),
   userDataDir: process.env.BROWSER_USER_DATA_DIR || stringSetting(CENTER, 'user_data_dir') || undefined,
+  cdpUrl: process.env.CDP_URL || stringSetting(CENTER, 'cdp_url') || undefined,
   followRedirects: process.env.PROXY_FOLLOW_REDIRECTS ? process.env.PROXY_FOLLOW_REDIRECTS === 'true' : (boolSetting(CENTER, 'follow_redirects') ?? false),
   headed: boolSetting(CENTER, 'headed') ?? true,
   provider: (process.env.PROXY_PROVIDER || stringSetting(CENTER, 'provider') || 'auto') as ProviderId,
@@ -165,7 +166,8 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     transport: DEFAULTS.transport,
     ...(DEFAULTS.apiKey ? { apiKey: DEFAULTS.apiKey } : {}),
     ...(DEFAULTS.apiModel ? { apiModel: DEFAULTS.apiModel } : {}),
-    ...(DEFAULTS.userDataDir ? { userDataDir: DEFAULTS.userDataDir } : {})
+    ...(DEFAULTS.userDataDir ? { userDataDir: DEFAULTS.userDataDir } : {}),
+    ...(DEFAULTS.cdpUrl ? { cdpUrl: DEFAULTS.cdpUrl } : {})
   };
 
   const preset = args[0] && !args[0].startsWith('-') ? cliLaunchPreset(args[0]) : undefined;
@@ -197,6 +199,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--profile': config.profilePath = readValue(args, index, arg); index += 1; break;
       case '--save-profile': config.saveProfilePath = readValue(args, index, arg); index += 1; break;
       case '--user-data-dir': config.userDataDir = readValue(args, index, arg); index += 1; break;
+      case '--cdp-url': config.cdpUrl = readValue(args, index, arg); index += 1; break;
       case '--api-key': config.apiKey = readValue(args, index, arg); index += 1; break;
       case '--provider': config.provider = provider(readValue(args, index, arg)); index += 1; break;
       case '--transport': config.transport = transport(readValue(args, index, arg)); index += 1; break;
@@ -218,11 +221,12 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
   validateDefaults(config);
   config.targetUrl = validateHttpUrl(targetUrl, 'URL alvo');
   config.ollamaUrl = validateHttpUrl(config.ollamaUrl, 'URL do Ollama');
+  if (config.cdpUrl) config.cdpUrl = validateHttpUrl(config.cdpUrl, 'CDP URL');
   if (config.port > 65_535) throw new Error('--port deve estar entre 1 e 65535.');
   if (!isLoopback(config.host) && !config.apiKey) throw new Error('Bind não local exige --api-key ou PROXY_API_KEY.');
   return Object.freeze(config);
 }
 
 export function printHelp(): void {
-  console.log(`\nkitt-reverse-proxy v3\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
+  console.log(`\nkitt-reverse-proxy v3\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --cdp-url <url>             Conecta a navegador já aberto com remote debugging (ex.: http://127.0.0.1:9222)\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
 }

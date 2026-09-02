@@ -28,6 +28,7 @@ export interface AppConfig {
   profilePath?: string;
   saveProfilePath?: string;
   userDataDir?: string;
+  cdpUrl?: string;
   maxQueue: number;
   minIntervalMs: number;
   allowedEndpointHosts: string[];
