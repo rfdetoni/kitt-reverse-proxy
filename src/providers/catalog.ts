@@ -56,21 +56,36 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         '#prompt-textarea',
         '[data-testid="prompt-textarea"]',
         '[contenteditable="true"][data-lexical-editor="true"]',
-        '[contenteditable="true"][role="textbox"]'
+        '[contenteditable="true"][role="textbox"]',
+        'div[contenteditable="true"]',
+        'textarea'
       ],
       sendSelectors: [
-        '#composer-submit-button',
         'button[data-testid="send-button"]',
+        '#composer-submit-button',
+        'button[aria-label="Send prompt"]',
+        'button[aria-label="Enviar prompt"]',
         'button[aria-label*="send" i]',
+        'button[aria-label*="enviar" i]',
         'form button[type="submit"]'
       ],
       responseSelectors: [
         '[data-message-author-role="assistant"]',
-        '[data-testid^="conversation-turn"] [data-message-author-role="assistant"]'
+        '[data-testid^="conversation-turn"] [data-message-author-role="assistant"]',
+        '.agent-turn .markdown',
+        'article [data-message-author-role="assistant"]',
+        '[data-message-id] .markdown',
+        '[class*="assistant-message" i]',
+        '.markdown'
       ],
       streamingSelectors: [
         'button[data-testid="stop-button"]',
-        'button[aria-label*="stop" i]'
+        'button[aria-label="Stop generating"]',
+        'button[aria-label="Parar de gerar"]',
+        'button[aria-label="Interromper geração"]',
+        'button[aria-label*="stop" i]',
+        'button[aria-label*="parar" i]',
+        '[data-is-streaming="true"]'
       ],
       newChatUrl: 'https://chatgpt.com/'
     }
@@ -91,7 +106,8 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       sendSelectors: [
         'button[data-testid="send-button"]',
-        'button[aria-label*="send message" i]',
+        'button[aria-label*="send" i]',
+        'button[aria-label*="enviar" i]',
         'button[aria-label="Send"]',
         'button[type="submit"]'
       ],
@@ -99,12 +115,15 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         '[data-testid="assistant-message"]',
         '[data-testid*="assistant" i]',
         '.font-claude-message',
-        '.font-claude-response-body'
+        '.font-claude-response-body',
+        '.standard-markdown',
+        '[class*="assistant" i]'
       ],
       streamingSelectors: [
         '[data-is-streaming="true"]',
         'button[data-testid="stop-button"]',
-        'button[aria-label*="stop" i]'
+        'button[aria-label*="stop" i]',
+        'button[aria-label*="parar" i]'
       ],
       newChatUrl: 'https://claude.ai/new'
     }
@@ -125,7 +144,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       sendSelectors: [
         'button[aria-label="Send message"]',
+        'button[aria-label="Enviar mensagem"]',
         'button[aria-label*="send" i]',
+        'button[aria-label*="enviar" i]',
         'button.send-button',
         'button[type="submit"]'
       ],
@@ -134,12 +155,14 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'model-response',
         '.model-response-text',
         'message-content .markdown',
-        '.response-content'
+        '.response-content',
+        '[class*="model-response" i]'
       ],
       streamingSelectors: [
         '[data-is-streaming="true"]',
         '.streaming',
-        'button[aria-label*="stop" i]'
+        'button[aria-label*="stop" i]',
+        'button[aria-label*="parar" i]'
       ],
       newChatUrl: 'https://gemini.google.com/app'
     }
@@ -161,6 +184,7 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       sendSelectors: [
         'button[aria-label*="send" i]',
+        'button[aria-label*="enviar" i]',
         'button[data-testid*="send" i]',
         'button[type="submit"]'
       ],
@@ -172,6 +196,7 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       streamingSelectors: [
         '[data-is-streaming="true"]',
         'button[aria-label*="stop" i]',
+        'button[aria-label*="parar" i]',
         'button[data-testid*="stop" i]'
       ],
       newChatUrl: 'https://www.kimi.com/'
@@ -192,18 +217,22 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       sendSelectors: [
         'button[aria-label*="send" i]',
+        'button[aria-label*="enviar" i]',
         'button[data-testid*="send" i]',
+        'div[role="button"][aria-label*="send" i]',
         'button[type="submit"]'
       ],
       responseSelectors: [
         '[data-role="assistant"]',
         '[data-testid*="assistant" i]',
         '[class*="assistant" i] .ds-markdown',
-        '[class*="assistant" i] [class*="markdown" i]'
+        '[class*="assistant" i] [class*="markdown" i]',
+        '.ds-markdown'
       ],
       streamingSelectors: [
         '[data-is-streaming="true"]',
         'button[aria-label*="stop" i]',
+        'button[aria-label*="parar" i]',
         'button[data-testid*="stop" i]'
       ],
       newChatUrl: 'https://chat.deepseek.com/'

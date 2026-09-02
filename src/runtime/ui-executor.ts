@@ -117,21 +117,33 @@ export class UiChatExecutor implements ChatExecutor {
     const input = await firstVisibleLocator(this.session.page, this.provider.ui.inputSelectors);
     if (!input) throw new UiAutomationError('Campo de entrada do chat não foi localizado.');
 
-    try {
-      await input.fill(prompt, { timeout: 5_000 });
-    } catch {
-      await input.click({ timeout: 5_000 });
+    await input.click({ timeout: 5_000 }).catch(() => undefined);
+
+    // Modern Lexical/ProseMirror editors require true input/keyboard events
+    const isContentEditable = await input.getAttribute('contenteditable').catch(() => null);
+    if (isContentEditable === 'true' || isContentEditable === '') {
       await input.press('ControlOrMeta+A').catch(() => undefined);
       await input.press('Backspace').catch(() => undefined);
       await this.session.page.keyboard.insertText(prompt);
+    } else {
+      try {
+        await input.fill(prompt, { timeout: 3_000 });
+      } catch {
+        await input.press('ControlOrMeta+A').catch(() => undefined);
+        await input.press('Backspace').catch(() => undefined);
+        await this.session.page.keyboard.insertText(prompt);
+      }
     }
+
+    // Give the frontend 150ms to register the state update
+    await sleep(150);
 
     const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
     if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ timeout: 5_000 });
+      await send.click({ timeout: 5_000 }).catch(() => input.press('Enter'));
       return;
     }
-    await input.press('Enter', { timeout: 5_000 });
+    await input.press('Enter', { timeout: 5_000 }).catch(() => undefined);
   }
 
   private async awaitResponse(
@@ -166,7 +178,11 @@ export class UiChatExecutor implements ChatExecutor {
           }
         }
         const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
-        if (!streaming && lastText && stableSince > 0 && Date.now() - stableSince >= this.config.uiSettleMs) {
+        const settled = lastText && stableSince > 0 && (
+          (!streaming && Date.now() - stableSince >= this.config.uiSettleMs) ||
+          (Date.now() - stableSince >= Math.max(2500, this.config.uiSettleMs * 2))
+        );
+        if (settled) {
           return { text: lastText, snapshots };
         }
       }
