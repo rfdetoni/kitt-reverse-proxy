@@ -97,6 +97,34 @@ export async function startProxyServer(input: {
 
   const execute = async (body: JsonObject, options?: ChatExecutionOptions) => queue.run(() => executor.execute(body, options));
 
+  const rootHandler = (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      service: 'kitt-reverse-proxy',
+      version: '3.0.0',
+      model: executor.modelId,
+      transport: executor.transport,
+      endpoints: {
+        openai: {
+          chat: '/v1/chat/completions',
+          models: '/v1/models',
+          responses: '/v1/responses'
+        },
+        ollama: {
+          chat: '/api/chat',
+          generate: '/api/generate',
+          tags: '/api/tags',
+          version: '/api/version'
+        },
+        status: '/v1/kitt/status',
+        health: '/healthz'
+      }
+    });
+  };
+
+  app.get('/', rootHandler);
+  app.get('/v1', rootHandler);
+
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({ status: 'ok', transport: executor.transport, model: executor.modelId, queueDepth: queue.depth });
   });
