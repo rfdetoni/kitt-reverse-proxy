@@ -21,6 +21,7 @@ import {
   OllamaChatStreamWriter,
   OllamaGenerateStreamWriter,
   ollamaGenerateBodyToChat,
+  ollamaShowResponse,
   ollamaTagsResponse,
   validateOllamaChatBody
 } from './ollama.js';
@@ -97,7 +98,7 @@ export async function startProxyServer(input: {
 
   const execute = async (body: JsonObject, options?: ChatExecutionOptions) => queue.run(() => executor.execute(body, options));
 
-  const rootHandler = (_req: Request, res: Response) => {
+  const openAiDiscoveryHandler = (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
       service: 'kitt-reverse-proxy',
@@ -114,7 +115,8 @@ export async function startProxyServer(input: {
           chat: '/api/chat',
           generate: '/api/generate',
           tags: '/api/tags',
-          version: '/api/version'
+          version: '/api/version',
+          show: '/api/show'
         },
         status: '/v1/kitt/status',
         health: '/healthz'
@@ -122,8 +124,23 @@ export async function startProxyServer(input: {
     });
   };
 
-  app.get('/', rootHandler);
-  app.get('/v1', rootHandler);
+  app.get('/', (req: Request, res: Response) => {
+    if (req.headers.accept?.includes('application/json')) {
+      res.json({
+        status: 'ok',
+        message: 'Ollama is running',
+        service: 'kitt-reverse-proxy',
+        version: '3.0.0',
+        model: executor.modelId,
+        transport: executor.transport
+      });
+      return;
+    }
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.send('Ollama is running');
+  });
+
+  app.get('/v1', openAiDiscoveryHandler);
 
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({ status: 'ok', transport: executor.transport, model: executor.modelId, queueDepth: queue.depth });
@@ -135,6 +152,11 @@ export async function startProxyServer(input: {
 
   app.get('/api/tags', (_req: Request, res: Response) => {
     res.json(ollamaTagsResponse(executor.modelId));
+  });
+
+  app.post('/api/show', (req: Request, res: Response) => {
+    const model = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : executor.modelId;
+    res.json(ollamaShowResponse(model));
   });
 
   app.get('/api/version', (_req: Request, res: Response) => {

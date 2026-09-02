@@ -82,6 +82,27 @@ export function ollamaTagsResponse(modelId: string): JsonObject {
   };
 }
 
+export function ollamaShowResponse(modelId: string): JsonObject {
+  return {
+    modelfile: `# Modelfile for ${modelId}\nFROM ${modelId}`,
+    parameters: '',
+    template: '{{ .Prompt }}',
+    details: {
+      parent_model: '',
+      format: 'web',
+      family: 'browser',
+      families: ['browser'],
+      parameter_size: 'web',
+      quantization_level: 'none'
+    },
+    model_info: {
+      'general.architecture': 'browser',
+      'general.file_type': 1,
+      'general.parameter_count': 0
+    }
+  };
+}
+
 function prepareNdjson(res: Response): void {
   res.status(200);
   res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');

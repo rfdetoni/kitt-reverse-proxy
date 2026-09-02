@@ -175,7 +175,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     targetUrl = preset.targetUrl;
     config.provider = preset.id as ProviderId;
     config.transport = 'ui';
-    config.apiModel ??= preset.apiModel;
+    config.apiModel = preset.apiModel;
     config.userDataDir ??= preset.userDataDir;
     args = args.slice(1);
   }
