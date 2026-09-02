@@ -47,3 +47,9 @@ export function boolSetting(section: JsonObject, key: string): boolean | undefin
   const value = section[key];
   return typeof value === 'boolean' ? value : undefined;
 }
+
+export function stringListSetting(section: JsonObject, key: string): string[] | undefined {
+  const value = section[key];
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) return undefined;
+  return value.map((item) => item.trim()).filter(Boolean);
+}

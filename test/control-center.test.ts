@@ -7,7 +7,8 @@ import {
   controlCenterSection,
   stringSetting,
   numberSetting,
-  boolSetting
+  boolSetting,
+  stringListSetting
 } from '../src/control-center.js';
 
 test('controlCenterSection reads from KITT_CONTROL_CENTER_CONFIG overlay', () => {
@@ -69,4 +70,15 @@ test('controlCenterSection rejects wrong schema version', () => {
     delete process.env.KITT_CONTROL_CENTER_CONFIG;
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('stringListSetting parses and sanitizes array of strings', () => {
+  const valid = { allowed_endpoint_hosts: [' api.example.com ', 'host2.local', ''] };
+  assert.deepEqual(stringListSetting(valid, 'allowed_endpoint_hosts'), ['api.example.com', 'host2.local']);
+
+  const invalid = { allowed_endpoint_hosts: [123, 'valid.host'] };
+  assert.equal(stringListSetting(invalid, 'allowed_endpoint_hosts'), undefined);
+
+  const empty = { other_key: [] };
+  assert.equal(stringListSetting(empty, 'allowed_endpoint_hosts'), undefined);
 });
