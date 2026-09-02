@@ -80,20 +80,14 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       streamingSelectors: [
         'button[data-testid="stop-button"]',
-        '#composer-submit-button[aria-label*="stop" i]',
-        '#composer-submit-button[aria-label*="parar" i]',
-        '#composer-submit-button[aria-label*="interromper" i]',
+        '#composer-submit-button[data-testid="stop-button"]',
+        '#composer-submit-button[aria-label="Stop generating"]',
+        '#composer-submit-button[aria-label="Parar de gerar"]',
+        '#composer-submit-button[aria-label="Interromper geração"]',
         'button[aria-label="Stop generating"]',
         'button[aria-label="Parar de gerar"]',
         'button[aria-label="Interromper geração"]',
-        'button[aria-label="Stop"]',
-        'button[aria-label="Parar"]',
-        'button[aria-label*="stop" i]',
-        'button[aria-label*="parar" i]',
-        'button[aria-label*="interromper" i]',
-        '[data-is-streaming="true"]',
-        '.result-thinking',
-        '[data-testid="thought-box"]'
+        '[data-is-streaming="true"]'
       ],
       newChatUrl: 'https://chatgpt.com/'
     }
@@ -130,8 +124,8 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       streamingSelectors: [
         '[data-is-streaming="true"]',
         'button[data-testid="stop-button"]',
-        'button[aria-label*="stop" i]',
-        'button[aria-label*="parar" i]'
+        'button[aria-label="Stop Response"]',
+        'button[aria-label="Stop generating"]'
       ],
       newChatUrl: 'https://claude.ai/new'
     }
@@ -169,8 +163,8 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       streamingSelectors: [
         '[data-is-streaming="true"]',
         '.streaming',
-        'button[aria-label*="stop" i]',
-        'button[aria-label*="parar" i]'
+        'button[aria-label="Stop response"]',
+        'button[aria-label="Stop generation"]'
       ],
       newChatUrl: 'https://gemini.google.com/app'
     }
@@ -203,9 +197,7 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       streamingSelectors: [
         '[data-is-streaming="true"]',
-        'button[aria-label*="stop" i]',
-        'button[aria-label*="parar" i]',
-        'button[data-testid*="stop" i]'
+        'button[data-testid="stop-button"]'
       ],
       newChatUrl: 'https://www.kimi.com/'
     }
@@ -239,9 +231,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       streamingSelectors: [
         '[data-is-streaming="true"]',
-        'button[aria-label*="stop" i]',
-        'button[aria-label*="parar" i]',
-        'button[data-testid*="stop" i]'
+        'button[data-testid="stop-button"]',
+        'button[aria-label="Stop generating"]',
+        'button[aria-label="Parar geração"]'
       ],
       newChatUrl: 'https://chat.deepseek.com/'
     }

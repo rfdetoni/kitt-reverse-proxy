@@ -171,26 +171,32 @@ export class UiChatExecutor implements ChatExecutor {
       const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
       const current = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
       const changed = selectChangedSnapshot(baseline, current, sentPrompt);
+      const activeSnapshot = (changed && changed.text) ? changed : current.find((c) => c.text && c.text.trim() !== sentPrompt.trim());
 
-      if (changed && changed.text) {
-        if (changed.text !== lastText) {
-          lastText = changed.text;
-          snapshots.push(changed.text);
+      if (activeSnapshot && activeSnapshot.text) {
+        if (activeSnapshot.text !== lastText) {
+          lastText = activeSnapshot.text;
+          snapshots.push(activeSnapshot.text);
           stableSince = Date.now();
-          const delta = deltaFromCumulative(streamedText, changed.text);
+          const delta = deltaFromCumulative(streamedText, activeSnapshot.text);
           if (delta) {
-            streamedText = changed.text.trim();
+            streamedText = activeSnapshot.text.trim();
             await onDelta?.(delta);
           }
         }
       }
 
-      // Finish only when the model has completed thinking/generating (stop button gone)
+      // Finish when the model has completed thinking/generating (stop button gone) and text settled
       if (!streaming && lastText) {
         if (stableSince === 0) stableSince = Date.now();
         if (Date.now() - stableSince >= this.config.uiSettleMs) {
           return { text: lastText, snapshots };
         }
+      }
+
+      // Safety completion: if text has been completely stable for 3.5 seconds
+      if (lastText && stableSince > 0 && Date.now() - stableSince >= Math.max(3500, this.config.uiSettleMs * 2)) {
+        return { text: lastText, snapshots };
       }
 
       await sleep(POLL_MS);
