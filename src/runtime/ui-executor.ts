@@ -141,7 +141,7 @@ export class UiChatExecutor implements ChatExecutor {
 
     const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
     if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ force: true, timeout: 3_000 }).catch(() => input.press('Enter'));
+      await send.click({ force: true, timeout: 3_000 }).catch(() => undefined);
       return;
     }
     await input.press('Enter', { timeout: 3_000 }).catch(() => undefined);
@@ -158,6 +158,9 @@ export class UiChatExecutor implements ChatExecutor {
     let stableSince = 0;
     const snapshots: string[] = [];
 
+    // Give web chat a moment to transition to thinking/generating state
+    await sleep(350);
+
     while (Date.now() < deadline) {
       const gate = await gateMessage(this.session.page, this.provider);
       if (gate) {
@@ -165,9 +168,11 @@ export class UiChatExecutor implements ChatExecutor {
         await this.waitForReady('desafio de segurança');
       }
 
+      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
       const current = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
       const changed = selectChangedSnapshot(baseline, current, sentPrompt);
-      if (changed) {
+
+      if (changed && changed.text) {
         if (changed.text !== lastText) {
           lastText = changed.text;
           snapshots.push(changed.text);
@@ -178,15 +183,16 @@ export class UiChatExecutor implements ChatExecutor {
             await onDelta?.(delta);
           }
         }
-        const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
-        const settled = lastText && stableSince > 0 && (
-          (!streaming && Date.now() - stableSince >= this.config.uiSettleMs) ||
-          (Date.now() - stableSince >= Math.max(2500, this.config.uiSettleMs * 2))
-        );
-        if (settled) {
+      }
+
+      // Finish only when the model has completed thinking/generating (stop button gone)
+      if (!streaming && lastText) {
+        if (stableSince === 0) stableSince = Date.now();
+        if (Date.now() - stableSince >= this.config.uiSettleMs) {
           return { text: lastText, snapshots };
         }
       }
+
       await sleep(POLL_MS);
     }
 

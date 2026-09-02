@@ -61,13 +61,13 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'textarea'
       ],
       sendSelectors: [
-        'button[data-testid="send-button"]',
-        '#composer-submit-button',
+        'button[data-testid="send-button"]:not([data-testid="stop-button"])',
+        '#composer-submit-button:not([data-testid="stop-button"]):not([aria-label*="stop" i]):not([aria-label*="parar" i]):not([aria-label*="interromper" i])',
         'button[aria-label="Send prompt"]',
         'button[aria-label="Enviar prompt"]',
-        'button[aria-label*="send" i]',
-        'button[aria-label*="enviar" i]',
-        'form button[type="submit"]'
+        'button[aria-label*="send" i]:not([aria-label*="stop" i])',
+        'button[aria-label*="enviar" i]:not([aria-label*="parar" i])',
+        'form button[type="submit"]:not([data-testid="stop-button"])'
       ],
       responseSelectors: [
         '[data-message-author-role="assistant"]',
@@ -80,12 +80,20 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
       ],
       streamingSelectors: [
         'button[data-testid="stop-button"]',
+        '#composer-submit-button[aria-label*="stop" i]',
+        '#composer-submit-button[aria-label*="parar" i]',
+        '#composer-submit-button[aria-label*="interromper" i]',
         'button[aria-label="Stop generating"]',
         'button[aria-label="Parar de gerar"]',
         'button[aria-label="Interromper geração"]',
+        'button[aria-label="Stop"]',
+        'button[aria-label="Parar"]',
         'button[aria-label*="stop" i]',
         'button[aria-label*="parar" i]',
-        '[data-is-streaming="true"]'
+        'button[aria-label*="interromper" i]',
+        '[data-is-streaming="true"]',
+        '.result-thinking',
+        '[data-testid="thought-box"]'
       ],
       newChatUrl: 'https://chatgpt.com/'
     }
