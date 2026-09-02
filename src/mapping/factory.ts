@@ -19,6 +19,10 @@ export async function createAdapter(capture: CapturedExchange, config: AppConfig
     profile = validateProfile(await loadProfile(config.profilePath));
     ensureProfileMatchesTarget(profile, capture);
     source = 'profile-file';
+  } else if (!config.model.trim()) {
+    logger.info('Nenhum modelo de mapping configurado; usando profile heurístico determinístico sem iniciar/chamar Ollama.');
+    profile = createFallbackProfile(capture.requestSample, capture.responseSample, capture.endpointUrl);
+    source = 'fallback-no-model';
   } else {
     try {
       profile = await generateProfile(capture, config);

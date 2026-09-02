@@ -2,6 +2,8 @@
 
 Proxy local que transforma chats web que você está autorizado a automatizar em uma API compatível com OpenAI para uso por agentes e ferramentas locais.
 
+> **Uso simplificado:** consulte [`GUIDE.md`](./GUIDE.md) para Control Center, presets CLI, instalação, exemplos de API e troubleshooting.
+
 A v3 combina dois modos de execução:
 
 - **UI transport** para ChatGPT, Claude, Gemini, Kimi e DeepSeek. O Playwright envia a mensagem pela interface real do site e lê a resposta renderizada, evitando hardcode de APIs web privadas, tokens efêmeros, PoW/RPCs proprietários e endpoints frágeis.
@@ -94,13 +96,33 @@ npm run build
 npm test
 ```
 
-Para network mapping automático, modelo local sugerido:
+Para network mapping assistido por Ollama, escolha e configure explicitamente um modelo local:
 
 ```bash
-ollama pull qwen2.5-coder:7b
+export OLLAMA_MODEL="<modelo-instalado>"
 ```
 
+Sem `OLLAMA_MODEL`/`model`, o network transport usa o profile heurístico determinístico em vez de iniciar/chamar Ollama desnecessariamente.
+
 ## Uso rápido
+
+A forma mais simples é usar um preset:
+
+```bash
+kitt-reverse-proxy chatgpt
+kitt-reverse-proxy start claude
+kitt-reverse-proxy gemini
+kitt-reverse-proxy kimi
+kitt-reverse-proxy deepseek
+```
+
+Veja todos os presets e perfis derivados:
+
+```bash
+kitt-reverse-proxy presets
+```
+
+A sintaxe por URL continua suportada para qualquer chat autorizado.
 
 ### ChatGPT
 

@@ -1,4 +1,6 @@
-import { providerIds } from './providers/catalog.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { PROVIDERS, providerIds } from './providers/catalog.js';
 import type { AppConfig, ProviderId, TransportMode } from './types.js';
 import {
   boolSetting,
@@ -12,7 +14,7 @@ const CENTER = controlCenterSection('reverse_proxy.runtime');
 const secretEnv = stringSetting(CENTER, 'api_key_env');
 
 const DEFAULTS = Object.freeze({
-  model: process.env.OLLAMA_MODEL || stringSetting(CENTER, 'model') || 'qwen2.5-coder:7b',
+  model: process.env.OLLAMA_MODEL || stringSetting(CENTER, 'model') || '',
   apiModel: process.env.PROXY_MODEL_ID || stringSetting(CENTER, 'api_model') || undefined,
   ollamaUrl: process.env.OLLAMA_URL || stringSetting(CENTER, 'ollama_url') || 'http://127.0.0.1:11434/api/generate',
   host: process.env.PROXY_HOST || stringSetting(CENTER, 'host') || '127.0.0.1',
@@ -36,7 +38,34 @@ const DEFAULTS = Object.freeze({
 });
 
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
-const PROVIDERS = new Set<ProviderId>(['auto', ...providerIds()]);
+const PROVIDER_IDS = new Set<ProviderId>(['auto', ...providerIds()]);
+
+
+export interface CliLaunchPreset {
+  id: string;
+  name: string;
+  targetUrl: string;
+  apiModel: string;
+  userDataDir: string;
+}
+
+export function cliLaunchPresets(): CliLaunchPreset[] {
+  return PROVIDERS
+    .filter((item) => item.id !== 'generic' && item.ui.newChatUrl)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      targetUrl: item.ui.newChatUrl!,
+      apiModel: item.defaultApiModel,
+      userDataDir: join(homedir(), '.kitt-reverse-proxy', item.id)
+    }));
+}
+
+function cliLaunchPreset(value: string): CliLaunchPreset | undefined {
+  const normalized = value.trim().toLowerCase();
+  return cliLaunchPresets().find((item) => item.id === normalized);
+}
+
 
 function readValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
@@ -81,7 +110,7 @@ function endpointHost(value: string): string {
 
 function provider(value: string): ProviderId {
   const normalized = value.toLowerCase() as ProviderId;
-  if (!PROVIDERS.has(normalized)) throw new Error(`Provider inválido: ${value}. Use: ${[...PROVIDERS].join(', ')}.`);
+  if (!PROVIDER_IDS.has(normalized)) throw new Error(`Provider inválido: ${value}. Use: ${[...PROVIDER_IDS].join(', ')}.`);
   return normalized;
 }
 
@@ -109,6 +138,7 @@ function validateDefaults(config: AppConfig): void {
 
 export function parseCliArgs(args: string[]): AppConfig | { help: true } {
   if (args.includes('--help') || args.includes('-h')) return { help: true };
+  args = args[0] === 'start' ? args.slice(1) : [...args];
 
   let targetUrl: string | undefined;
   const config: AppConfig = {
@@ -137,6 +167,16 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     ...(DEFAULTS.apiModel ? { apiModel: DEFAULTS.apiModel } : {}),
     ...(DEFAULTS.userDataDir ? { userDataDir: DEFAULTS.userDataDir } : {})
   };
+
+  const preset = args[0] && !args[0].startsWith('-') ? cliLaunchPreset(args[0]) : undefined;
+  if (preset) {
+    targetUrl = preset.targetUrl;
+    config.provider = preset.id as ProviderId;
+    config.transport = 'ui';
+    config.apiModel ??= preset.apiModel;
+    config.userDataDir ??= preset.userDataDir;
+    args = args.slice(1);
+  }
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
@@ -174,7 +214,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     }
   }
 
-  if (!targetUrl) throw new Error('Informe a URL do chat. Ex.: kitt-reverse-proxy https://exemplo.com/chat');
+  if (!targetUrl) throw new Error('Informe um preset ou URL. Ex.: kitt-reverse-proxy chatgpt | kitt-reverse-proxy https://exemplo.com/chat');
   validateDefaults(config);
   config.targetUrl = validateHttpUrl(targetUrl, 'URL alvo');
   config.ollamaUrl = validateHttpUrl(config.ollamaUrl, 'URL do Ollama');
@@ -184,5 +224,5 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
 }
 
 export function printHelp(): void {
-  console.log(`\nkitt-reverse-proxy v3\n\nUso:\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
+  console.log(`\nkitt-reverse-proxy v3\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { parseCliArgs, printHelp } from './config.js';
+import { cliLaunchPresets, parseCliArgs, printHelp } from './config.js';
 import { captureChatExchange } from './discovery/capture.js';
 import { logger, safeUrlForLog, sanitizeLogMessage } from './logger.js';
 import { createAdapter } from './mapping/factory.js';
@@ -50,9 +50,34 @@ async function createRuntime(config: Exclude<ReturnType<typeof parseCliArgs>, { 
 }
 
 async function main(): Promise<void> {
-  const parsed = parseCliArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === 'presets') {
+    console.log('\nPresets disponíveis:\n');
+    for (const preset of cliLaunchPresets()) {
+      console.log(`  ${preset.id.padEnd(10)} ${preset.targetUrl}`);
+      console.log(`             perfil: ${preset.userDataDir}`);
+      console.log(`             API model: ${preset.apiModel}`);
+    }
+    console.log('\nEx.: kitt-reverse-proxy start chatgpt\n');
+    return;
+  }
+
+  const parentStdinLifecycle = rawArgs.includes('--parent-stdin-lifecycle');
+  const args = rawArgs.filter((arg) => arg !== '--parent-stdin-lifecycle');
+  const parsed = parseCliArgs(args);
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
+
+  let parentClosed = false;
+  let shutdownHandler: ((signal: string) => Promise<void>) | null = null;
+  if (parentStdinLifecycle) {
+    process.stdin.resume();
+    process.stdin.once('end', () => {
+      parentClosed = true;
+      if (shutdownHandler) void shutdownHandler('PARENT_STDIN_EOF');
+    });
+  }
+
   const { executor, session } = await createRuntime(config);
 
   try {
@@ -78,8 +103,10 @@ async function main(): Promise<void> {
       if (forced) logger.warn('Conexões HTTP remanescentes foram encerradas durante shutdown.');
       await session.close();
     };
+    shutdownHandler = shutdown;
     process.once('SIGINT', () => void shutdown('SIGINT'));
     process.once('SIGTERM', () => void shutdown('SIGTERM'));
+    if (parentClosed) await shutdown('PARENT_STDIN_EOF');
   } catch (error) {
     await session.close();
     throw error;
