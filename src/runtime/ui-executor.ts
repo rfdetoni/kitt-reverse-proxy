@@ -194,11 +194,6 @@ export class UiChatExecutor implements ChatExecutor {
     throw new UiAutomationError(`Nenhuma resposta do chat foi detectada em ${Math.round(this.config.uiResponseTimeoutMs / 1000)}s.`);
   }
 
-  private async resetForDivergence(): Promise<void> {
-    logger.info('Histórico OpenAI divergiu da conversa web; iniciando uma nova conversa no navegador.');
-    await this.reset();
-  }
-
   async reset(): Promise<void> {
     this.history = [];
     this.lastRequestFingerprint = '';
@@ -211,14 +206,19 @@ export class UiChatExecutor implements ChatExecutor {
     await this.waitForReady('nova conversa');
   }
 
-  private async pendingMessages(incoming: CanonicalMessage[]): Promise<CanonicalMessage[]> {
+  private pendingMessages(incoming: CanonicalMessage[]): CanonicalMessage[] {
     if (!this.history.length) return incoming;
     if (historyIsPrefix(this.history, incoming)) return incoming.slice(this.history.length);
 
-    if (incoming.length === 1 && ['user', 'tool'].includes(incoming[0]!.role)) return incoming;
+    // If incoming contains a multi-turn array, extract only the new messages following the last assistant turn
+    const lastAsstIdx = incoming.map((m) => m.role).lastIndexOf('assistant');
+    if (lastAsstIdx >= 0 && lastAsstIdx < incoming.length - 1) {
+      return incoming.slice(lastAsstIdx + 1);
+    }
 
-    await this.resetForDivergence();
-    return incoming;
+    // If only user/tool turns without assistant, send the last turn or all incoming
+    if (incoming.length === 1 && ['user', 'tool'].includes(incoming[0]!.role)) return incoming;
+    return [incoming[incoming.length - 1]!];
   }
 
   async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
@@ -235,7 +235,7 @@ export class UiChatExecutor implements ChatExecutor {
       logger.warn('Transporte UI não oferece function calling nativo; tools/tool_choice não são enviados ao site como APIs de ferramenta.');
     }
 
-    const pending = await this.pendingMessages(incoming);
+    const pending = this.pendingMessages(incoming);
     if (!pending.length) throw new UiAutomationError('A requisição não contém um novo turno para enviar ao chat web.');
     const prompt = formatTurn(pending);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
