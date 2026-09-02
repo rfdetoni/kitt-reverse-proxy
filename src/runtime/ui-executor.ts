@@ -14,6 +14,7 @@ import type {
 } from '../types.js';
 import { anyVisible, collectVisibleSnapshots, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
+import { injectToolsIntoPrompt, extractToolCalls } from '../mapping/tool-calling.js';
 import {
   canonicalMessages,
   computeDeltas,
@@ -45,13 +46,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function completion(model: string, content: string): OpenAiCompletion {
+function completion(model: string, content: string | null, toolCalls?: any[]): OpenAiCompletion {
   return {
     id: `chatcmpl-web-${randomUUID()}`,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model,
-    choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }]
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content,
+        ...(toolCalls?.length ? { tool_calls: toolCalls } : {})
+      },
+      finish_reason: toolCalls?.length ? 'tool_calls' : 'stop'
+    }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
   };
 }
 
@@ -204,7 +214,7 @@ export class UiChatExecutor implements ChatExecutor {
       // Finish when the model has completed thinking/generating (stop button gone), is not thinking indicator, and text settled
       if (!streaming && lastText && !isThinkingIndicator(lastText)) {
         if (stableSince === 0) stableSince = Date.now();
-        if (Date.now() - stableSince >= this.config.uiSettleMs) {
+        if (Date.now() - stableSince >= Math.max(1500, this.config.uiSettleMs)) {
           return { text: lastText, snapshots };
         }
       }
@@ -276,12 +286,13 @@ export class UiChatExecutor implements ChatExecutor {
       logger.info('Política UI mínima ativa: histórico, system/developer e mensagens assistant não são reinjetados no site; somente o turno user/tool mais recente é enviado.');
     }
 
-    const prompt = selectedPrompt.text;
+    const prompt = injectToolsIntoPrompt(selectedPrompt.text, Array.isArray(body.tools) ? body.tools : undefined);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
     const result = await this.awaitResponse(baseline, prompt, options?.onDelta);
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
-    const output = completion(model, result.text);
+    const parsed = extractToolCalls(result.text);
+    const output = completion(model, parsed.content ?? result.text, parsed.tool_calls);
 
     if (historyIsPrefix(this.history, incoming)) this.history = [...incoming, { role: 'assistant', text: result.text }];
     else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: result.text }];

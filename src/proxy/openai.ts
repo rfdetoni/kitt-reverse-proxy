@@ -109,17 +109,44 @@ export class ChatStreamWriter {
   finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
     this.begin();
     const fullText = completion.choices[0]?.message.content || '';
+    const toolCalls = completion.choices[0]?.message.tool_calls;
+
     if (!this.accumulated) {
-      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) this.delta(delta);
+      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
+        if (delta) this.delta(delta);
+      }
     } else if (fullText.startsWith(this.accumulated)) {
-      this.delta(fullText.slice(this.accumulated.length));
+      const remaining = fullText.slice(this.accumulated.length);
+      if (remaining) this.delta(remaining);
+    } else if (fullText.length > this.accumulated.length) {
+      let commonLen = 0;
+      while (commonLen < this.accumulated.length && commonLen < fullText.length && this.accumulated[commonLen] === fullText[commonLen]) {
+        commonLen += 1;
+      }
+      const remaining = fullText.slice(commonLen);
+      if (remaining) this.delta(remaining);
     }
+
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      this.res.write(`data: ${JSON.stringify({
+        id: this.id,
+        object: 'chat.completion.chunk',
+        created: this.created,
+        model: completion.model || this.model,
+        choices: [{
+          index: 0,
+          delta: { tool_calls: toolCalls },
+          finish_reason: 'tool_calls'
+        }]
+      })}\n\n`);
+    }
+
     this.res.write(`data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
       created: this.created,
       model: completion.model || this.model,
-      choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || 'stop' }]
+      choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || (toolCalls?.length ? 'tool_calls' : 'stop') }]
     })}\n\n`);
     this.res.end('data: [DONE]\n\n');
   }

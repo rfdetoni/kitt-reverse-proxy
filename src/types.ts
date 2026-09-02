@@ -167,10 +167,12 @@ export interface OpenAiCompletion {
     index: number;
     message: {
       role: 'assistant';
-      content: string;
+      content: string | null;
+      tool_calls?: any[] | undefined;
     };
     finish_reason: string | null;
   }>;
+  usage?: JsonObject | undefined;
 }
 
 export interface OpenAiCompletionChunk {
@@ -182,7 +184,8 @@ export interface OpenAiCompletionChunk {
     index: number;
     delta: {
       role?: 'assistant';
-      content?: string;
+      content?: string | null;
+      tool_calls?: any[] | undefined;
     };
     finish_reason: string | null;
   }>;
