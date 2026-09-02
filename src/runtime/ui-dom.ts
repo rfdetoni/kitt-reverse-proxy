@@ -5,6 +5,9 @@ export interface UiTextSnapshot {
   frameIndex: number;
   count: number;
   text: string;
+  index?: number;
+  identity?: string;
+  priority?: number;
 }
 
 const EMPTY_SNAPSHOT: UiTextSnapshot = Object.freeze({ selector: '', frameIndex: -1, count: 0, text: '' });
@@ -31,51 +34,82 @@ export async function firstVisibleLocator(page: Page, selectors: readonly string
 }
 
 export async function anyVisible(page: Page, selectors: readonly string[]): Promise<boolean> {
-  try {
-    return await page.evaluate((selectorList) => {
-      for (const selector of selectorList) {
-        try {
-          const elements = document.querySelectorAll(selector);
-          for (const el of Array.from(elements)) {
-            const htmlEl = el as HTMLElement;
-            if (htmlEl && (htmlEl.offsetParent !== null || htmlEl.clientHeight > 0 || (htmlEl.getAttribute('aria-hidden') !== 'true' && htmlEl.style.display !== 'none'))) {
-              return true;
+  for (const frame of frames(page)) {
+    try {
+      const visible = await frame.evaluate((selectorList) => {
+        const isVisible = (node: Element): boolean => {
+          const element = node as HTMLElement;
+          const style = window.getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        for (const selector of selectorList) {
+          try {
+            for (const element of Array.from(document.querySelectorAll(selector))) {
+              if (isVisible(element)) return true;
             }
-          }
-        } catch {}
-      }
-      return false;
-    }, selectors as string[]);
-  } catch {
-    return false;
+          } catch {}
+        }
+        return false;
+      }, selectors as string[]);
+      if (visible) return true;
+    } catch {}
   }
+  return false;
 }
 
 export async function collectVisibleSnapshots(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot[]> {
-  try {
-    const raw = await page.evaluate(({ selectorList, maxChars }) => {
-      const results: Array<{ selector: string; frameIndex: number; count: number; text: string }> = [];
-      for (const selector of selectorList) {
-        try {
-          const nodes = Array.from(document.querySelectorAll(selector));
-          if (!nodes.length) continue;
-          for (let i = nodes.length - 1; i >= Math.max(0, nodes.length - 3); i--) {
-            const el = nodes[i] as HTMLElement;
-            if (!el) continue;
-            const text = (el.innerText || el.textContent || '').trim().slice(0, maxChars);
-            if (text) {
-              results.push({ selector, frameIndex: 0, count: nodes.length, text });
-              break;
+  const output: UiTextSnapshot[] = [];
+  const pageFrames = frames(page);
+  for (let frameIndex = 0; frameIndex < pageFrames.length; frameIndex += 1) {
+    const frame = pageFrames[frameIndex]!;
+    try {
+      const raw = await frame.evaluate(({ selectorList, maxChars }) => {
+        const isVisible = (node: Element): boolean => {
+          const element = node as HTMLElement;
+          const style = window.getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        const results: Array<{selector:string;count:number;index:number;identity:string;priority:number;text:string}> = [];
+        for (let priority = 0; priority < selectorList.length; priority += 1) {
+          const selector = selectorList[priority]!;
+          try {
+            const nodes = Array.from(document.querySelectorAll(selector));
+            for (let index = nodes.length - 1; index >= Math.max(0, nodes.length - 4); index -= 1) {
+              const element = nodes[index] as HTMLElement | undefined;
+              if (!element || !isVisible(element)) continue;
+              const value = (element.innerText || element.textContent || '').trim().slice(0, maxChars);
+              if (!value) continue;
+              const domIdentity = element.getAttribute('data-message-id') || element.getAttribute('data-turn-id') || element.id || '';
+              results.push({
+                selector, count: nodes.length, index,
+                identity: domIdentity ? `${selector}|${domIdentity}` : `${selector}|index:${index}`,
+                priority, text: value
+              });
             }
-          }
-        } catch {}
-      }
-      return results;
-    }, { selectorList: selectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
-    return raw;
-  } catch {
-    return [];
+          } catch {}
+        }
+        return results;
+      }, { selectorList: selectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
+      for (const snapshot of raw) output.push({ ...snapshot, frameIndex });
+      if (frameIndex === 0 && raw.length > 0) break;
+    } catch {}
   }
+  return output;
+}
+
+function comparableText(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+function sameSnapshotSlot(left: UiTextSnapshot, right: UiTextSnapshot): boolean {
+  if (left.identity && right.identity) return left.identity === right.identity && left.frameIndex === right.frameIndex;
+  return left.selector === right.selector
+    && left.frameIndex === right.frameIndex
+    && (left.index ?? -1) === (right.index ?? -1);
 }
 
 export function selectChangedSnapshot(
@@ -83,21 +117,29 @@ export function selectChangedSnapshot(
   current: readonly UiTextSnapshot[],
   sentPrompt = ''
 ): UiTextSnapshot | undefined {
-  const prompt = sentPrompt.trim();
+  const prompt = comparableText(sentPrompt);
+  const baselineTexts = new Set(baseline.map((snapshot) => comparableText(snapshot.text)).filter(Boolean));
   let best: { snapshot: UiTextSnapshot; score: number } | undefined;
   for (const snapshot of current) {
-    if (!snapshot.text || snapshot.text.trim() === prompt) continue;
-    const before = baseline.find((candidate) => candidate.selector === snapshot.selector && candidate.frameIndex === snapshot.frameIndex);
+    const value = comparableText(snapshot.text);
+    if (!value || value === prompt) continue;
+    const before = baseline.find((candidate) => sameSnapshotSlot(candidate, snapshot));
     const countIncrease = before ? snapshot.count > before.count : snapshot.count > 0;
-    const textChange = before ? snapshot.text !== before.text : true;
-    if (!countIncrease && !textChange) continue;
+    const textChange = before ? comparableText(snapshot.text) !== comparableText(before.text) : true;
+    const newText = !baselineTexts.has(value);
+    if (!countIncrease && !textChange && !newText) continue;
     let score = 0;
-    if (countIncrease) score += 100;
-    if (textChange) score += 50;
-    score += Math.min(20, snapshot.text.length / 1000);
+    const priority = snapshot.priority ?? current.indexOf(snapshot);
+    score += Math.max(0, 1000 - priority * 100);
+    if (newText) score += 500;
+    if (snapshot.identity && !before) score += 300;
+    if (countIncrease) score += 200;
+    if (textChange) score += 100;
+    if (snapshot.index !== undefined && snapshot.index === snapshot.count - 1) score += 50;
+    score += Math.min(40, value.length / 500);
     if (!best || score > best.score) best = { snapshot, score };
   }
-  return best?.snapshot ?? current.find((c) => c.text && c.text.trim() !== prompt);
+  return best?.snapshot;
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {

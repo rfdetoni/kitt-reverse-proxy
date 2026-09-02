@@ -18,7 +18,7 @@ import {
   canonicalMessages,
   computeDeltas,
   deltaFromCumulative,
-  formatTurn,
+  selectMinimalUiPrompt,
   historyFingerprint,
   historyIsPrefix,
   type CanonicalMessage
@@ -64,6 +64,7 @@ export class UiChatExecutor implements ChatExecutor {
   readonly modelId: string;
   private history: CanonicalMessage[] = [];
   private warnedTools = false;
+  private warnedContextPolicy = false;
   private lastRequestFingerprint = '';
   private lastResult: ChatExecutionResult | undefined;
 
@@ -170,10 +171,9 @@ export class UiChatExecutor implements ChatExecutor {
 
       const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
       const current = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-      const changed = selectChangedSnapshot(baseline, current, sentPrompt);
-      const activeSnapshot = (changed && changed.text) ? changed : current.find((c) => c.text && c.text.trim() !== sentPrompt.trim());
+      const activeSnapshot = selectChangedSnapshot(baseline, current, sentPrompt);
 
-      if (activeSnapshot && activeSnapshot.text) {
+      if (activeSnapshot?.text) {
         if (activeSnapshot.text !== lastText) {
           lastText = activeSnapshot.text;
           snapshots.push(activeSnapshot.text);
@@ -249,7 +249,19 @@ export class UiChatExecutor implements ChatExecutor {
 
     const pending = this.pendingMessages(incoming);
     if (!pending.length) throw new UiAutomationError('A requisição não contém um novo turno para enviar ao chat web.');
-    const prompt = formatTurn(pending);
+
+    const selectedPrompt = selectMinimalUiPrompt(pending);
+    if (!selectedPrompt) {
+      throw new UiAutomationError(
+        'O transporte UI não injeta mensagens system/developer/assistant no chat web. Envie um novo turno user (ou tool quando indispensável).'
+      );
+    }
+    if (selectedPrompt.omittedContextMessages > 0 && !this.warnedContextPolicy) {
+      this.warnedContextPolicy = true;
+      logger.info('Política UI mínima ativa: histórico, system/developer e mensagens assistant não são reinjetados no site; somente o turno user/tool mais recente é enviado.');
+    }
+
+    const prompt = selectedPrompt.text;
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
     const result = await this.awaitResponse(baseline, prompt, options?.onDelta);

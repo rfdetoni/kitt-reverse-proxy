@@ -29,18 +29,26 @@ export function historyFingerprint(messages: CanonicalMessage[]): string {
   return JSON.stringify(messages.map(({ role, text }) => [role, text]));
 }
 
-export function formatTurn(messages: CanonicalMessage[]): string {
-  if (messages.length === 1 && messages[0]?.role === 'user') return messages[0].text;
-  return messages.map((message) => {
-    const role = message.role === 'system' || message.role === 'developer'
-      ? 'System'
-      : message.role === 'assistant'
-        ? 'Assistant'
-        : message.role === 'tool'
-          ? 'Tool'
-          : 'User';
-    return `${role}:\n${message.text}`;
-  }).join('\n\n');
+export interface UiPromptSelection {
+  role: 'user' | 'tool';
+  text: string;
+  omittedContextMessages: number;
+}
+
+export function selectMinimalUiPrompt(messages: readonly CanonicalMessage[]): UiPromptSelection | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (!['user', 'tool'].includes(message.role) || !message.text.trim()) continue;
+    const text = message.role === 'tool'
+      ? message.text.replace(/^\[tool:[^\]]*\]\n?/i, '')
+      : message.text;
+    return {
+      role: message.role as 'user' | 'tool',
+      text,
+      omittedContextMessages: messages.length - 1
+    };
+  }
+  return undefined;
 }
 
 export function deltaFromCumulative(previous: string, current: string): string {

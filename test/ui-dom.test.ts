@@ -18,3 +18,31 @@ test('prompt echo is ignored as assistant response', () => {
   const result = selectChangedSnapshot([], [{ selector: '.x', frameIndex: 0, count: 1, text: 'hello' }], 'hello');
   assert.equal(result, undefined);
 });
+
+test('unchanged pre-existing assistant response is never reused for a new request', () => {
+  const baseline: UiTextSnapshot[] = [
+    { selector: '[assistant]', frameIndex: 0, count: 1, index: 0, identity: 'turn-old', priority: 0, text: 'old answer' }
+  ];
+  const current: UiTextSnapshot[] = [
+    { selector: '[assistant]', frameIndex: 0, count: 1, index: 0, identity: 'turn-old', priority: 0, text: 'old answer' }
+  ];
+  assert.equal(selectChangedSnapshot(baseline, current, 'new question'), undefined);
+});
+
+test('virtualized assistant slot changing text is accepted as new response', () => {
+  const baseline: UiTextSnapshot[] = [
+    { selector: '[assistant]', frameIndex: 0, count: 1, index: 0, identity: 'slot-0', priority: 0, text: 'old answer' }
+  ];
+  const current: UiTextSnapshot[] = [
+    { selector: '[assistant]', frameIndex: 0, count: 1, index: 0, identity: 'slot-0', priority: 0, text: 'new generated answer' }
+  ];
+  assert.equal(selectChangedSnapshot(baseline, current, 'question')?.text, 'new generated answer');
+});
+
+test('specific assistant selector outranks broad prompt echo', () => {
+  const current: UiTextSnapshot[] = [
+    { selector: '[assistant]', frameIndex: 0, count: 1, index: 0, identity: 'answer-1', priority: 0, text: 'real answer' },
+    { selector: '.markdown', frameIndex: 0, count: 2, index: 1, identity: 'prompt-1', priority: 5, text: 'hello   world' }
+  ];
+  assert.equal(selectChangedSnapshot([], current, 'hello\nworld')?.text, 'real answer');
+});
