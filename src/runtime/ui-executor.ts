@@ -59,6 +59,19 @@ async function gateMessage(page: Page, provider: ProviderPreset): Promise<Browse
   return detectBrowserGate(page, provider.ui.inputSelectors);
 }
 
+function isThinkingIndicator(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return (
+    t === 'pensando' ||
+    t === 'pensando...' ||
+    t === 'thinking' ||
+    t === 'thinking...' ||
+    /^pensou (durante|por|há) \d+/i.test(t) ||
+    /^thought for \d+/i.test(t) ||
+    /^pensando (há|por) \d+/i.test(t)
+  );
+}
+
 export class UiChatExecutor implements ChatExecutor {
   readonly transport = 'ui' as const;
   readonly modelId: string;
@@ -178,31 +191,33 @@ export class UiChatExecutor implements ChatExecutor {
           lastText = activeSnapshot.text;
           snapshots.push(activeSnapshot.text);
           stableSince = Date.now();
-          const delta = deltaFromCumulative(streamedText, activeSnapshot.text);
-          if (delta) {
-            streamedText = activeSnapshot.text.trim();
-            await onDelta?.(delta);
+          if (!isThinkingIndicator(activeSnapshot.text)) {
+            const delta = deltaFromCumulative(streamedText, activeSnapshot.text);
+            if (delta) {
+              streamedText = activeSnapshot.text.trim();
+              await onDelta?.(delta);
+            }
           }
         }
       }
 
-      // Finish when the model has completed thinking/generating (stop button gone) and text settled
-      if (!streaming && lastText) {
+      // Finish when the model has completed thinking/generating (stop button gone), is not thinking indicator, and text settled
+      if (!streaming && lastText && !isThinkingIndicator(lastText)) {
         if (stableSince === 0) stableSince = Date.now();
         if (Date.now() - stableSince >= this.config.uiSettleMs) {
           return { text: lastText, snapshots };
         }
       }
 
-      // Safety completion: if text has been completely stable for 3.5 seconds
-      if (lastText && stableSince > 0 && Date.now() - stableSince >= Math.max(3500, this.config.uiSettleMs * 2)) {
+      // Safety completion ONLY when not streaming and text is a real answer
+      if (!streaming && lastText && !isThinkingIndicator(lastText) && stableSince > 0 && Date.now() - stableSince >= Math.max(3000, this.config.uiSettleMs * 2)) {
         return { text: lastText, snapshots };
       }
 
       await sleep(POLL_MS);
     }
 
-    if (lastText) return { text: lastText, snapshots };
+    if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, snapshots };
     throw new UiAutomationError(`Nenhuma resposta do chat foi detectada em ${Math.round(this.config.uiResponseTimeoutMs / 1000)}s.`);
   }
 

@@ -70,11 +70,12 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'form button[type="submit"]:not([data-testid="stop-button"])'
       ],
       responseSelectors: [
+        '[data-message-author-role="assistant"] .markdown',
+        '.agent-turn .markdown',
+        'article [data-message-author-role="assistant"] .markdown',
+        '[data-message-id] .markdown',
         '[data-message-author-role="assistant"]',
         '[data-testid^="conversation-turn"] [data-message-author-role="assistant"]',
-        '.agent-turn .markdown',
-        'article [data-message-author-role="assistant"]',
-        '[data-message-id] .markdown',
         '[class*="assistant-message" i]',
         '.markdown'
       ],
