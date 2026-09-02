@@ -15,6 +15,15 @@ import {
   sendOpenAiError,
   validateChatBody
 } from './openai.js';
+import {
+  completionToOllamaChat,
+  completionToOllamaGenerate,
+  OllamaChatStreamWriter,
+  OllamaGenerateStreamWriter,
+  ollamaGenerateBodyToChat,
+  ollamaTagsResponse,
+  validateOllamaChatBody
+} from './ollama.js';
 
 function statusForError(error: unknown): number {
   if (error instanceof QueueFullError) return 429;
@@ -96,6 +105,18 @@ export async function startProxyServer(input: {
     res.json({ object: 'list', data: [{ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' }] });
   });
 
+  app.get('/api/tags', (_req: Request, res: Response) => {
+    res.json(ollamaTagsResponse(executor.modelId));
+  });
+
+  app.get('/api/version', (_req: Request, res: Response) => {
+    res.json({ version: '0.5.1' });
+  });
+
+  app.get('/api/ps', (_req: Request, res: Response) => {
+    res.json(ollamaTagsResponse(executor.modelId));
+  });
+
   app.get('/v1/kitt/status', (_req: Request, res: Response) => {
     res.json({ ...executor.describe(), queueDepth: queue.depth, model: executor.modelId });
   });
@@ -129,6 +150,46 @@ export async function startProxyServer(input: {
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
       logger.warn(`chat/completions: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
+      else res.end();
+    }
+  });
+
+  app.post('/api/chat', async (req: Request, res: Response) => {
+    try {
+      const body = validateOllamaChatBody(req.body);
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+      if (body.stream === true || body.stream === undefined) {
+        const writer = new OllamaChatStreamWriter(res, model);
+        await execute(body, { onDelta: (delta) => writer.delta(delta) });
+        writer.finish();
+      } else {
+        const { completion } = await execute(body);
+        res.json(completionToOllamaChat(completion, model));
+      }
+    } catch (error) {
+      const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
+      logger.warn(`api/chat: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
+      else res.end();
+    }
+  });
+
+  app.post('/api/generate', async (req: Request, res: Response) => {
+    try {
+      const chatBody = ollamaGenerateBodyToChat(req.body);
+      const model = typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model : executor.modelId;
+      if (req.body?.stream === true || req.body?.stream === undefined) {
+        const writer = new OllamaGenerateStreamWriter(res, model);
+        await execute(chatBody, { onDelta: (delta) => writer.delta(delta) });
+        writer.finish();
+      } else {
+        const { completion } = await execute(chatBody);
+        res.json(completionToOllamaGenerate(completion, model));
+      }
+    } catch (error) {
+      const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
+      logger.warn(`api/generate: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
       else res.end();
     }

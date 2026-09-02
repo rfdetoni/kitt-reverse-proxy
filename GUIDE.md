@@ -334,7 +334,62 @@ deepseek-web
 
 ---
 
-## 7. Integrar em agentes/OpenAI-compatible clients
+## 7. API Padrão Ollama (`/api/...`)
+
+O `kitt-reverse-proxy` expõe nativamente os endpoints da API do **Ollama**, permitindo que qualquer cliente ou biblioteca compatível com Ollama se conecte diretamente ao proxy.
+
+### Listar Modelos (Tags)
+
+```bash
+curl http://127.0.0.1:3000/api/tags
+```
+
+### Versão
+
+```bash
+curl http://127.0.0.1:3000/api/version
+```
+
+### Chat (`POST /api/chat`)
+
+```bash
+curl http://127.0.0.1:3000/api/chat \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "chatgpt-web",
+    "messages": [
+      {"role": "user", "content": "Olá! Explique o KITT em poucas palavras."}
+    ],
+    "stream": false
+  }'
+```
+
+### Generate (`POST /api/generate`)
+
+```bash
+curl http://127.0.0.1:3000/api/generate \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "chatgpt-web",
+    "prompt": "Escreva um poema curto sobre IA.",
+    "stream": false
+  }'
+```
+
+---
+
+## 8. Integrar em agentes/OpenAI e Ollama clients
+
+### Como cliente OpenAI:
+Configure no seu agente ou biblioteca:
+- **Base URL**: `http://127.0.0.1:3000/v1`
+- **Model**: `chatgpt-web` (ou `claude-web`, `gemini-web`, etc.)
+
+### Como cliente Ollama:
+Configure no seu agente ou cliente Ollama:
+- **OLLAMA_HOST**: `http://127.0.0.1:3000`
+- **Model**: `chatgpt-web` (ou `claude-web`, `gemini-web`, etc.)
+
 
 Configure:
 
