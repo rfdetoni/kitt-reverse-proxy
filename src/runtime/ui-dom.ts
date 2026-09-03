@@ -12,6 +12,9 @@ export interface UiTextSnapshot {
 
 const EMPTY_SNAPSHOT: UiTextSnapshot = Object.freeze({ selector: '', frameIndex: -1, count: 0, text: '' });
 const MAX_SNAPSHOT_CHARS = 2 * 1024 * 1024;
+const MAX_ARTIFACTS = 16;
+const MAX_ARTIFACT_CHARS = 256 * 1024;
+const MAX_ARTIFACT_TOTAL_CHARS = 1024 * 1024;
 
 function frames(page: Page): Frame[] {
   return page.frames().filter((frame: Frame) => !frame.isDetached());
@@ -161,6 +164,14 @@ export interface ExtractedArtifact {
   code: string;
 }
 
+export function filterNewArtifacts(
+  baseline: readonly ExtractedArtifact[],
+  current: readonly ExtractedArtifact[]
+): ExtractedArtifact[] {
+  const previous = new Set(baseline.map((item) => `${item.filename || ''}\0${item.code}`));
+  return current.filter((item) => !previous.has(`${item.filename || ''}\0${item.code}`));
+}
+
 export async function extractArtifactContents(page: Page): Promise<ExtractedArtifact[]> {
   const pageFrames = frames(page);
   for (const frame of pageFrames) {
@@ -168,6 +179,7 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
       const artifacts = await frame.evaluate(() => {
         const results: Array<{ filename?: string | undefined; language?: string | undefined; code: string }> = [];
         const seen = new Set<string>();
+        let totalChars = 0;
 
         // 1. ChatGPT Canvas / Artifact panels, Claude artifacts, or code containers
         const codeContainers = Array.from(document.querySelectorAll(
@@ -176,8 +188,9 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
 
         for (const pre of codeContainers) {
           const codeEl = pre.querySelector('code') || pre;
-          const text = (codeEl.textContent || '').trim();
+          const text = (codeEl.textContent || '').trim().slice(0, 256 * 1024);
           if (!text || seen.has(text)) continue;
+          if (results.length >= 16 || totalChars + text.length > 1024 * 1024) break;
 
           // Attempt to locate title, filename or language indicator in pre parent/header
           let filename: string | undefined;
@@ -195,6 +208,7 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
           if (langMatch) language = langMatch[1];
 
           seen.add(text);
+          totalChars += text.length;
           results.push({ filename, language, code: text });
         }
 
@@ -206,11 +220,13 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
           if (href.startsWith('data:') && href.includes(',')) {
             try {
               const [meta, rawData] = href.split(',', 2);
+              if (!rawData || rawData.length > 384 * 1024) continue;
               const isBase64 = meta?.includes(';base64');
-              const decoded = isBase64 ? atob(rawData!) : decodeURIComponent(rawData!);
-              if (decoded.trim() && !seen.has(decoded.trim())) {
-                seen.add(decoded.trim());
-                results.push({ filename, code: decoded.trim() });
+              const decoded = (isBase64 ? atob(rawData) : decodeURIComponent(rawData)).trim().slice(0, 256 * 1024);
+              if (decoded && !seen.has(decoded) && results.length < 16 && totalChars + decoded.length <= 1024 * 1024) {
+                seen.add(decoded);
+                totalChars += decoded.length;
+                results.push({ filename, code: decoded });
               }
             } catch {}
           }

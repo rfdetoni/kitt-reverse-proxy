@@ -12,7 +12,7 @@ import type {
   OpenAiCompletion,
   LiveBrowserSession
 } from '../types.js';
-import { anyVisible, collectVisibleSnapshots, extractArtifactContents, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
+import { anyVisible, collectVisibleSnapshots, extractArtifactContents, filterNewArtifacts, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
 import {
   assertToolChoiceSatisfied,
@@ -354,6 +354,7 @@ export class UiChatExecutor implements ChatExecutor {
     }
     const prompt = `${prefix}${actionablePrompt}`;
 
+    const artifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
 
@@ -370,7 +371,8 @@ export class UiChatExecutor implements ChatExecutor {
     let textToParse = result.text;
 
     // Check if the chat generated artifacts/files (e.g. Canvas or download buttons) that were not inlined
-    const artifacts = await extractArtifactContents(this.session.page).catch(() => []);
+    const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
+    const artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
     if (artifacts.length > 0) {
       const artifactBlocks = artifacts
         .filter((art) => !textToParse.includes(art.code))

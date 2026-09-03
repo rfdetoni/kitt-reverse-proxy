@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import process from 'node:process';
 
+const DEFAULT_LOCAL_KEY = 'kitt-local';
+const MAX_GATEWAY_JSON_BYTES = 1024 * 1024;
 export const DEFAULT_GATEWAY_BASE = 'http://127.0.0.1:3000';
 export const DEFAULT_OPENAI_MODEL = 'chatgpt-web';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-web';
@@ -21,6 +23,10 @@ const DIRECT_PROVIDER_ENV = [
   'AWS_BEDROCK_BASE_URL',
   'VERTEX_BASE_URL',
 ];
+const SECRET_ENV = new Set([
+  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+  'PROXY_API_KEY'
+]);
 
 export interface GatewayOptions {
   baseUrl?: string | undefined;
@@ -32,6 +38,7 @@ export interface GatewayOptions {
   opencode?: boolean | undefined;
   path?: string | undefined;
   executable?: string | undefined;
+  revealSecrets?: boolean | undefined;
 }
 
 export function normalizeBaseUrl(value?: string): string {
@@ -41,11 +48,21 @@ export function normalizeBaseUrl(value?: string): string {
   if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname)) {
     throw new Error('KITT-only exige gateway em loopback.');
   }
+  if (url.search || url.hash) {
+    throw new Error('Gateway URL não pode conter query string ou fragmento.');
+  }
+  if (url.pathname !== '/' && url.pathname !== '') {
+    throw new Error('Gateway URL deve apontar para a raiz do proxy, sem path adicional.');
+  }
   return url.toString().replace(/\/$/, '');
 }
 
 function openAiBase(base: string): string {
   return `${base}/v1`;
+}
+
+function effectiveApiKey(options: GatewayOptions, baseEnv: NodeJS.ProcessEnv): string {
+  return options.apiKey || baseEnv.PROXY_API_KEY || DEFAULT_LOCAL_KEY;
 }
 
 function cleanEnvironment(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -63,7 +80,8 @@ function cleanEnvironment(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Proc
     join(homedir(), '.opencode', 'bin'),
   ].filter(Boolean);
   const currentPath = env.PATH || '';
-  env.PATH = `${extraPaths.join(':')}:${currentPath}`;
+  const pathParts = [...extraPaths, ...(currentPath ? [currentPath] : [])];
+  env.PATH = pathParts.join(delimiter);
 
   return env;
 }
@@ -77,13 +95,14 @@ export function buildAgentEnvironment(
   const openaiModel = options.openaiModel || DEFAULT_OPENAI_MODEL;
   const anthropicModel = options.anthropicModel || DEFAULT_ANTHROPIC_MODEL;
   const env = cleanEnvironment(baseEnv);
+  const apiKey = effectiveApiKey(options, baseEnv);
 
   env.KITT_ONLY = '1';
   env.KITT_REVERSE_PROXY_URL = base;
   env.KITT_AGENT_GATEWAY = '1';
 
   if (agent === 'codex') {
-    env.OPENAI_API_KEY = options.apiKey || 'kitt-local';
+    env.OPENAI_API_KEY = apiKey;
     env.OPENAI_BASE_URL = openAiBase(base);
     env.NO_BROWSER = '1';
     env.MODEL_PROVIDER = 'kitt';
@@ -109,14 +128,14 @@ export function buildAgentEnvironment(
 
   if (agent === 'claude') {
     env.ANTHROPIC_BASE_URL = base;
-    env.ANTHROPIC_API_KEY = options.apiKey || 'kitt-local';
-    env.ANTHROPIC_AUTH_TOKEN = options.apiKey || 'kitt-local';
+    env.ANTHROPIC_API_KEY = apiKey;
+    env.ANTHROPIC_AUTH_TOKEN = apiKey;
     env.ANTHROPIC_MODEL = anthropicModel;
     return env;
   }
 
   if (agent === 'opencode' || agent === 'openai') {
-    env.OPENAI_API_KEY = options.apiKey || 'kitt-local';
+    env.OPENAI_API_KEY = apiKey;
     env.OPENAI_BASE_URL = openAiBase(base);
     env.OPENAI_MODEL = openaiModel;
     return env;
@@ -161,11 +180,15 @@ export async function spawnAndWait(
     };
     process.once('SIGINT', forward);
     process.once('SIGTERM', forward);
-    child.once('error', reject);
+    child.once('error', (error) => {
+      process.removeListener('SIGINT', forward);
+      process.removeListener('SIGTERM', forward);
+      reject(error);
+    });
     child.once('exit', (code, signal) => {
       process.removeListener('SIGINT', forward);
       process.removeListener('SIGTERM', forward);
-      resolvePromise(signal ? 128 : (code ?? 1));
+      resolvePromise(signal ? 128 + (signal === 'SIGINT' ? 2 : 15) : (code ?? 1));
     });
   });
 }
@@ -187,7 +210,7 @@ export function buildJetBrainsEntries(
   const anthropicModel = options.anthropicModel || DEFAULT_ANTHROPIC_MODEL;
   const baseArgs = gatewayArgs({ baseUrl, openaiModel, anthropicModel });
   const nodeBinDir = dirname(process.execPath);
-  const pathValue = `${nodeBinDir}:${join(homedir(), '.local', 'bin')}:${join(homedir(), '.opencode', 'bin')}:${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`;
+  const pathValue = [nodeBinDir, join(homedir(), '.local', 'bin'), join(homedir(), '.opencode', 'bin'), process.env.PATH || ''].filter(Boolean).join(delimiter);
   const envBlock = {
     KITT_ONLY: '1',
     PATH: pathValue
@@ -220,7 +243,11 @@ export function buildJetBrainsEntries(
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as T;
+    const text = await readFile(path, 'utf8');
+    if (Buffer.byteLength(text, 'utf8') > MAX_GATEWAY_JSON_BYTES) {
+      throw new Error(`arquivo excede ${MAX_GATEWAY_JSON_BYTES} bytes`);
+    }
+    return JSON.parse(text) as T;
   } catch (error: any) {
     if (error?.code === 'ENOENT') return fallback;
     throw new Error(`${path}: JSON inválido: ${error.message}`);
@@ -237,7 +264,7 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 
 export async function installJetBrains(options: GatewayOptions = {}): Promise<{ configPath: string; installed: string[] }> {
   const configPath = options.path || join(homedir(), '.jetbrains', 'acp.json');
-  const executable = resolve(options.executable || process.argv[1] || 'kitt-agent-gateway');
+  const executable = options.executable || 'kitt-agent-gateway';
   const current = await readJson<Record<string, any>>(configPath, { default_mcp_settings: {}, agent_servers: {} });
 
   if (!current || typeof current !== 'object' || Array.isArray(current)) {
@@ -275,7 +302,11 @@ async function requestJson(url: string, init: RequestInit = {}): Promise<any> {
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    const body = await response.json().catch(() => ({}));
+    const raw = await response.text();
+    if (Buffer.byteLength(raw, 'utf8') > MAX_GATEWAY_JSON_BYTES) {
+      throw new Error(`Resposta do gateway excede ${MAX_GATEWAY_JSON_BYTES} bytes.`);
+    }
+    const body = raw ? JSON.parse(raw) : {};
     if (!response.ok) throw new Error(`${response.status} ${JSON.stringify(body)}`);
     return body;
   } finally {
@@ -326,8 +357,17 @@ export function parseGatewayOptions(args: string[]): GatewayOptions {
     baseUrl: normalizeBaseUrl(valueAfter(args, '--base-url', DEFAULT_GATEWAY_BASE)),
     openaiModel: valueAfter(args, '--openai-model', DEFAULT_OPENAI_MODEL),
     anthropicModel: valueAfter(args, '--anthropic-model', DEFAULT_ANTHROPIC_MODEL),
-    apiKey: valueAfter(args, '--api-key', 'kitt-local')
+    apiKey: valueAfter(args, '--api-key', process.env.PROXY_API_KEY || undefined),
+    revealSecrets: has(args, '--reveal-secrets')
   };
+}
+
+export function redactedEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  for (const key of SECRET_ENV) {
+    if (out[key]) out[key] = '<redacted>';
+  }
+  return out;
 }
 
 export function printGatewayHelp(): void {
@@ -351,7 +391,8 @@ Opções:
   --base-url <url>          default: ${DEFAULT_GATEWAY_BASE}
   --openai-model <id>       default: ${DEFAULT_OPENAI_MODEL}
   --anthropic-model <id>    default: ${DEFAULT_ANTHROPIC_MODEL}
-  --api-key <valor>         default: kitt-local
+  --api-key <valor>         chave do proxy; fallback: PROXY_API_KEY; sem chave usa sentinel local
+  --reveal-secrets          permite que "gateway env" imprima secrets explicitamente
   --with-opencode           instala entrada KITT · OpenCode em acp.json
 `);
 }
@@ -366,7 +407,8 @@ export async function runGatewayCli(argv: string[]): Promise<number> {
   if (command === 'env') {
     if (!subcommand) throw new Error('Informe o protocolo/agente.');
     const options = parseGatewayOptions(argv.slice(2));
-    console.log(JSON.stringify(buildAgentEnvironment(subcommand, options, {}), null, 2));
+    const env = buildAgentEnvironment(subcommand, options, process.env);
+    console.log(JSON.stringify(options.revealSecrets ? env : redactedEnvironment(env), null, 2));
     return 0;
   }
 

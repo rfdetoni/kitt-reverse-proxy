@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectChangedSnapshot, type UiTextSnapshot } from '../src/runtime/ui-dom.js';
+import { filterNewArtifacts, selectChangedSnapshot, type UiTextSnapshot } from '../src/runtime/ui-dom.js';
 
 test('changed UI snapshot is matched against the same selector and frame', () => {
   const baseline: UiTextSnapshot[] = [
@@ -45,4 +45,15 @@ test('specific assistant selector outranks broad prompt echo', () => {
     { selector: '.markdown', frameIndex: 0, count: 2, index: 1, identity: 'prompt-1', priority: 5, text: 'hello   world' }
   ];
   assert.equal(selectChangedSnapshot([], current, 'hello\nworld')?.text, 'real answer');
+});
+
+test('artifact correlation returns only artifacts created by current turn', () => {
+  const baseline = [{ filename: 'old.ts', code: 'const old = true;' }];
+  const current = [
+    { filename: 'old.ts', code: 'const old = true;' },
+    { filename: 'new.ts', code: 'const current = true;' }
+  ];
+  assert.deepEqual(filterNewArtifacts(baseline, current), [
+    { filename: 'new.ts', code: 'const current = true;' }
+  ]);
 });

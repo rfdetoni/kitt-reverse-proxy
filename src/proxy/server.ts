@@ -198,31 +198,12 @@ export async function startProxyServer(input: {
         max_output_tokens: 16384
       }
     ];
-    if (executor.modelId !== 'chatgpt-web') {
-      defaultModels.push({
-        id: 'chatgpt-web',
-        object: 'model',
-        created: 1700000000,
-        owned_by: 'kitt-reverse-proxy',
-        permission: [],
-        root: 'chatgpt-web',
-        parent: null,
-        capabilities: {
-          completion: true,
-          chat_completion: true,
-          tools: true,
-          tool_calls: true
-        },
-        context_window: 128000,
-        max_output_tokens: 16384
-      });
-    }
     res.json({ object: 'list', data: defaultModels });
   });
 
   app.get('/v1/models/:model', (req: Request, res: Response) => {
     const requested = req.params.model;
-    if (requested !== executor.modelId && requested !== 'chatgpt-web') {
+    if (requested !== executor.modelId) {
       sendOpenAiError(res, 404, `Modelo não encontrado: ${requested}`, 'model_not_found');
       return;
     }

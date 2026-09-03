@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
 import {
   buildAgentEnvironment,
   buildJetBrainsEntries,
   installJetBrains,
+  normalizeBaseUrl,
+  redactedEnvironment,
   uninstallJetBrains
 } from '../src/gateway/agent-gateway.js';
 
@@ -49,6 +51,35 @@ test('non-loopback KITT endpoint is rejected', () => {
   );
 });
 
+test('gateway root URL rejects paths, queries and fragments', () => {
+  assert.throws(() => normalizeBaseUrl('http://127.0.0.1:3000/v1'), /raiz/);
+  assert.throws(() => normalizeBaseUrl('http://127.0.0.1:3000/?token=x'), /query/);
+  assert.throws(() => normalizeBaseUrl('http://127.0.0.1:3000/#x'), /fragmento/);
+});
+
+test('gateway environment uses platform PATH delimiter', () => {
+  const env = buildAgentEnvironment('openai', {}, { PATH: ['a', 'b'].join(delimiter) });
+  assert.ok(env.PATH?.includes(delimiter));
+});
+
+test('PROXY_API_KEY is reused instead of silently replacing configured gateway auth', () => {
+  const env = buildAgentEnvironment('codex', {}, { PROXY_API_KEY: 'secret-value' });
+  assert.equal(env.OPENAI_API_KEY, 'secret-value');
+});
+
+test('environment rendering redacts gateway secrets', () => {
+  const redacted = redactedEnvironment({
+    OPENAI_API_KEY: 'a',
+    ANTHROPIC_API_KEY: 'b',
+    ANTHROPIC_AUTH_TOKEN: 'c',
+    NORMAL: 'ok'
+  });
+  assert.equal(redacted.OPENAI_API_KEY, '<redacted>');
+  assert.equal(redacted.ANTHROPIC_API_KEY, '<redacted>');
+  assert.equal(redacted.ANTHROPIC_AUTH_TOKEN, '<redacted>');
+  assert.equal(redacted.NORMAL, 'ok');
+});
+
 test('JetBrains entries use gateway executable as the launcher', () => {
   const entries = buildJetBrainsEntries('/opt/kitt/bin/kitt-reverse-proxy', {
     baseUrl: 'http://127.0.0.1:3000',
@@ -59,6 +90,8 @@ test('JetBrains entries use gateway executable as the launcher', () => {
   assert.equal(entries['KITT · Codex']?.command, '/opt/kitt/bin/kitt-reverse-proxy');
   assert.equal(entries['KITT · Claude']?.args[0], 'agent');
   assert.equal(entries['KITT · OpenCode']?.args[1], 'opencode');
+  const pathValue = entries['KITT · Codex']?.env.PATH;
+  assert.ok(typeof pathValue === 'string' && pathValue.includes(delimiter));
 });
 
 test('install preserves unrelated acp entries and uninstall removes only KITT', async () => {
