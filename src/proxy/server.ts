@@ -21,6 +21,12 @@ import {
   validateChatBody
 } from './openai.js';
 import {
+  AnthropicStreamWriter,
+  anthropicBodyToChat,
+  completionToAnthropic,
+  sendAnthropicError
+} from './anthropic.js';
+import {
   completionToOllamaChat,
   completionToOllamaGenerate,
   OllamaChatStreamWriter,
@@ -122,6 +128,9 @@ export async function startProxyServer(input: {
           models: '/v1/models',
           responses: '/v1/responses'
         },
+        anthropic: {
+          messages: '/v1/messages'
+        },
         ollama: {
           chat: '/api/chat',
           generate: '/api/generate',
@@ -138,6 +147,8 @@ export async function startProxyServer(input: {
         openai_responses: true,
         openai_tool_calls: true,
         openai_legacy_functions: true,
+        anthropic_messages: true,
+        anthropic_tool_use: true,
         ollama_chat: true,
         ollama_tool_calls: true,
         streaming: true
@@ -196,6 +207,12 @@ export async function startProxyServer(input: {
           function_tools_only: true,
           previous_response_id: false,
           structured_outputs: false
+        },
+        anthropic: {
+          messages: true,
+          streaming: true,
+          tools: true,
+          tool_result: true
         },
         ollama: {
           chat: true,
@@ -313,6 +330,40 @@ export async function startProxyServer(input: {
       logger.warn(`api/generate: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) sendOpenAiError(res, status, error instanceof Error ? error.message : 'Erro interno.', codeForError(error));
       else res.end();
+    }
+  });
+
+  app.post('/v1/messages', async (req: Request, res: Response) => {
+    try {
+      const body = anthropicBodyToChat(req.body);
+      const bufferTools = requestMayReturnToolCalls(body);
+      const requestedModel = typeof req.body?.model === 'string' && req.body.model.trim()
+        ? req.body.model.trim()
+        : executor.modelId;
+      if (req.body?.stream === true) {
+        const writer = new AnthropicStreamWriter(res, requestedModel);
+        const result = await execute(
+          body,
+          bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
+        );
+        writer.finish(result.completion, bufferTools ? [] : result.deltas);
+      } else {
+        const { completion } = await execute(body);
+        res.json(completionToAnthropic(completion));
+      }
+    } catch (error) {
+      const status = isInvalidRequest(error, 'responses') ? 400 : statusForError(error);
+      logger.warn(`anthropic/messages: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) {
+        sendAnthropicError(
+          res,
+          status,
+          error instanceof Error ? error.message : 'Erro interno.',
+          status === 400 ? 'invalid_request_error' : 'api_error'
+        );
+      } else {
+        res.end();
+      }
     }
   });
 

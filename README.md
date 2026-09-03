@@ -29,6 +29,7 @@ O projeto não implementa stealth, CAPTCHA solver, WAF bypass, autenticação by
 - atualização declarativa de `conversationId`, `threadId`, `sessionId` e outros estados capturados;
 - fila serial limitada para evitar cross-talk entre chamadas stateful;
 - OpenAI Chat Completions e Responses API compatíveis para clientes/agentes genéricos;
+- Anthropic Messages API (`/v1/messages`) para Claude Agent/SDKs Anthropic;
 - function/tool calling em Chat Completions, Responses e Ollama-compatible;
 - `tool_choice`, `parallel_tool_calls`, legacy `functions/function_call` e `function_call_output`;
 - streaming SSE/NDJSON com eventos de tool calling;
