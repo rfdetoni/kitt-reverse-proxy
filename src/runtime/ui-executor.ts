@@ -22,7 +22,8 @@ import {
   formatToolResultPrompt,
   requestMayReturnToolCalls,
   toolProtocolFingerprint,
-  ToolProtocolError
+  ToolProtocolError,
+  type OpenAiToolCall
 } from '../mapping/tool-calling.js';
 import {
   canonicalMessages,
@@ -388,6 +389,56 @@ export class UiChatExecutor implements ChatExecutor {
     }
 
     const parsed = extractToolCalls(textToParse, plan);
+
+    // If the agent expected a file-writing tool (e.g. write_file, write_to_file, create_file)
+    // but the chat model only returned the file content as an artifact or markdown code block,
+    // synthesize the tool call automatically so the IDE executes the file creation locally.
+    if ((!parsed.tool_calls || parsed.tool_calls.length === 0) && artifacts.length > 0) {
+      const writeFileTool = plan.tools.find((tool) =>
+        ['write_file', 'write_to_file', 'create_file', 'apply_diff', 'edit_file'].includes(tool.name)
+      );
+      if (writeFileTool) {
+        const synthesizedCalls: OpenAiToolCall[] = [];
+        for (const art of artifacts) {
+          const filename = art.filename || 'index.html';
+          const rawParams = writeFileTool.parameters as Record<string, any> | undefined;
+          const paramProps = rawParams?.properties as Record<string, any> | undefined;
+          const pathKey = paramProps && ('path' in paramProps)
+            ? 'path'
+            : paramProps && ('TargetFile' in paramProps)
+              ? 'TargetFile'
+              : paramProps && ('target_file' in paramProps)
+                ? 'target_file'
+                : 'path';
+          const contentKey = paramProps && ('content' in paramProps)
+            ? 'content'
+            : paramProps && ('CodeContent' in paramProps)
+              ? 'CodeContent'
+              : paramProps && ('code' in paramProps)
+                ? 'code'
+                : 'content';
+
+          synthesizedCalls.push({
+            id: `call_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+            type: 'function',
+            function: {
+              name: writeFileTool.name,
+              arguments: JSON.stringify({
+                [pathKey]: filename,
+                [contentKey]: art.code,
+                ...(paramProps && 'Overwrite' in paramProps ? { Overwrite: true } : {}),
+                ...(paramProps && 'Description' in paramProps ? { Description: `Create ${filename}` } : {})
+              })
+            }
+          });
+        }
+        if (synthesizedCalls.length > 0) {
+          parsed.tool_calls = synthesizedCalls;
+          parsed.content = textToParse.replace(/Baixar\/abrir[^\n]*/gi, '').trim();
+        }
+      }
+    }
+
     assertToolChoiceSatisfied(plan, parsed.tool_calls);
 
     for (const call of parsed.tool_calls || []) {

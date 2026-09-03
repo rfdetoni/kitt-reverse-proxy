@@ -174,6 +174,9 @@ export function filterNewArtifacts(
 
 export async function extractArtifactContents(page: Page): Promise<ExtractedArtifact[]> {
   const pageFrames = frames(page);
+  const allResults: ExtractedArtifact[] = [];
+  const seenAll = new Set<string>();
+
   for (const frame of pageFrames) {
     try {
       const artifacts = await frame.evaluate(() => {
@@ -183,7 +186,7 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
 
         // 1. ChatGPT Canvas / Artifact panels, Claude artifacts, or code containers
         const codeContainers = Array.from(document.querySelectorAll(
-          '[class*="canvas" i] pre, [data-testid*="canvas" i] pre, .react-code-text, [class*="artifact" i] pre, article pre'
+          '[class*="canvas" i] pre, [data-testid*="canvas" i] pre, .react-code-text, [class*="artifact" i] pre, article pre, [class*="code-block" i] pre'
         ));
 
         for (const pre of codeContainers) {
@@ -192,7 +195,7 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
           if (!text || seen.has(text)) continue;
           if (results.length >= 16 || totalChars + text.length > 1024 * 1024) break;
 
-          // Attempt to locate title, filename or language indicator in pre parent/header
+          // Locate title, filename or language indicator in pre parent/header
           let filename: string | undefined;
           let language: string | undefined;
 
@@ -212,11 +215,16 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
           results.push({ filename, language, code: text });
         }
 
-        // 2. Look for explicit download links or buttons with data or text
-        const downloadLinks = Array.from(document.querySelectorAll('a[download], a[href^="blob:"], a[href^="data:"]'));
+        // 2. Look for download buttons, links, or widget anchors (ChatGPT Canvas cards)
+        const downloadLinks = Array.from(document.querySelectorAll('a[download], a[href^="blob:"], a[href^="data:"], [data-testid*="download" i]'));
         for (const link of downloadLinks) {
           const href = link.getAttribute('href') || '';
-          const filename = link.getAttribute('download') || (link.textContent || '').trim() || undefined;
+          let filename = link.getAttribute('download') || (link.textContent || '').trim() || undefined;
+          if (filename) {
+            const fnMatch = filename.match(/([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})/);
+            if (fnMatch) filename = fnMatch[1];
+          }
+
           if (href.startsWith('data:') && href.includes(',')) {
             try {
               const [meta, rawData] = href.split(',', 2);
@@ -235,8 +243,37 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
         return results;
       });
 
-      if (artifacts.length > 0) return artifacts;
+      for (const item of artifacts) {
+        if (!seenAll.has(item.code)) {
+          seenAll.add(item.code);
+          allResults.push(item);
+        }
+      }
     } catch {}
   }
-  return [];
+
+  // If Canvas or editor is open in main page without <pre>, inspect editor / ace / monaco / codemirror text
+  if (allResults.length === 0) {
+    try {
+      const editorTexts = await page.evaluate(() => {
+        const out: Array<{ filename?: string | undefined; code: string }> = [];
+        const editors = Array.from(document.querySelectorAll('.cm-content, [class*="monaco-editor" i], [class*="editor-content" i]'));
+        for (const ed of editors) {
+          const text = (ed.textContent || '').trim().slice(0, 256 * 1024);
+          if (text && text.length > 20) {
+            out.push({ code: text });
+          }
+        }
+        return out;
+      });
+      for (const item of editorTexts) {
+        if (!seenAll.has(item.code)) {
+          seenAll.add(item.code);
+          allResults.push(item);
+        }
+      }
+    } catch {}
+  }
+
+  return allResults;
 }
