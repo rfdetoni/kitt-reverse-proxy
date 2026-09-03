@@ -300,7 +300,8 @@ export class UiChatExecutor implements ChatExecutor {
         || incomingUserTurns < previousUserTurns
       )
     ) {
-      throw new ConversationStateConflictError();
+      logger.info('Novo histórico de conversa detectado pelo cliente API. Executando reset automático da sessão browser...');
+      await this.reset();
     }
 
     const pending = this.pendingMessages(incoming);
