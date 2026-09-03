@@ -6,8 +6,8 @@ const MAX_TOOL_PROTOCOL_BYTES = 64 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES = 64 * 1024;
 const MAX_TOOL_RESULT_BYTES = 256 * 1024;
 const MAX_PARALLEL_CALLS = 16;
-const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
-const SAFE_CALL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
+const SAFE_CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export class ToolProtocolError extends Error {
   constructor(
@@ -89,11 +89,22 @@ function normalizeFunctionTool(value: unknown): CanonicalFunctionTool | undefine
     || record.parameters !== undefined
   ) {
     source = record;
+  } else if (typeof record.type === 'string' && record.type.trim()) {
+    source = {
+      name: record.type.trim(),
+      description: typeof record.description === 'string' ? record.description : `Built-in tool: ${record.type}`,
+      ...(record.parameters !== undefined ? { parameters: record.parameters } : {})
+    };
   } else {
     return undefined;
   }
 
-  const name = typeof source.name === 'string' ? source.name.trim() : '';
+  const nameCandidate = typeof source.name === 'string'
+    ? source.name.trim()
+    : typeof record.type === 'string'
+      ? record.type.trim()
+      : '';
+  const name = nameCandidate.slice(0, 64);
   if (!TOOL_NAME.test(name)) {
     throw new ToolProtocolError(`Nome de function inválido: ${name || '(vazio)'}`);
   }
@@ -102,8 +113,9 @@ function normalizeFunctionTool(value: unknown): CanonicalFunctionTool | undefine
   if (typeof source.description === 'string' && source.description.trim()) {
     tool.description = source.description.trim().slice(0, 4096);
   }
-  const parameters = toSafeJsonValue(source.parameters);
-  if (source.parameters !== undefined) {
+  const rawParams = source.parameters !== undefined ? source.parameters : source.input_schema;
+  const parameters = toSafeJsonValue(rawParams);
+  if (rawParams !== undefined) {
     if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) {
       throw new ToolProtocolError(`parameters inválido para function ${name}; deve ser objeto JSON Schema.`);
     }
@@ -135,11 +147,19 @@ export function normalizeFunctionTools(
     throw new ToolProtocolError(`Máximo de ${MAX_TOOLS} functions por request.`);
   }
 
-  const normalized = source.map((value, index) => {
+  const normalized: CanonicalFunctionTool[] = [];
+  for (let index = 0; index < source.length; index++) {
+    const value = source[index];
     const tool = normalizeFunctionTool(value);
-    if (!tool) throw new ToolProtocolError(`Tool não suportada no índice ${index}; apenas functions são aceitas.`);
-    return tool;
-  });
+    if (tool) {
+      normalized.push(tool);
+    } else {
+      const rec = asRecord(value);
+      if (rec && (rec.type === 'function' || rec.function !== undefined)) {
+        throw new ToolProtocolError(`Tool não suportada no índice ${index}; apenas functions válidas são aceitas.`);
+      }
+    }
+  }
 
   const unique = new Map<string, CanonicalFunctionTool>();
   for (const tool of normalized) {
