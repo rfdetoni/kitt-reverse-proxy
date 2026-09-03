@@ -15,6 +15,11 @@ export interface ParsedModelOutput {
   tool_calls?: OpenAiToolCall[];
 }
 
+export interface ApiDirectiveOptions {
+  tools?: JsonValue[] | undefined;
+  systemPrompt?: string | undefined;
+}
+
 export function formatToolsInstruction(tools: JsonValue[] | undefined): string {
   if (!Array.isArray(tools) || tools.length === 0) return '';
   return `[SYSTEM DIRECTIVE: Act strictly as an AI API engine with function calling capabilities.
@@ -41,10 +46,50 @@ Or using tags:
 3. If no tool is required, respond directly with your normal answer.]\n\n`;
 }
 
-export function injectToolsIntoPrompt(prompt: string, tools: JsonValue[] | undefined): string {
-  const instruction = formatToolsInstruction(tools);
-  if (!instruction) return prompt;
-  return `${instruction}${prompt}`;
+export function formatApiDirective(options: ApiDirectiveOptions): string {
+  const parts: string[] = [];
+
+  parts.push('[SYSTEM DIRECTIVE: Act strictly as an AI API engine. Respond directly, concisely, and accurately without conversational filler, greetings, or preamble.');
+
+  if (options.systemPrompt && options.systemPrompt.trim()) {
+    parts.push(`System Context:\n${options.systemPrompt.trim()}`);
+  }
+
+  if (Array.isArray(options.tools) && options.tools.length > 0) {
+    parts.push(`Available Tools:\n${JSON.stringify(options.tools, null, 2)}
+
+API PROTOCOL RULES:
+1. When you need to execute tools, output ONLY the tool invocation block without conversational remarks.
+2. Use this exact JSON structure:
+\`\`\`json
+{
+  "tool_calls": [
+    {
+      "name": "tool_name",
+      "arguments": { "param_key": "param_value" }
+    }
+  ]
+}
+\`\`\`
+Or tags:
+<tool_call>
+{"name": "tool_name", "arguments": { ... }}
+</tool_call>
+3. If no tool is required, respond directly with your normal answer.`);
+  } else {
+    parts.push(`If you need to invoke tools/functions, use <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call> or \`\`\`json\n{"tool_calls": [...]}\n\`\`\`. Otherwise, respond directly.`);
+  }
+
+  parts.push(']\n\n');
+  return parts.join('\n\n');
+}
+
+export function injectToolsIntoPrompt(prompt: string, toolsOrOptions?: JsonValue[] | ApiDirectiveOptions | undefined): string {
+  if (Array.isArray(toolsOrOptions)) {
+    return `${formatApiDirective({ tools: toolsOrOptions })}${prompt}`;
+  }
+  const options = toolsOrOptions ?? {};
+  return `${formatApiDirective(options)}${prompt}`;
 }
 
 export function extractToolCalls(text: string): ParsedModelOutput {

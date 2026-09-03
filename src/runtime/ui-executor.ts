@@ -286,7 +286,14 @@ export class UiChatExecutor implements ChatExecutor {
       logger.info('Política UI mínima ativa: histórico, system/developer e mensagens assistant não são reinjetados no site; somente o turno user/tool mais recente é enviado.');
     }
 
-    const prompt = injectToolsIntoPrompt(selectedPrompt.text, Array.isArray(body.tools) ? body.tools : undefined);
+    const systemMessages = incoming.filter((m) => ['system', 'developer'].includes(m.role));
+    const systemPrompt = systemMessages.map((m) => m.text).join('\n\n');
+    const tools = Array.isArray(body.tools) ? body.tools : (Array.isArray(body.functions) ? body.functions : undefined);
+
+    const prompt = injectToolsIntoPrompt(selectedPrompt.text, {
+      tools,
+      systemPrompt: systemPrompt || undefined
+    });
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
     const result = await this.awaitResponse(baseline, prompt, options?.onDelta);

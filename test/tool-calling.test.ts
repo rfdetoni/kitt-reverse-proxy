@@ -51,3 +51,14 @@ test('extractToolCalls leaves plain text untouched', () => {
   assert.equal(result.content, text);
   assert.equal(result.tool_calls, undefined);
 });
+
+test('injectToolsIntoPrompt includes API directive and system context', () => {
+  const prompt = injectToolsIntoPrompt('List files', {
+    systemPrompt: 'You are a CLI agent.',
+    tools: [{ type: 'function', function: { name: 'ls' } }]
+  });
+  assert.match(prompt, /SYSTEM DIRECTIVE/);
+  assert.match(prompt, /You are a CLI agent\./);
+  assert.match(prompt, /"name": "ls"/);
+  assert.match(prompt, /List files/);
+});
