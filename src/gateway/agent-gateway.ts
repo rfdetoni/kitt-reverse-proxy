@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -150,14 +150,24 @@ export function buildAgentEnvironment(
   throw new Error(`Agente/protocolo não suportado: ${agent}`);
 }
 
+function whichCommand(cmd: string): string {
+  try {
+    const res = spawnSync('which', [cmd], { encoding: 'utf8' });
+    if (res.status === 0 && res.stdout.trim()) {
+      return res.stdout.trim();
+    }
+  } catch {}
+  return cmd;
+}
+
 export function defaultAgentCommand(agent: string): { command: string; args: string[] } {
   switch (agent) {
     case 'codex':
-      return { command: 'codex-acp', args: [] };
+      return { command: whichCommand('codex-acp'), args: [] };
     case 'claude':
-      return { command: 'claude-agent-acp', args: [] };
+      return { command: whichCommand('claude-agent-acp'), args: [] };
     case 'opencode':
-      return { command: 'opencode', args: ['acp'] };
+      return { command: whichCommand('opencode'), args: ['acp'] };
     default:
       throw new Error(`Agent desconhecido: ${agent}`);
   }
@@ -264,7 +274,7 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 
 export async function installJetBrains(options: GatewayOptions = {}): Promise<{ configPath: string; installed: string[] }> {
   const configPath = options.path || join(homedir(), '.jetbrains', 'acp.json');
-  const executable = options.executable || 'kitt-agent-gateway';
+  const executable = options.executable || whichCommand('kitt-agent-gateway');
   const current = await readJson<Record<string, any>>(configPath, { default_mcp_settings: {}, agent_servers: {} });
 
   if (!current || typeof current !== 'object' || Array.isArray(current)) {
