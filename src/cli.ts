@@ -51,6 +51,14 @@ async function createRuntime(config: Exclude<ReturnType<typeof parseCliArgs>, { 
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
+  const isGatewayCommand = rawArgs[0] === 'gateway' || process.argv[1]?.endsWith('kitt-agent-gateway') || process.argv[1]?.endsWith('agent-gateway');
+  if (isGatewayCommand) {
+    const { runGatewayCli } = await import('./gateway/agent-gateway.js');
+    const gatewayArgs = rawArgs[0] === 'gateway' ? rawArgs.slice(1) : rawArgs;
+    const code = await runGatewayCli(gatewayArgs);
+    process.exit(Number.isInteger(code) ? code : 0);
+  }
+
   if (rawArgs[0] === 'presets') {
     console.log('\nPresets disponíveis:\n');
     for (const preset of cliLaunchPresets()) {

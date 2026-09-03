@@ -9,7 +9,8 @@
   },
   "bin": {
     "kitt-reverse-proxy": "./dist/cli.js",
-    "adaptive-chat-proxy": "./dist/cli.js"
+    "adaptive-chat-proxy": "./dist/cli.js",
+    "kitt-agent-gateway": "./dist/cli.js"
   },
   "scripts": {
     "clean:test": "node -e \"require('node:fs').rmSync('dist-test',{recursive:true,force:true})\"",

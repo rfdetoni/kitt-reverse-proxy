@@ -128,6 +128,34 @@ kitt-reverse-proxy presets
 
 A sintaxe por URL continua suportada para qualquer chat autorizado.
 
+## Agent Gateway (JetBrains & Agentes ACP)
+
+O `kitt-reverse-proxy` inclui nativamente o **Agent Gateway**, permitindo que os agentes do JetBrains AI Assistant (Codex, Claude, OpenCode) utilizem o reverse proxy diretamente sem passos manuais.
+
+### Instalar no JetBrains AI Assistant
+
+```bash
+# Registra automaticamente KITT · Codex e KITT · Claude em ~/.jetbrains/acp.json
+kitt-reverse-proxy gateway jetbrains install
+# ou usando o alias:
+kitt-agent-gateway jetbrains install
+```
+
+### Comandos do Gateway
+
+```bash
+# Iniciar agente individual apontado para o proxy
+kitt-reverse-proxy gateway agent codex
+kitt-reverse-proxy gateway agent claude
+
+# Verificar saúde e conectividade com o proxy
+kitt-reverse-proxy gateway verify
+
+# Gerenciar registro no JetBrains
+kitt-reverse-proxy gateway jetbrains show
+kitt-reverse-proxy gateway jetbrains uninstall
+```
+
 ### ChatGPT
 
 ```bash
