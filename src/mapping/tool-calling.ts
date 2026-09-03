@@ -304,13 +304,17 @@ ${toolChoiceDescription(plan.choice)}
 ${plan.parallel ? `You may return up to ${MAX_PARALLEL_CALLS} calls in one turn.` : 'Return at most one tool call in this turn.'}
 
 CRITICAL EXECUTION RULES:
-1. When generating, editing, or reading code or project files, ALWAYS invoke the appropriate tool (e.g. write_file, edit_file, list_dir, read_file).
-2. NEVER tell the user to download an external file, click download links, or open a sandbox/canvas viewer.
-3. If no file-writing tool is configured, provide the COMPLETE file content directly in your response inside markdown code blocks specifying the exact relative path/filename header.
-4. Every file must be delivered in full without placeholders, truncated code, or "rest of code here" comments.
+1. EXPLORATION FIRST: You MUST inspect the real workspace before generating project summaries or code. Do NOT invent repository contents, file names, or architecture from web search or memory. Invoke shell/execute/reading tools (e.g. ls, rg, list_dir, read_file, execute_command) to inspect the local project files first.
+2. CREATING OR EDITING FILES: When generating, editing, or saving files, ALWAYS invoke the appropriate editing/writing function with the exact file path and content.
+3. NEVER tell the user to download an external file, click download links, or open a sandbox/canvas viewer.
+4. If no file-writing function is supplied in the tools list, provide the COMPLETE file content directly in your response inside markdown code blocks specifying the exact relative path/filename header.
+5. Every file must be delivered in full without placeholders, truncated code, or "rest of code here" comments.
 
 When calling tools, return ONLY one or more blocks in this exact form:
 <tool_call>{"name":"function_name","arguments":{"key":"value"}}</tool_call>
+
+Example:
+<tool_call>{"name":"execute_command","arguments":{"command":"rtk ls -la"}}</tool_call>
 
 Do not invent function names. "arguments" must be a JSON object matching the supplied schema.
 The proxy converts valid blocks into OpenAI-compatible tool_calls.
