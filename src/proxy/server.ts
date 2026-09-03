@@ -179,15 +179,70 @@ export async function startProxyServer(input: {
   });
 
   app.get('/v1/models', (_req: Request, res: Response) => {
-    res.json({ object: 'list', data: [{ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' }] });
+    const defaultModels = [
+      {
+        id: executor.modelId,
+        object: 'model',
+        created: 1700000000,
+        owned_by: 'kitt-reverse-proxy',
+        permission: [],
+        root: executor.modelId,
+        parent: null,
+        capabilities: {
+          completion: true,
+          chat_completion: true,
+          tools: true,
+          tool_calls: true
+        },
+        context_window: 128000,
+        max_output_tokens: 16384
+      }
+    ];
+    if (executor.modelId !== 'chatgpt-web') {
+      defaultModels.push({
+        id: 'chatgpt-web',
+        object: 'model',
+        created: 1700000000,
+        owned_by: 'kitt-reverse-proxy',
+        permission: [],
+        root: 'chatgpt-web',
+        parent: null,
+        capabilities: {
+          completion: true,
+          chat_completion: true,
+          tools: true,
+          tool_calls: true
+        },
+        context_window: 128000,
+        max_output_tokens: 16384
+      });
+    }
+    res.json({ object: 'list', data: defaultModels });
   });
 
   app.get('/v1/models/:model', (req: Request, res: Response) => {
-    if (req.params.model !== executor.modelId) {
-      sendOpenAiError(res, 404, `Modelo não encontrado: ${req.params.model}`, 'model_not_found');
+    const requested = req.params.model;
+    if (requested !== executor.modelId && requested !== 'chatgpt-web') {
+      sendOpenAiError(res, 404, `Modelo não encontrado: ${requested}`, 'model_not_found');
       return;
     }
-    res.json({ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' });
+    res.json({
+      id: requested,
+      object: 'model',
+      created: 1700000000,
+      owned_by: 'kitt-reverse-proxy',
+      permission: [],
+      root: requested,
+      parent: null,
+      capabilities: {
+        completion: true,
+        chat_completion: true,
+        tools: true,
+        tool_calls: true
+      },
+      context_window: 128000,
+      max_output_tokens: 16384
+    });
   });
 
   app.get(['/v1/capabilities', '/v1/kitt/capabilities'], (_req: Request, res: Response) => {

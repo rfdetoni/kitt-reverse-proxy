@@ -12,7 +12,7 @@ import type {
   OpenAiCompletion,
   LiveBrowserSession
 } from '../types.js';
-import { anyVisible, collectVisibleSnapshots, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
+import { anyVisible, collectVisibleSnapshots, extractArtifactContents, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
 import {
   assertToolChoiceSatisfied,
@@ -367,22 +367,39 @@ export class UiChatExecutor implements ChatExecutor {
       bufferToolProtocol ? undefined : options?.onDelta
     );
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
-    const parsed = extractToolCalls(result.text, plan);
+    let textToParse = result.text;
+
+    // Check if the chat generated artifacts/files (e.g. Canvas or download buttons) that were not inlined
+    const artifacts = await extractArtifactContents(this.session.page).catch(() => []);
+    if (artifacts.length > 0) {
+      const artifactBlocks = artifacts
+        .filter((art) => !textToParse.includes(art.code))
+        .map((art) => {
+          const lang = art.language || (art.filename?.split('.').pop()) || '';
+          const header = art.filename ? `File: ${art.filename}\n` : '';
+          return `${header}\`\`\`${lang}\n${art.code}\n\`\`\``;
+        });
+      if (artifactBlocks.length > 0) {
+        textToParse = `${textToParse}\n\n${artifactBlocks.join('\n\n')}`;
+      }
+    }
+
+    const parsed = extractToolCalls(textToParse, plan);
     assertToolChoiceSatisfied(plan, parsed.tool_calls);
 
     for (const call of parsed.tool_calls || []) {
       this.toolNamesByCallId.set(call.id, call.function.name);
     }
 
-    const responseContent = parsed.tool_calls?.length ? parsed.content : result.text;
+    const responseContent = parsed.tool_calls?.length ? parsed.content : textToParse;
     const output = completion(model, responseContent, parsed.tool_calls);
     this.protocolFingerprint = protocolFingerprint;
     this.toolProtocolWasEnabled = protocolEnabled;
     this.systemContextWasEnabled = Boolean(plan.systemPrompt);
 
-    if (historyIsPrefix(this.history, incoming)) this.history = [...incoming, { role: 'assistant', text: result.text }];
-    else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: result.text }];
-    else this.history = [...incoming, { role: 'assistant', text: result.text }];
+    if (historyIsPrefix(this.history, incoming)) this.history = [...incoming, { role: 'assistant', text: textToParse }];
+    else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: textToParse }];
+    else this.history = [...incoming, { role: 'assistant', text: textToParse }];
 
     const execution = {
       completion: output,

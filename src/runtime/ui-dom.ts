@@ -154,3 +154,73 @@ export async function bodyText(page: Page, maxChars = 20_000): Promise<string> {
     return '';
   }
 }
+
+export interface ExtractedArtifact {
+  filename?: string | undefined;
+  language?: string | undefined;
+  code: string;
+}
+
+export async function extractArtifactContents(page: Page): Promise<ExtractedArtifact[]> {
+  const pageFrames = frames(page);
+  for (const frame of pageFrames) {
+    try {
+      const artifacts = await frame.evaluate(() => {
+        const results: Array<{ filename?: string | undefined; language?: string | undefined; code: string }> = [];
+        const seen = new Set<string>();
+
+        // 1. ChatGPT Canvas / Artifact panels, Claude artifacts, or code containers
+        const codeContainers = Array.from(document.querySelectorAll(
+          '[class*="canvas" i] pre, [data-testid*="canvas" i] pre, .react-code-text, [class*="artifact" i] pre, article pre'
+        ));
+
+        for (const pre of codeContainers) {
+          const codeEl = pre.querySelector('code') || pre;
+          const text = (codeEl.textContent || '').trim();
+          if (!text || seen.has(text)) continue;
+
+          // Attempt to locate title, filename or language indicator in pre parent/header
+          let filename: string | undefined;
+          let language: string | undefined;
+
+          const header = pre.previousElementSibling || pre.parentElement?.querySelector('header') || pre.querySelector('div:first-child');
+          if (header) {
+            const headerText = (header.textContent || '').trim();
+            const fnMatch = headerText.match(/([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})/);
+            if (fnMatch) filename = fnMatch[1];
+          }
+
+          const classAttr = (codeEl.getAttribute('class') || '') + ' ' + (pre.getAttribute('class') || '');
+          const langMatch = classAttr.match(/language-([a-zA-Z0-9_-]+)/);
+          if (langMatch) language = langMatch[1];
+
+          seen.add(text);
+          results.push({ filename, language, code: text });
+        }
+
+        // 2. Look for explicit download links or buttons with data or text
+        const downloadLinks = Array.from(document.querySelectorAll('a[download], a[href^="blob:"], a[href^="data:"]'));
+        for (const link of downloadLinks) {
+          const href = link.getAttribute('href') || '';
+          const filename = link.getAttribute('download') || (link.textContent || '').trim() || undefined;
+          if (href.startsWith('data:') && href.includes(',')) {
+            try {
+              const [meta, rawData] = href.split(',', 2);
+              const isBase64 = meta?.includes(';base64');
+              const decoded = isBase64 ? atob(rawData!) : decodeURIComponent(rawData!);
+              if (decoded.trim() && !seen.has(decoded.trim())) {
+                seen.add(decoded.trim());
+                results.push({ filename, code: decoded.trim() });
+              }
+            } catch {}
+          }
+        }
+
+        return results;
+      });
+
+      if (artifacts.length > 0) return artifacts;
+    } catch {}
+  }
+  return [];
+}
