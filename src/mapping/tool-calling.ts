@@ -49,7 +49,11 @@ Or using tags:
 export function formatApiDirective(options: ApiDirectiveOptions): string {
   const parts: string[] = [];
 
-  parts.push('[SYSTEM DIRECTIVE: Act strictly as an AI API engine. Respond directly, concisely, and accurately without conversational filler, greetings, or preamble.');
+  parts.push(`[SYSTEM DIRECTIVE: Act strictly as a high-precision, low-overhead AI API engine.
+RESPONSE RULES:
+- Be ultra-concise and direct. Output ONLY the exact required answer or code.
+- NO conversational filler, NO pleasantries (greetings, confirmations, sign-offs), NO unsolicited explanations.
+- If code, data, or structured content is requested, return ONLY the raw block without surrounding prose.`);
 
   if (options.systemPrompt && options.systemPrompt.trim()) {
     parts.push(`System Context:\n${options.systemPrompt.trim()}`);
@@ -75,9 +79,9 @@ Or tags:
 <tool_call>
 {"name": "tool_name", "arguments": { ... }}
 </tool_call>
-3. If no tool is required, respond directly with your normal answer.`);
+3. If no tool is required, respond with ONLY the final concise answer directly.`);
   } else {
-    parts.push(`If you need to invoke tools/functions, use <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call> or \`\`\`json\n{"tool_calls": [...]}\n\`\`\`. Otherwise, respond directly.`);
+    parts.push(`If you need to invoke tools/functions, use <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call> or \`\`\`json\n{"tool_calls": [...]}\n\`\`\`. Otherwise, respond directly and tersely.`);
   }
 
   parts.push(']\n\n');
