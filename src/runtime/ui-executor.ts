@@ -399,8 +399,13 @@ export class UiChatExecutor implements ChatExecutor {
       );
       if (writeFileTool) {
         const synthesizedCalls: OpenAiToolCall[] = [];
+        // Attempt to extract filename mentioned in response text (e.g. Baixar/abrir kitt-project-presentation.html)
+        const textFilenameMatch = textToParse.match(/(?:Baixar\/abrir|arquivo|salvar|criar)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})/i)
+          || textToParse.match(/`([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})`/);
+        const fallbackFilename = textFilenameMatch ? textFilenameMatch[1] : undefined;
+
         for (const art of artifacts) {
-          const filename = art.filename || 'index.html';
+          const filename = art.filename || fallbackFilename || 'index.html';
           const rawParams = writeFileTool.parameters as Record<string, any> | undefined;
           const paramProps = rawParams?.properties as Record<string, any> | undefined;
           const pathKey = paramProps && ('path' in paramProps)
