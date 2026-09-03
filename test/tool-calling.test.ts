@@ -59,6 +59,82 @@ test('injectToolsIntoPrompt includes API directive and system context', () => {
   });
   assert.match(prompt, /SYSTEM DIRECTIVE/);
   assert.match(prompt, /You are a CLI agent\./);
-  assert.match(prompt, /"name": "ls"/);
+  assert.match(prompt, /"name":"ls"/);
   assert.match(prompt, /List files/);
+});
+test('plain request without tools/system gets no injected directive', () => {
+  assert.equal(injectToolsIntoPrompt('hello'), 'hello');
+});
+
+test('unknown function is rejected as invalid model protocol', async () => {
+  const { buildToolProtocolPlan, ToolProtocolError } = await import('../src/mapping/tool-calling.js');
+  const plan = buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'weather' } }]
+  });
+  assert.throws(() => extractToolCalls(
+    '<tool_call>{"name":"shell","arguments":{}}</tool_call>',
+    plan
+  ), ToolProtocolError);
+});
+
+test('tool_choice none leaves tool-looking text as normal content', async () => {
+  const { buildToolProtocolPlan } = await import('../src/mapping/tool-calling.js');
+  const plan = buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'weather' } }],
+    tool_choice: 'none'
+  });
+  const text = '<tool_call>{"name":"weather","arguments":{}}</tool_call>';
+  assert.deepEqual(extractToolCalls(text, plan), { content: text });
+});
+
+test('parallel_tool_calls=false rejects multiple calls', async () => {
+  const { buildToolProtocolPlan, ToolProtocolError } = await import('../src/mapping/tool-calling.js');
+  const plan = buildToolProtocolPlan({
+    messages: [],
+    tools: [
+      { type: 'function', function: { name: 'a' } },
+      { type: 'function', function: { name: 'b' } }
+    ],
+    parallel_tool_calls: false
+  });
+  assert.throws(() => extractToolCalls(
+    '```json\n{"tool_calls":[{"name":"a","arguments":{}},{"name":"b","arguments":{}}]}\n```',
+    plan
+  ), ToolProtocolError);
+});
+
+
+test('invalid tool request shapes fail closed', async () => {
+  const { buildToolProtocolPlan, ToolProtocolError } = await import('../src/mapping/tool-calling.js');
+  assert.throws(() => buildToolProtocolPlan({ messages: [], tools: 'bad' as any }), ToolProtocolError);
+  assert.throws(() => buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'x', parameters: [] } }]
+  }), ToolProtocolError);
+  assert.throws(() => buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'x' } }],
+    parallel_tool_calls: 'false' as any
+  }), ToolProtocolError);
+});
+
+test('required and forced tool choices are enforced', async () => {
+  const { assertToolChoiceSatisfied, buildToolProtocolPlan, ToolProtocolError } = await import('../src/mapping/tool-calling.js');
+  const required = buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'weather' } }],
+    tool_choice: 'required'
+  });
+  assert.throws(() => assertToolChoiceSatisfied(required, undefined), ToolProtocolError);
+
+  const forced = buildToolProtocolPlan({
+    messages: [],
+    tools: [{ type: 'function', function: { name: 'weather' } }],
+    tool_choice: { type: 'function', function: { name: 'weather' } }
+  });
+  assert.throws(() => assertToolChoiceSatisfied(forced, [{
+    id: 'call_1', type: 'function', function: { name: 'other', arguments: '{}' }
+  }] as any), ToolProtocolError);
 });

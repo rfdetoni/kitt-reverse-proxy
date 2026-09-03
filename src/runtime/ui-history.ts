@@ -4,13 +4,17 @@ import { messageToText, normalizeMessages } from '../mapping/messages.js';
 export interface CanonicalMessage {
   role: string;
   text: string;
+  toolCallId?: string;
+  toolName?: string;
 }
 
 export function canonicalMessages(body: JsonObject): CanonicalMessage[] {
   const raw = Array.isArray(body.messages) ? body.messages : [];
   return normalizeMessages(raw).map((message) => ({
     role: message.role,
-    text: messageToText(message).trim()
+    text: messageToText(message).trim(),
+    ...(typeof message.tool_call_id === 'string' ? { toolCallId: message.tool_call_id } : {}),
+    ...(typeof message.name === 'string' ? { toolName: message.name } : {})
   })).filter((message) => message.text || ['system', 'developer'].includes(message.role));
 }
 
@@ -25,30 +29,66 @@ export function historyIsPrefix(history: CanonicalMessage[], incoming: Canonical
   });
 }
 
+export function userTurnsAreCompatible(
+  history: readonly CanonicalMessage[],
+  incoming: readonly CanonicalMessage[]
+): boolean {
+  const previous = history.filter((message) => message.role === 'user').map((message) => message.text);
+  const next = incoming.filter((message) => message.role === 'user').map((message) => message.text);
+  if (!previous.length || !next.length) return true;
+  const shorter = previous.length <= next.length ? previous : next;
+  const longer = previous.length <= next.length ? next : previous;
+  return shorter.every((text, index) => longer[index] === text);
+}
+
 export function historyFingerprint(messages: CanonicalMessage[]): string {
-  return JSON.stringify(messages.map(({ role, text }) => [role, text]));
+  return JSON.stringify(messages.map(({ role, text, toolCallId, toolName }) => [
+    role,
+    text,
+    toolCallId || '',
+    toolName || ''
+  ]));
 }
 
 export interface UiPromptSelection {
   role: 'user' | 'tool';
   text: string;
   omittedContextMessages: number;
+  toolCallId?: string;
+  toolName?: string;
 }
 
 export function selectMinimalUiPrompt(messages: readonly CanonicalMessage[]): UiPromptSelection | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (!['user', 'tool'].includes(message.role) || !message.text.trim()) continue;
-    const text = message.role === 'tool'
-      ? message.text.replace(/^\[tool:[^\]]*\]\n?/i, '')
-      : message.text;
-    return {
-      role: message.role as 'user' | 'tool',
-      text,
-      omittedContextMessages: messages.length - 1
-    };
+  const message = messages.at(-1);
+  if (!message || !['user', 'tool'].includes(message.role) || !message.text.trim()) return undefined;
+  const text = message.role === 'tool'
+    ? message.text.replace(/^\[tool:[^\]]*\]\n?/i, '')
+    : message.text;
+  return {
+    role: message.role as 'user' | 'tool',
+    text,
+    omittedContextMessages: messages.length - 1,
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    ...(message.toolName ? { toolName: message.toolName } : {})
+  };
+}
+
+export function selectMinimalUiPrompts(messages: readonly CanonicalMessage[]): UiPromptSelection[] {
+  const last = messages.length - 1;
+  if (last < 0 || !['user', 'tool'].includes(messages[last]!.role) || !messages[last]!.text.trim()) return [];
+
+  if (messages[last]!.role !== 'tool') {
+    const selected = selectMinimalUiPrompt(messages);
+    return selected ? [selected] : [];
   }
-  return undefined;
+
+  let first = last;
+  while (first > 0 && messages[first - 1]!.role === 'tool' && messages[first - 1]!.text.trim()) first -= 1;
+  return messages.slice(first, last + 1).map((message) => {
+    const selected = selectMinimalUiPrompt([message]);
+    if (!selected) throw new Error('Falha interna ao normalizar resultado de tool.');
+    return { ...selected, omittedContextMessages: messages.length - 1 };
+  });
 }
 
 export function deltaFromCumulative(previous: string, current: string): string {

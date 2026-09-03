@@ -9,12 +9,43 @@ export function validateChatBody(value: unknown): JsonObject {
   return value;
 }
 
-function inputItemToMessage(item: JsonValue): JsonValue | null {
-  if (typeof item === 'string') return { role: 'user', content: item };
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+function inputItemToMessages(item: JsonValue): JsonValue[] {
+  if (typeof item === 'string') return [{ role: 'user', content: item }];
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+
+  if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
+    const output = typeof item.output === 'string'
+      ? item.output
+      : JSON.stringify(item.output ?? '');
+    return [{ role: 'tool', tool_call_id: item.call_id, content: output }];
+  }
+
+  if (
+    item.type === 'function_call'
+    && typeof item.call_id === 'string'
+    && typeof item.name === 'string'
+  ) {
+    const argumentsText = typeof item.arguments === 'string'
+      ? item.arguments
+      : JSON.stringify(item.arguments ?? {});
+    return [{
+      role: 'assistant',
+      content: null,
+      tool_calls: [{
+        id: item.call_id,
+        type: 'function',
+        function: { name: item.name, arguments: argumentsText }
+      }]
+    }];
+  }
+
+  if (item.type === 'input_text' && typeof item.text === 'string') {
+    return [{ role: 'user', content: item.text }];
+  }
+
   const role = typeof item.role === 'string' ? item.role : 'user';
-  if ('content' in item) return { role, content: item.content };
-  return null;
+  if ('content' in item) return [{ role, content: item.content }];
+  return [];
 }
 
 export function responsesBodyToChat(value: unknown): JsonObject {
@@ -22,7 +53,7 @@ export function responsesBodyToChat(value: unknown): JsonObject {
   const input = value.input;
   let messages: JsonValue[];
   if (typeof input === 'string') messages = [{ role: 'user', content: input }];
-  else if (Array.isArray(input)) messages = input.map(inputItemToMessage).filter((v): v is JsonValue => v !== null);
+  else if (Array.isArray(input)) messages = input.flatMap(inputItemToMessages);
   else throw new Error('"input" deve ser string ou array.');
   if (!messages.length) throw new Error('"input" não contém mensagens utilizáveis.');
   if (typeof value.instructions === 'string' && value.instructions.trim()) messages.unshift({ role: 'system', content: value.instructions });
@@ -34,27 +65,49 @@ export function responsesBodyToChat(value: unknown): JsonObject {
     ...(value.max_output_tokens !== undefined ? { max_completion_tokens: value.max_output_tokens } : {}),
     ...(value.stream !== undefined ? { stream: value.stream } : {}),
     ...(value.tools !== undefined ? { tools: value.tools } : {}),
-    ...(value.tool_choice !== undefined ? { tool_choice: value.tool_choice } : {})
+    ...(value.tool_choice !== undefined ? { tool_choice: value.tool_choice } : {}),
+    ...(value.parallel_tool_calls !== undefined ? { parallel_tool_calls: value.parallel_tool_calls } : {})
   };
 }
 
-export function completionToResponses(completion: OpenAiCompletion): JsonObject {
-  const text = completion.choices[0]?.message.content || '';
+export function completionToResponses(
+  completion: OpenAiCompletion,
+  responseId = `resp_${randomUUID()}`
+): JsonObject {
+  const message = completion.choices[0]?.message;
+  const text = message?.content || '';
+  const output: unknown[] = [];
+
+  if (text) {
+    output.push({
+      type: 'message',
+      id: `msg_${randomUUID()}`,
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text, annotations: [] }]
+    });
+  }
+
+  for (const call of message?.tool_calls || []) {
+    output.push({
+      id: `fc_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+      call_id: call.id,
+      type: 'function_call',
+      name: call.function.name,
+      arguments: call.function.arguments,
+      status: 'completed'
+    });
+  }
+
   return toJsonValue({
-    id: `resp_${randomUUID()}`,
+    id: responseId,
     object: 'response',
     created_at: completion.created,
     status: 'completed',
     error: null,
     incomplete_details: null,
     model: completion.model,
-    output: [{
-      type: 'message',
-      id: `msg_${randomUUID()}`,
-      status: 'completed',
-      role: 'assistant',
-      content: [{ type: 'output_text', text, annotations: [] }]
-    }],
+    output,
     output_text: text
   }) as JsonObject;
 }
@@ -135,8 +188,33 @@ export class ChatStreamWriter {
         model: completion.model || this.model,
         choices: [{
           index: 0,
-          delta: { tool_calls: toolCalls },
-          finish_reason: 'tool_calls'
+          delta: {
+            tool_calls: toolCalls.map((call, index) => ({
+              index,
+              id: call.id,
+              type: 'function',
+              function: {
+                name: call.function.name,
+                arguments: call.function.arguments
+              }
+            }))
+          },
+          finish_reason: null
+        }]
+      })}\n\n`);
+    }
+
+    const legacyFunctionCall = completion.choices[0]?.message.function_call;
+    if (legacyFunctionCall) {
+      this.res.write(`data: ${JSON.stringify({
+        id: this.id,
+        object: 'chat.completion.chunk',
+        created: this.created,
+        model: completion.model || this.model,
+        choices: [{
+          index: 0,
+          delta: { function_call: legacyFunctionCall },
+          finish_reason: null
         }]
       })}\n\n`);
     }
@@ -146,7 +224,12 @@ export class ChatStreamWriter {
       object: 'chat.completion.chunk',
       created: this.created,
       model: completion.model || this.model,
-      choices: [{ index: 0, delta: {}, finish_reason: completion.choices[0]?.finish_reason || (toolCalls?.length ? 'tool_calls' : 'stop') }]
+      choices: [{
+        index: 0,
+        delta: {},
+        finish_reason: completion.choices[0]?.finish_reason
+          || (legacyFunctionCall ? 'function_call' : toolCalls?.length ? 'tool_calls' : 'stop')
+      }]
     })}\n\n`);
     this.res.end('data: [DONE]\n\n');
   }
@@ -154,9 +237,10 @@ export class ChatStreamWriter {
 
 export class ResponsesStreamWriter {
   private readonly responseId = `resp_${randomUUID()}`;
-  private readonly itemId = `msg_${randomUUID()}`;
+  private readonly messageItemId = `msg_${randomUUID()}`;
   private sequence = 0;
   private started = false;
+  private messageStarted = false;
   private accumulated = '';
 
   constructor(private readonly res: Response, private readonly model: string) {}
@@ -166,19 +250,25 @@ export class ResponsesStreamWriter {
     this.res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: this.sequence, ...payload })}\n\n`);
   }
 
-  begin(): void {
+  private beginResponse(): void {
     if (this.started) return;
     this.started = true;
     prepareSse(this.res);
     this.event('response.created', {
       response: { id: this.responseId, object: 'response', status: 'in_progress', model: this.model }
     });
+  }
+
+  private beginMessage(): void {
+    this.beginResponse();
+    if (this.messageStarted) return;
+    this.messageStarted = true;
     this.event('response.output_item.added', {
       output_index: 0,
-      item: { id: this.itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] }
+      item: { id: this.messageItemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] }
     });
     this.event('response.content_part.added', {
-      item_id: this.itemId,
+      item_id: this.messageItemId,
       output_index: 0,
       content_index: 0,
       part: { type: 'output_text', text: '', annotations: [] }
@@ -187,10 +277,10 @@ export class ResponsesStreamWriter {
 
   delta(text: string): void {
     if (!text) return;
-    this.begin();
+    this.beginMessage();
     this.accumulated += text;
     this.event('response.output_text.delta', {
-      item_id: this.itemId,
+      item_id: this.messageItemId,
       output_index: 0,
       content_index: 0,
       delta: text
@@ -198,29 +288,74 @@ export class ResponsesStreamWriter {
   }
 
   finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
-    this.begin();
+    this.beginResponse();
     const fullText = completion.choices[0]?.message.content || '';
-    if (!this.accumulated) {
-      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) this.delta(delta);
-    } else if (fullText.startsWith(this.accumulated)) {
-      this.delta(fullText.slice(this.accumulated.length));
+    const toolCalls = completion.choices[0]?.message.tool_calls || [];
+    const output: unknown[] = [];
+    let outputIndex = 0;
+
+    if (fullText) {
+      if (!this.accumulated) {
+        for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
+          if (delta) this.delta(delta);
+        }
+      } else if (fullText.startsWith(this.accumulated)) {
+        this.delta(fullText.slice(this.accumulated.length));
+      }
+
+      const part = { type: 'output_text', text: fullText, annotations: [] };
+      this.event('response.output_text.done', {
+        item_id: this.messageItemId,
+        output_index: outputIndex,
+        content_index: 0,
+        text: fullText,
+        logprobs: []
+      });
+      this.event('response.content_part.done', {
+        item_id: this.messageItemId,
+        output_index: outputIndex,
+        content_index: 0,
+        part
+      });
+      const item = {
+        id: this.messageItemId,
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [part]
+      };
+      this.event('response.output_item.done', { output_index: outputIndex, item });
+      output.push(item);
+      outputIndex += 1;
     }
-    this.event('response.output_text.done', {
-      item_id: this.itemId,
-      output_index: 0,
-      content_index: 0,
-      text: fullText,
-      logprobs: []
-    });
-    const part = { type: 'output_text', text: fullText, annotations: [] };
-    this.event('response.content_part.done', {
-      item_id: this.itemId,
-      output_index: 0,
-      content_index: 0,
-      part
-    });
-    const item = { id: this.itemId, type: 'message', status: 'completed', role: 'assistant', content: [part] };
-    this.event('response.output_item.done', { output_index: 0, item });
+
+    for (const call of toolCalls) {
+      const itemId = `fc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const added = {
+        id: itemId,
+        call_id: call.id,
+        type: 'function_call',
+        name: call.function.name,
+        arguments: '',
+        status: 'in_progress'
+      };
+      this.event('response.output_item.added', { output_index: outputIndex, item: added });
+      this.event('response.function_call_arguments.delta', {
+        item_id: itemId,
+        output_index: outputIndex,
+        delta: call.function.arguments
+      });
+      this.event('response.function_call_arguments.done', {
+        item_id: itemId,
+        output_index: outputIndex,
+        arguments: call.function.arguments
+      });
+      const done = { ...added, arguments: call.function.arguments, status: 'completed' };
+      this.event('response.output_item.done', { output_index: outputIndex, item: done });
+      output.push(done);
+      outputIndex += 1;
+    }
+
     this.event('response.completed', {
       response: {
         id: this.responseId,
@@ -230,7 +365,7 @@ export class ResponsesStreamWriter {
         error: null,
         incomplete_details: null,
         model: completion.model || this.model,
-        output: [item],
+        output,
         output_text: fullText
       }
     });

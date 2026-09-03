@@ -79,3 +79,27 @@ test('Ollama stream writers emit valid NDJSON chunks', () => {
   assert.equal(lines[0].done, false);
   assert.equal(lines[1].done, true);
 });
+test('completionToOllamaChat preserves tool_calls', () => {
+  const result = completionToOllamaChat({
+    id: 'c',
+    object: 'chat.completion',
+    created: 1,
+    model: 'chatgpt-web',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'weather', arguments: '{"city":"Paris"}' }
+        }]
+      },
+      finish_reason: 'tool_calls'
+    }]
+  }, 'chatgpt-web');
+  const calls = (result.message as any).tool_calls;
+  assert.equal(calls[0].function.name, 'weather');
+  assert.deepEqual(calls[0].function.arguments, { city: 'Paris' });
+});

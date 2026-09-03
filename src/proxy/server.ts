@@ -2,7 +2,12 @@ import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { Server } from 'node:http';
 import { logger } from '../logger.js';
-import { ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
+import {
+  adaptCompletionForLegacyFunctions,
+  requestMayReturnToolCalls,
+  ToolProtocolError
+} from '../mapping/tool-calling.js';
+import { ConversationStateConflictError, ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
 import { UpstreamHttpError, UpstreamRedirectError } from '../runtime/upstream.js';
 import { QueueFullError, SerialQueue } from '../runtime/serial-queue.js';
 import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../types.js';
@@ -27,6 +32,8 @@ import {
 } from './ollama.js';
 
 function statusForError(error: unknown): number {
+  if (error instanceof ToolProtocolError) return error.source === 'request' ? 400 : 502;
+  if (error instanceof ConversationStateConflictError) return 409;
   if (error instanceof QueueFullError) return 429;
   if (error instanceof ManualInterventionRequiredError) return 503;
   if (error instanceof UiAutomationError) return /em \d+s|timeout|tempo/i.test(error.message) ? 504 : 502;
@@ -40,6 +47,10 @@ function statusForError(error: unknown): number {
 }
 
 function codeForError(error: unknown): string {
+  if (error instanceof ToolProtocolError) return error.source === 'request'
+    ? 'invalid_tool_request'
+    : 'invalid_tool_call';
+  if (error instanceof ConversationStateConflictError) return 'conversation_state_conflict';
   if (error instanceof QueueFullError) return 'queue_full';
   if (error instanceof ManualInterventionRequiredError) return 'manual_intervention_required';
   if (error instanceof UiAutomationError) return 'ui_automation_error';
@@ -119,7 +130,17 @@ export async function startProxyServer(input: {
           show: '/api/show'
         },
         status: '/v1/kitt/status',
+        capabilities: '/v1/capabilities',
         health: '/healthz'
+      },
+      capabilities: {
+        openai_chat_completions: true,
+        openai_responses: true,
+        openai_tool_calls: true,
+        openai_legacy_functions: true,
+        ollama_chat: true,
+        ollama_tool_calls: true,
+        streaming: true
       }
     });
   };
@@ -148,6 +169,47 @@ export async function startProxyServer(input: {
 
   app.get('/v1/models', (_req: Request, res: Response) => {
     res.json({ object: 'list', data: [{ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' }] });
+  });
+
+  app.get('/v1/models/:model', (req: Request, res: Response) => {
+    if (req.params.model !== executor.modelId) {
+      sendOpenAiError(res, 404, `Modelo não encontrado: ${req.params.model}`, 'model_not_found');
+      return;
+    }
+    res.json({ id: executor.modelId, object: 'model', owned_by: 'kitt-reverse-proxy' });
+  });
+
+  app.get(['/v1/capabilities', '/v1/kitt/capabilities'], (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      transport: executor.transport,
+      model: executor.modelId,
+      protocols: {
+        openai: {
+          chat_completions: true,
+          responses: true,
+          streaming: true,
+          tools: true,
+          legacy_functions: true,
+          parallel_tool_calls: true,
+          function_call_output: true,
+          function_tools_only: true,
+          previous_response_id: false,
+          structured_outputs: false
+        },
+        ollama: {
+          chat: true,
+          streaming: true,
+          tools: true
+        }
+      },
+      semantics: {
+        tool_execution: 'client',
+        ui_tool_calling: 'protocol-emulated',
+        strict_json_schema_enforcement: false,
+        conversation_scope: 'one browser conversation per proxy instance'
+      }
+    });
   });
 
   app.get('/api/tags', (_req: Request, res: Response) => {
@@ -188,14 +250,19 @@ export async function startProxyServer(input: {
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
       const body = validateChatBody(req.body);
+      const bufferTools = requestMayReturnToolCalls(body);
       if (body.stream === true) {
         const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
         const writer = new ChatStreamWriter(res, model);
-        const result = await execute(body, { onDelta: (delta) => writer.delta(delta) });
-        writer.finish(result.completion, result.deltas);
+        const result = await execute(
+          body,
+          bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
+        );
+        const completion = adaptCompletionForLegacyFunctions(result.completion, body);
+        writer.finish(completion, bufferTools ? [] : result.deltas);
       } else {
         const { completion } = await execute(body);
-        res.json(completion);
+        res.json(adaptCompletionForLegacyFunctions(completion, body));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
@@ -211,8 +278,12 @@ export async function startProxyServer(input: {
       const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
       if (body.stream === true || body.stream === undefined) {
         const writer = new OllamaChatStreamWriter(res, model);
-        await execute(body, { onDelta: (delta) => writer.delta(delta) });
-        writer.finish();
+        const bufferTools = requestMayReturnToolCalls(body);
+        const result = await execute(
+          body,
+          bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
+        );
+        writer.finish(result.completion);
       } else {
         const { completion } = await execute(body);
         res.json(completionToOllamaChat(completion, model));
@@ -251,8 +322,12 @@ export async function startProxyServer(input: {
       if (req.body?.stream === true) {
         const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
         const writer = new ResponsesStreamWriter(res, model);
-        const result = await execute(body, { onDelta: (delta) => writer.delta(delta) });
-        writer.finish(result.completion, result.deltas);
+        const bufferTools = requestMayReturnToolCalls(body);
+        const result = await execute(
+          body,
+          bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
+        );
+        writer.finish(result.completion, bufferTools ? [] : result.deltas);
       } else {
         const { completion } = await execute(body);
         res.json(completionToResponses(completion));

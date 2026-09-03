@@ -53,3 +53,67 @@ test('Responses stream uses current output_text event names and closes after res
   assert.doesNotMatch(output, /response\.text\.delta/);
   assert.equal(endedWith, undefined);
 });
+test('Responses input function_call_output becomes tool message', () => {
+  const chat = responsesBodyToChat({
+    input: [{ type: 'function_call_output', call_id: 'call_weather', output: '{"temp":18}' }]
+  });
+  assert.deepEqual(chat.messages, [{
+    role: 'tool',
+    tool_call_id: 'call_weather',
+    content: '{"temp":18}'
+  }]);
+});
+
+test('Responses completion preserves function_call item', () => {
+  const response = completionToResponses({
+    id: 'c', object: 'chat.completion', created: 1, model: 'web',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_abc',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' }
+        }]
+      },
+      finish_reason: 'tool_calls'
+    }]
+  });
+  const output = response.output as any[];
+  assert.equal(output[0].type, 'function_call');
+  assert.equal(output[0].call_id, 'call_abc');
+  assert.equal(output[0].name, 'read_file');
+});
+
+test('Responses stream emits function argument events', async () => {
+  const { ResponsesStreamWriter } = await import('../src/proxy/openai.js');
+  let output = '';
+  const fake = {
+    status() { return this; },
+    setHeader() { return this; },
+    flushHeaders() {},
+    write(chunk: string) { output += chunk; return true; },
+    end() { return this; }
+  };
+  const writer = new ResponsesStreamWriter(fake as never, 'web');
+  writer.finish({
+    id: 'c', object: 'chat.completion', created: 1, model: 'web',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_abc', type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' }
+        }]
+      },
+      finish_reason: 'tool_calls'
+    }]
+  });
+  assert.match(output, /response\.function_call_arguments\.delta/);
+  assert.match(output, /response\.function_call_arguments\.done/);
+  assert.match(output, /"type":"function_call"/);
+});

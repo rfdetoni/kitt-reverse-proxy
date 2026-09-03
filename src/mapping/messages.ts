@@ -24,7 +24,11 @@ export function normalizeMessages(messages: JsonValue[] | undefined): OpenAiMess
     .map((message) => ({
       role: typeof message.role === 'string' ? message.role : 'user',
       content: message.content,
-      ...(typeof message.name === 'string' ? { name: message.name } : {}),
+      ...(typeof message.name === 'string'
+        ? { name: message.name }
+        : typeof message.tool_name === 'string'
+          ? { name: message.tool_name }
+          : {}),
       ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id } : {}),
       ...(message.tool_calls !== undefined ? { tool_calls: message.tool_calls } : {})
     }));

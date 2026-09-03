@@ -14,14 +14,24 @@ import type {
 } from '../types.js';
 import { anyVisible, collectVisibleSnapshots, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
-import { injectToolsIntoPrompt, extractToolCalls } from '../mapping/tool-calling.js';
+import {
+  assertToolChoiceSatisfied,
+  buildToolProtocolPlan,
+  extractToolCalls,
+  formatApiDirective,
+  formatToolResultPrompt,
+  requestMayReturnToolCalls,
+  toolProtocolFingerprint,
+  ToolProtocolError
+} from '../mapping/tool-calling.js';
 import {
   canonicalMessages,
   computeDeltas,
   deltaFromCumulative,
-  selectMinimalUiPrompt,
+  selectMinimalUiPrompts,
   historyFingerprint,
   historyIsPrefix,
+  userTurnsAreCompatible,
   type CanonicalMessage
 } from './ui-history.js';
 
@@ -39,6 +49,13 @@ export class UiAutomationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UiAutomationError';
+  }
+}
+
+export class ConversationStateConflictError extends Error {
+  constructor() {
+    super('O histórico recebido pertence a outra conversa. Use /v1/kitt/reset ou uma instância/porta dedicada.');
+    this.name = 'ConversationStateConflictError';
   }
 }
 
@@ -86,8 +103,10 @@ export class UiChatExecutor implements ChatExecutor {
   readonly transport = 'ui' as const;
   readonly modelId: string;
   private history: CanonicalMessage[] = [];
-  private warnedTools = false;
-  private warnedContextPolicy = false;
+  private protocolFingerprint = '';
+  private toolProtocolWasEnabled = false;
+  private systemContextWasEnabled = false;
+  private readonly toolNamesByCallId = new Map<string, string>();
   private lastRequestFingerprint = '';
   private lastResult: ChatExecutionResult | undefined;
 
@@ -235,6 +254,10 @@ export class UiChatExecutor implements ChatExecutor {
     this.history = [];
     this.lastRequestFingerprint = '';
     this.lastResult = undefined;
+    this.protocolFingerprint = '';
+    this.toolProtocolWasEnabled = false;
+    this.systemContextWasEnabled = false;
+    this.toolNamesByCallId.clear();
     const destination = this.provider.ui.newChatUrl || this.config.targetUrl;
     await navigateSession(this.session, destination, this.config.manualInterventionTimeoutMs)
       .catch((error: unknown) => {
@@ -267,45 +290,106 @@ export class UiChatExecutor implements ChatExecutor {
       return this.lastResult;
     }
 
-    if (body.tools !== undefined && !this.warnedTools) {
-      this.warnedTools = true;
-      logger.warn('Transporte UI não oferece function calling nativo; tools/tool_choice não são enviados ao site como APIs de ferramenta.');
+    const previousUserTurns = this.history.filter((message) => message.role === 'user').length;
+    const incomingUserTurns = incoming.filter((message) => message.role === 'user').length;
+    if (
+      incoming.length > 1
+      && this.history.length
+      && (
+        !userTurnsAreCompatible(this.history, incoming)
+        || incomingUserTurns < previousUserTurns
+      )
+    ) {
+      throw new ConversationStateConflictError();
     }
 
     const pending = this.pendingMessages(incoming);
     if (!pending.length) throw new UiAutomationError('A requisição não contém um novo turno para enviar ao chat web.');
 
-    const selectedPrompt = selectMinimalUiPrompt(pending);
+    const selectedPrompts = selectMinimalUiPrompts(pending);
+    const selectedPrompt = selectedPrompts.at(-1);
     if (!selectedPrompt) {
       throw new UiAutomationError(
         'O transporte UI não injeta mensagens system/developer/assistant no chat web. Envie um novo turno user (ou tool quando indispensável).'
       );
     }
-    if (selectedPrompt.omittedContextMessages > 0 && !this.warnedContextPolicy) {
-      this.warnedContextPolicy = true;
-      logger.info('Política UI mínima ativa: histórico, system/developer e mensagens assistant não são reinjetados no site; somente o turno user/tool mais recente é enviado.');
+    const systemMessages = incoming.filter((m) => ['system', 'developer'].includes(m.role));
+    const systemPrompt = systemMessages.map((m) => m.text).filter(Boolean).join('\n\n');
+    const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
+    const protocolFingerprint = toolProtocolFingerprint(plan);
+    const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
+
+    let actionablePrompt = selectedPrompt.text;
+    if (selectedPrompt.role === 'tool') {
+      const toolResults = selectedPrompts.map((toolPrompt) => {
+        const rememberedName = toolPrompt.toolCallId
+          ? this.toolNamesByCallId.get(toolPrompt.toolCallId)
+          : undefined;
+        if (toolPrompt.toolCallId && !rememberedName && !toolPrompt.toolName) {
+          throw new ToolProtocolError(
+            `tool_call_id desconhecido para esta conversa: ${toolPrompt.toolCallId}`
+          );
+        }
+        const toolName = toolPrompt.toolName || rememberedName;
+        if (toolName && plan.tools.length && !plan.tools.some((tool) => tool.name === toolName)) {
+          throw new ToolProtocolError(`Resultado recebido para function não disponível: ${toolName}`);
+        }
+        return formatToolResultPrompt(
+          toolPrompt.text,
+          toolPrompt.toolCallId,
+          toolName
+        );
+      });
+      actionablePrompt = toolResults.join('\n');
     }
 
-    const systemMessages = incoming.filter((m) => ['system', 'developer'].includes(m.role));
-    const systemPrompt = systemMessages.map((m) => m.text).join('\n\n');
-    const tools = Array.isArray(body.tools) ? body.tools : (Array.isArray(body.functions) ? body.functions : undefined);
+    let prefix = protocolFingerprint !== this.protocolFingerprint
+      ? formatApiDirective(plan)
+      : '';
+    if (!protocolEnabled && this.toolProtocolWasEnabled) {
+      prefix = `[API TOOL PROTOCOL UPDATE]\nTools are disabled for this turn. Do not emit tool calls.\n[END API TOOL PROTOCOL UPDATE]\n\n${prefix}`;
+    }
+    if (!plan.systemPrompt && this.systemContextWasEnabled) {
+      prefix = `[API SYSTEM CONTEXT UPDATE]\nThe previous API system context is no longer active for this turn. Follow the current user request without that prior API system context.\n[END API SYSTEM CONTEXT UPDATE]\n\n${prefix}`;
+    }
+    const prompt = `${prefix}${actionablePrompt}`;
 
-    const prompt = injectToolsIntoPrompt(selectedPrompt.text, {
-      tools,
-      systemPrompt: systemPrompt || undefined
-    });
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
-    const result = await this.awaitResponse(baseline, prompt, options?.onDelta);
+
+    // Internal tool protocol text must never leak to an API stream. For a turn
+    // that can return tools we buffer the web response, parse/validate it, then
+    // emit the proper API-native tool-call representation.
+    const bufferToolProtocol = requestMayReturnToolCalls(body);
+    const result = await this.awaitResponse(
+      baseline,
+      prompt,
+      bufferToolProtocol ? undefined : options?.onDelta
+    );
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
-    const parsed = extractToolCalls(result.text);
-    const output = completion(model, parsed.content ?? result.text, parsed.tool_calls);
+    const parsed = extractToolCalls(result.text, plan);
+    assertToolChoiceSatisfied(plan, parsed.tool_calls);
+
+    for (const call of parsed.tool_calls || []) {
+      this.toolNamesByCallId.set(call.id, call.function.name);
+    }
+
+    const responseContent = parsed.tool_calls?.length ? parsed.content : result.text;
+    const output = completion(model, responseContent, parsed.tool_calls);
+    this.protocolFingerprint = protocolFingerprint;
+    this.toolProtocolWasEnabled = protocolEnabled;
+    this.systemContextWasEnabled = Boolean(plan.systemPrompt);
 
     if (historyIsPrefix(this.history, incoming)) this.history = [...incoming, { role: 'assistant', text: result.text }];
     else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: result.text }];
     else this.history = [...incoming, { role: 'assistant', text: result.text }];
 
-    const execution = { completion: output, deltas: computeDeltas(result.snapshots, result.text) };
+    const execution = {
+      completion: output,
+      deltas: parsed.tool_calls?.length
+        ? []
+        : computeDeltas(result.snapshots, responseContent || '')
+    };
     if (incoming.length > 1) {
       this.lastRequestFingerprint = fingerprint;
       this.lastResult = execution;
@@ -324,7 +408,9 @@ export class UiChatExecutor implements ChatExecutor {
       targetOrigin: new URL(this.config.targetUrl).origin,
       persistentSession: this.session.persistent,
       manualChallengeHandling: true,
-      progressiveUiStreaming: true
+      progressiveUiStreaming: true,
+      toolCalling: 'protocol-emulated',
+      toolExecution: 'client-side'
     };
   }
 }

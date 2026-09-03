@@ -30,12 +30,21 @@ export function ollamaGenerateBodyToChat(value: unknown): JsonObject {
 
 export function completionToOllamaChat(completion: OpenAiCompletion, modelId: string): JsonObject {
   const content = completion.choices[0]?.message.content || '';
+  const toolCalls = completion.choices[0]?.message.tool_calls || [];
   return toJsonValue({
     model: completion.model || modelId,
     created_at: new Date().toISOString(),
     message: {
       role: 'assistant',
-      content
+      content,
+      ...(toolCalls.length ? {
+        tool_calls: toolCalls.map((call) => ({
+          function: {
+            name: call.function.name,
+            arguments: JSON.parse(call.function.arguments)
+          }
+        }))
+      } : {})
     },
     done: true,
     done_reason: 'stop',
@@ -139,18 +148,27 @@ export class OllamaChatStreamWriter {
     );
   }
 
-  finish(): void {
+  finish(completion?: OpenAiCompletion): void {
     this.begin();
+    const calls = completion?.choices[0]?.message.tool_calls || [];
     this.res.write(
       JSON.stringify({
-        model: this.model,
+        model: completion?.model || this.model,
         created_at: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: ''
+          content: completion?.choices[0]?.message.content || '',
+          ...(calls.length ? {
+            tool_calls: calls.map((call) => ({
+              function: {
+                name: call.function.name,
+                arguments: JSON.parse(call.function.arguments)
+              }
+            }))
+          } : {})
         },
         done: true,
-        done_reason: 'stop'
+        done_reason: calls.length ? 'tool_calls' : 'stop'
       }) + '\n'
     );
     this.res.end();

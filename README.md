@@ -28,8 +28,11 @@ O projeto não implementa stealth, CAPTCHA solver, WAF bypass, autenticação by
 - JSON Path seguro com wildcard e chaves quoted, por exemplo `$["f.req"]`;
 - atualização declarativa de `conversationId`, `threadId`, `sessionId` e outros estados capturados;
 - fila serial limitada para evitar cross-talk entre chamadas stateful;
-- OpenAI Chat Completions e shim textual de Responses API;
-- streaming SSE compatível no lado do cliente;
+- OpenAI Chat Completions e Responses API compatíveis para clientes/agentes genéricos;
+- function/tool calling em Chat Completions, Responses e Ollama-compatible;
+- `tool_choice`, `parallel_tool_calls`, legacy `functions/function_call` e `function_call_output`;
+- streaming SSE/NDJSON com eventos de tool calling;
+- `GET /v1/kitt/capabilities` para feature discovery;
 - `GET /v1/kitt/status` e `POST /v1/kitt/reset`;
 - bind apenas em loopback por padrão; bind externo exige API key;
 - cookies não são copiados para profiles nem logs de mapping.
@@ -174,6 +177,10 @@ npm start -- https://site.example/chat \
   --allow-endpoint-host chat.vendor.example
 ```
 
+## Compatibilidade com agentes
+
+Consulte [`AGENT_COMPATIBILITY.md`](./AGENT_COMPATIBILITY.md) para OpenAI SDK, Responses API, Ollama-compatible, tool calling e isolamento de múltiplos agentes.
+
 ## API OpenAI-compatible
 
 ### Chat Completions
@@ -229,8 +236,12 @@ Clientes OpenAI normalmente reenviam o histórico completo. O UI transport mant�
 - retries idênticos de clientes que reenviam histórico completo retornam o último resultado em vez de duplicar o turno no chat web;
 - se o cliente envia apenas o novo turno, o proxy o aceita e confia no estado do chat web;
 - se o histórico diverge, o proxy inicia uma nova conversa e reaplica o contexto recebido;
-- mensagens `system`/`developer`, `user`, `assistant` e `tool` são convertidas para texto quando precisam ser enviadas pela UI;
-- `tools`/`tool_choice` não viram function calling nativo quando o site não expõe essa capacidade.
+- mensagens comuns `user` são enviadas sem envelope adicional;
+- `system`/`developer` e schemas de tools só são apresentados quando necessários para preservar a semântica da API;
+- histórico `assistant` não é reinjetado;
+- resultados de tools usam envelope mínimo correlacionado por `call_id`;
+- o proxy devolve `tool_calls`, mas quem executa a function é o agente cliente;
+- em UI transport o function calling é protocol-emulated e `strict:true` é best effort.
 
 ## CAPTCHA, login e anti-bot
 

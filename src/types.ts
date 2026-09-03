@@ -156,6 +156,9 @@ export interface OpenAiChatBody extends JsonObject {
   max_completion_tokens?: JsonValue;
   tools?: JsonValue;
   tool_choice?: JsonValue;
+  parallel_tool_calls?: JsonValue;
+  functions?: JsonValue;
+  function_call?: JsonValue;
 }
 
 export interface OpenAiCompletion {
@@ -169,6 +172,7 @@ export interface OpenAiCompletion {
       role: 'assistant';
       content: string | null;
       tool_calls?: any[] | undefined;
+      function_call?: { name: string; arguments: string } | undefined;
     };
     finish_reason: string | null;
   }>;
@@ -186,6 +190,7 @@ export interface OpenAiCompletionChunk {
       role?: 'assistant';
       content?: string | null;
       tool_calls?: any[] | undefined;
+      function_call?: { name: string; arguments: string } | undefined;
     };
     finish_reason: string | null;
   }>;

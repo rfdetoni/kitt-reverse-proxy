@@ -50,3 +50,79 @@ test('tool result is raw only when latest actionable turn', () => {
     omittedContextMessages: 1
   });
 });
+test('tool prompt keeps call_id/name for agent continuation', () => {
+  const messages = canonicalMessages({
+    messages: [{
+      role: 'tool',
+      tool_call_id: 'call_weather',
+      name: 'get_weather',
+      content: '{"temp":18}'
+    }]
+  });
+  assert.deepEqual(selectMinimalUiPrompt(messages), {
+    role: 'tool',
+    text: '{"temp":18}',
+    omittedContextMessages: 0,
+    toolCallId: 'call_weather',
+    toolName: 'get_weather'
+  });
+});
+
+
+test('Ollama tool_name is normalized as generic tool metadata', () => {
+  const messages = canonicalMessages({
+    messages: [{ role: 'tool', tool_name: 'weather', content: '{"temp":18}' }]
+  });
+  assert.equal(messages[0]?.toolName, 'weather');
+});
+
+test('parallel trailing tool outputs are all selected and history is not', async () => {
+  const { selectMinimalUiPrompts } = await import('../src/runtime/ui-history.js');
+  const messages = canonicalMessages({
+    messages: [
+      { role: 'user', content: 'compare weather' },
+      { role: 'assistant', content: 'calling tools' },
+      { role: 'tool', tool_call_id: 'call_a', name: 'weather_a', content: 'A' },
+      { role: 'tool', tool_call_id: 'call_b', name: 'weather_b', content: 'B' }
+    ]
+  });
+  const selected = selectMinimalUiPrompts(messages);
+  assert.equal(selected.length, 2);
+  assert.deepEqual(selected.map((item) => item.toolCallId), ['call_a', 'call_b']);
+  assert.deepEqual(selected.map((item) => item.text), ['A', 'B']);
+});
+
+
+test('user turn compatibility detects a different full conversation', async () => {
+  const { userTurnsAreCompatible } = await import('../src/runtime/ui-history.js');
+  const previous = canonicalMessages({
+    messages: [
+      { role: 'user', content: 'conversation A' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'follow up' }
+    ]
+  });
+  const same = canonicalMessages({
+    messages: [
+      { role: 'user', content: 'conversation A' },
+      { role: 'assistant', content: 'different serialization is irrelevant' },
+      { role: 'user', content: 'follow up' },
+      { role: 'assistant', content: 'answer 2' },
+      { role: 'user', content: 'next' }
+    ]
+  });
+  const other = canonicalMessages({ messages: [{ role: 'user', content: 'conversation B' }, { role: 'user', content: 'next' }] });
+  assert.equal(userTurnsAreCompatible(previous, same), true);
+  assert.equal(userTurnsAreCompatible(previous, other), false);
+});
+
+
+test('assistant-tail request never reselects an earlier user message', () => {
+  const messages = canonicalMessages({
+    messages: [
+      { role: 'user', content: 'do not resend me' },
+      { role: 'assistant', content: 'already answered' }
+    ]
+  });
+  assert.equal(selectMinimalUiPrompt(messages), undefined);
+});
