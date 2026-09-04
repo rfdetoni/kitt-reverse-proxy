@@ -1,3 +1,11 @@
+import { getRequestContext } from './util/request-context.js';
+
+export type LogFormat = 'text' | 'json';
+export type LogSink = 'stdout' | 'stderr';
+
+let format: LogFormat = 'text';
+let sink: LogSink = 'stdout';
+
 function stripSensitiveUrl(raw: string): string {
   try {
     const url = new URL(raw);
@@ -27,20 +35,51 @@ function clean(message: string): string {
   return sanitizeLogMessage(String(message));
 }
 
+export function configureLogger(options: { format?: LogFormat; sink?: LogSink }): void {
+  if (options.format) format = options.format;
+  if (options.sink) sink = options.sink;
+}
+
+function write(level: string, event: string, message: string, fields: Record<string, unknown> = {}): void {
+  const context = getRequestContext();
+  const output = sink === 'stderr' ? console.error : console.log;
+  const cleaned = clean(message);
+  if (format === 'json') {
+    output(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level,
+      request_id: context?.requestId ?? null,
+      session_id: context?.sessionId ?? null,
+      provider: context?.provider ?? null,
+      event,
+      duration_ms: context ? Math.max(0, Date.now() - context.startedAt) : 0,
+      message: cleaned,
+      ...fields
+    }));
+    return;
+  }
+  const prefix = level === 'error' ? '[-]' : level === 'warn' ? '[!]' : level === 'success' ? '[+]' : '[i]';
+  output(`${prefix} ${cleaned}`);
+}
+
 export const logger = Object.freeze({
   step(current: number, total: number, message: string): void {
-    console.log(`[${current}/${total}] ${clean(message)}`);
+    if (format === 'json') write('info', 'step', message, { current, total });
+    else (sink === 'stderr' ? console.error : console.log)(`[${current}/${total}] ${clean(message)}`);
   },
   success(message: string): void {
-    console.log(`[+] ${clean(message)}`);
+    write('success', 'success', message);
   },
   info(message: string): void {
-    console.log(`[i] ${clean(message)}`);
+    write('info', 'info', message);
   },
   warn(message: string): void {
-    console.warn(`[!] ${clean(message)}`);
+    write('warn', 'warning', message);
   },
   error(message: string): void {
-    console.error(`[-] ${clean(message)}`);
+    write('error', 'error', message);
+  },
+  event(level: 'info' | 'warn' | 'error', event: string, fields: Record<string, unknown> = {}): void {
+    write(level, event, typeof fields.message === 'string' ? fields.message : event, fields);
   }
 });

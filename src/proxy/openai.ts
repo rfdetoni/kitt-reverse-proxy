@@ -57,6 +57,10 @@ export function responsesBodyToChat(value: unknown): JsonObject {
   else throw new Error('"input" deve ser string ou array.');
   if (!messages.length) throw new Error('"input" não contém mensagens utilizáveis.');
   if (typeof value.instructions === 'string' && value.instructions.trim()) messages.unshift({ role: 'system', content: value.instructions });
+  const responseFormat = value.response_format !== undefined
+    ? value.response_format
+    : (isJsonObject(value.text) && value.text.format !== undefined ? value.text.format : undefined);
+
   return {
     messages,
     ...(value.model !== undefined ? { model: value.model } : {}),
@@ -66,7 +70,8 @@ export function responsesBodyToChat(value: unknown): JsonObject {
     ...(value.stream !== undefined ? { stream: value.stream } : {}),
     ...(value.tools !== undefined ? { tools: value.tools } : {}),
     ...(value.tool_choice !== undefined ? { tool_choice: value.tool_choice } : {}),
-    ...(value.parallel_tool_calls !== undefined ? { parallel_tool_calls: value.parallel_tool_calls } : {})
+    ...(value.parallel_tool_calls !== undefined ? { parallel_tool_calls: value.parallel_tool_calls } : {}),
+    ...(responseFormat !== undefined ? { response_format: responseFormat } : {})
   };
 }
 
@@ -113,6 +118,10 @@ export function completionToResponses(
 }
 
 export function sendOpenAiError(res: Response, status: number, message: string, code = 'proxy_error'): void {
+  if (code === 'session_limit_exceeded') {
+    res.status(status).json({ error: 'session_limit_exceeded' });
+    return;
+  }
   res.status(status).json({ error: { message, type: 'proxy_error', param: null, code } });
 }
 

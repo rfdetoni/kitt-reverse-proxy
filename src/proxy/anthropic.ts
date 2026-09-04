@@ -183,6 +183,10 @@ export function sendAnthropicError(
   message: string,
   type = 'api_error'
 ): void {
+  if (type === 'session_limit_exceeded' || message === 'Limite de sessões simultâneas atingido.') {
+    res.status(status).json({ error: 'session_limit_exceeded' });
+    return;
+  }
   res.status(status).json({
     type: 'error',
     error: { type, message }

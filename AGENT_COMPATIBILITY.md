@@ -458,3 +458,64 @@ Status:
 curl http://127.0.0.1:3000/v1/kitt/status
 curl http://127.0.0.1:3000/v1/capabilities
 ```
+
+## Agent reliability additions — session/tool/structured/MCP/multimodal
+
+### Tool calling over UI transport
+
+The UI transport uses a deterministic tool protocol and validates model output before returning API-native `tool_calls`.
+
+Accepted extraction layers:
+
+1. Pure JSON object/array.
+2. Fenced `json`, `tool_call`, `tool-call`, or `function_call` blocks.
+3. Structured provider-style `<tool_call>` / `tool call: {...}` forms.
+4. Rejection with `tool_parse_failed` when a response looks like a tool call but is not safely parseable.
+
+Function names are constrained to the request allowlist. Arguments are parsed as JSON objects and validated against a bounded JSON Schema validator. A retry may be issued at most twice for malformed output, unknown function names, or schema-invalid arguments. Retry prompts contain only the allowlisted tool names/schemas and require JSON-only output.
+
+Provider notes:
+- ChatGPT: JSON/code fences are common; both are accepted.
+- Claude: XML-like `<tool_call>` output and JSON payloads are accepted.
+- Gemini: direct JSON and fenced JSON are accepted.
+- All providers: the canonical protocol emitted by KITT remains `<tool_call>{...}</tool_call>`.
+
+### Multi-session routing
+
+`X-Kitt-Session-Id` selects an isolated UI session. IDs are opaque alphanumeric strings up to 64 characters. Omitting the header uses the default session and preserves prior behavior.
+
+Named sessions have independent BrowserContexts, conversation history, and SerialQueues. They inherit a snapshot of authenticated storage from the default UI session and remain isolated afterward. Login/CAPTCHA challenges are never bypassed; if a cloned session still needs authentication, manual handoff remains required.
+
+`GET /v1/kitt/sessions` lists active sessions. `DELETE /v1/kitt/sessions/:id` closes a named session. The default session cannot be deleted through this endpoint.
+
+### Structured output
+
+`response_format: {"type":"json_object"}` and `response_format: {"type":"json_schema",...}` are best-effort on UI transports. KITT injects a JSON-only instruction, validates/extracts the response and retries once. If validation still fails, raw text is returned with `X-Kitt-Structured-Output: failed`; the API response remains a normal completion with `finish_reason: "stop"`.
+
+### Telemetry
+
+`GET /v1/kitt/metrics` returns in-memory counters. Request `Accept: text/plain; version=0.0.4` for Prometheus text format.
+
+Every HTTP request receives/propagates `X-Kitt-Request-Id`. With `--log-format json`, each log line contains `timestamp`, `level`, `request_id`, `session_id`, `provider`, `event`, and `duration_ms`.
+
+### MCP
+
+MCP uses the stable TypeScript SDK v2 package `@modelcontextprotocol/server`. Local stdio:
+
+```bash
+kitt-reverse-proxy mcp chatgpt
+```
+
+Streamable HTTP (loopback only):
+
+```bash
+kitt-reverse-proxy mcp --mcp-port 3010 claude
+```
+
+A KITT process still represents one active web provider. Therefore MCP exposes the tool corresponding to that provider (`ask_chatgpt`, `ask_claude`, or `ask_gemini`) plus `ask_generic`, rather than advertising providers that are not actually running in the process. Resource `kitt://sessions` exposes active sessions.
+
+### Images
+
+OpenAI-style content parts with `image_url`, `input_image`, or `image_base64` are accepted for UI providers that declare image upload support. Remote images are limited in size/type, HTTPS-only, and protected against private/reserved-address SSRF. Buffers stay in memory and are sent with Playwright `setInputFiles()`.
+
+If the upload input cannot be located, public HTTPS URLs may be appended to the text prompt as a fallback. Base64 content cannot use that fallback.

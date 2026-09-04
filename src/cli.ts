@@ -1,56 +1,19 @@
 #!/usr/bin/env node
 import { cliLaunchPresets, parseCliArgs, printHelp } from './config.js';
-import { captureChatExchange } from './discovery/capture.js';
-import { logger, safeUrlForLog, sanitizeLogMessage } from './logger.js';
-import { createAdapter } from './mapping/factory.js';
-import { detectProvider, resolveTransport } from './providers/catalog.js';
+import { configureLogger, logger, sanitizeLogMessage } from './logger.js';
 import { startProxyServer } from './proxy/server.js';
-import { openBrowserSession, navigateSession } from './runtime/browser-session.js';
-import { NetworkChatExecutor } from './runtime/network-executor.js';
-import { UiChatExecutor } from './runtime/ui-executor.js';
-import type { ChatExecutor, LiveBrowserSession } from './types.js';
-
-async function createRuntime(config: Exclude<ReturnType<typeof parseCliArgs>, { help: true }>): Promise<{
-  executor: ChatExecutor;
-  session: LiveBrowserSession;
-}> {
-  const provider = detectProvider(config.targetUrl, config.provider);
-  const transport = resolveTransport(config.transport, provider);
-  logger.info(`Provider: ${provider.name}; transporte: ${transport}.`);
-
-  if (transport === 'ui') {
-    logger.step(1, 3, 'Abrindo sessão web no Chromium...');
-    const session = await openBrowserSession(config);
-    try {
-      await navigateSession(session, config.targetUrl, config.manualInterventionTimeoutMs)
-        .catch((error: unknown) => logger.warn(`Navegação não concluiu normalmente: ${error instanceof Error ? error.message : String(error)}`));
-      logger.step(2, 3, 'Validando campo de chat e sessão...');
-      const executor = new UiChatExecutor(session, provider, config);
-      await executor.initialize();
-      logger.success(`UI de ${provider.name} pronta. Nenhum endpoint privado foi fixado/reproduzido.`);
-      return { executor, session };
-    } catch (error) {
-      await session.close();
-      throw error;
-    }
-  }
-
-  logger.step(1, 3, 'Descobrindo endpoint e sessão do chat...');
-  const { capture, session } = await captureChatExchange(config, provider.id);
-  logger.success(`Endpoint encontrado: ${safeUrlForLog(capture.endpointUrl)} (score ${capture.score}, codec ${capture.requestCodec.kind})`);
-  try {
-    logger.step(2, 3, config.profilePath ? 'Validando profile declarativo...' : 'Aprendendo mapping declarativo...');
-    const { adapter, profile, source } = await createAdapter(capture, config);
-    logger.success(`Mapping pronto: ${source}. Código gerado por LLM: nenhum.`);
-    return { executor: new NetworkChatExecutor(capture, session, adapter, profile, source, config), session };
-  } catch (error) {
-    await session.close();
-    throw error;
-  }
-}
+import { createRuntime } from './runtime/runtime-factory.js';
+import { createIsolatedUiSession } from './runtime/isolated-ui-session.js';
+import { SessionManager } from './runtime/session-manager.js';
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === 'mcp') {
+    const { runMcpCli } = await import('./mcp/server.js');
+    process.exitCode = await runMcpCli(rawArgs.slice(1));
+    return;
+  }
+
   if (rawArgs[0] === 'gateway') {
     const { runGatewayCli } = await import('./gateway/agent-gateway.js');
     const gatewayArgs = rawArgs.slice(1);
@@ -76,6 +39,8 @@ async function main(): Promise<void> {
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
 
+  configureLogger({ format: config.logFormat });
+
   let parentClosed = false;
   let shutdownHandler: ((signal: string) => Promise<void>) | null = null;
   if (parentStdinLifecycle) {
@@ -86,14 +51,23 @@ async function main(): Promise<void> {
     });
   }
 
-  const { executor, session } = await createRuntime(config);
+  const runtime = await createRuntime(config);
+  const manager = new SessionManager({
+    defaultExecutor: runtime.executor,
+    defaultBrowserSession: runtime.session,
+    provider: runtime.provider.id,
+    config,
+    ...(runtime.transport === 'ui'
+      ? { factory: async () => createIsolatedUiSession(runtime.session, runtime.provider, config) }
+      : {})
+  });
 
   try {
     logger.step(3, 3, 'Iniciando API OpenAI-compatible...');
-    const server = await startProxyServer({ executor, config });
+    const server = await startProxyServer({ manager, config });
     logger.success(`Proxy iniciado em http://${config.host}:${config.port}`);
     logger.info('Endpoints: POST /v1/chat/completions, POST /v1/responses, GET /v1/models, GET /healthz');
-    logger.info('Extensões: GET /v1/kitt/status, POST /v1/kitt/reset');
+    logger.info('Extensões: GET /v1/kitt/status, POST /v1/kitt/reset, GET /v1/kitt/sessions, GET /v1/kitt/metrics');
     logger.info('A sessão do Chromium permanecerá ativa enquanto o proxy estiver rodando.');
 
     let shuttingDown = false;
@@ -109,14 +83,16 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       clearTimeout(forceTimer);
       if (forced) logger.warn('Conexões HTTP remanescentes foram encerradas durante shutdown.');
-      await session.close();
+      await manager.close();
+      await runtime.session.close();
     };
     shutdownHandler = shutdown;
     process.once('SIGINT', () => void shutdown('SIGINT'));
     process.once('SIGTERM', () => void shutdown('SIGTERM'));
     if (parentClosed) await shutdown('PARENT_STDIN_EOF');
   } catch (error) {
-    await session.close();
+    await manager.close();
+    await runtime.session.close();
     throw error;
   }
 }

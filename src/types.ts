@@ -1,4 +1,5 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
+import type { OpenAiToolCall } from './mapping/tool-calling.js';
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -33,6 +34,9 @@ export interface AppConfig {
   minIntervalMs: number;
   allowedEndpointHosts: string[];
   followRedirects: boolean;
+  maxSessions: number;
+  sessionIdleTimeoutMs: number;
+  logFormat: 'text' | 'json';
   provider: ProviderId;
   transport: TransportMode;
 }
@@ -171,7 +175,7 @@ export interface OpenAiCompletion {
     message: {
       role: 'assistant';
       content: string | null;
-      tool_calls?: any[] | undefined;
+      tool_calls?: OpenAiToolCall[] | undefined;
       function_call?: { name: string; arguments: string } | undefined;
     };
     finish_reason: string | null;
@@ -189,7 +193,7 @@ export interface OpenAiCompletionChunk {
     delta: {
       role?: 'assistant';
       content?: string | null;
-      tool_calls?: any[] | undefined;
+      tool_calls?: OpenAiToolCall[] | undefined;
       function_call?: { name: string; arguments: string } | undefined;
     };
     finish_reason: string | null;
@@ -210,6 +214,7 @@ export interface ChatExecutionOptions {
 export interface ChatExecutionResult {
   completion: OpenAiCompletion;
   deltas: string[];
+  metadata?: JsonObject | undefined;
 }
 
 export interface ChatExecutor {

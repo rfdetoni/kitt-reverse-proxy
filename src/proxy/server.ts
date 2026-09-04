@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { logger } from '../logger.js';
 import {
@@ -7,9 +8,23 @@ import {
   requestMayReturnToolCalls,
   ToolProtocolError
 } from '../mapping/tool-calling.js';
-import { ConversationStateConflictError, ManualInterventionRequiredError, UiAutomationError } from '../runtime/ui-executor.js';
+import {
+  ConversationStateConflictError,
+  ManualInterventionRequiredError,
+  UiAutomationError
+} from '../runtime/ui-executor.js';
 import { UpstreamHttpError, UpstreamRedirectError } from '../runtime/upstream.js';
-import { QueueFullError, SerialQueue } from '../runtime/serial-queue.js';
+import { QueueFullError } from '../runtime/serial-queue.js';
+import {
+  SessionManager,
+  SessionLimitExceededError,
+  InvalidSessionIdError,
+  SessionNotSupportedError
+} from '../runtime/session-manager.js';
+import { ProviderNoImageSupportError, ImageInputError } from '../runtime/multimodal.js';
+import { ToolParseFailedError } from '../runtime/tool-response.js';
+import { runWithRequestContext } from '../util/request-context.js';
+import { telemetry } from '../util/telemetry.js';
 import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../types.js';
 import {
   apiKeyMiddleware,
@@ -37,7 +52,13 @@ import {
   validateOllamaChatBody
 } from './ollama.js';
 
+const SAFE_REQUEST_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
 function statusForError(error: unknown): number {
+  if (error instanceof SessionLimitExceededError) return 429;
+  if (error instanceof InvalidSessionIdError || error instanceof SessionNotSupportedError) return 400;
+  if (error instanceof ProviderNoImageSupportError || error instanceof ImageInputError) return 400;
+  if (error instanceof ToolParseFailedError) return 502;
   if (error instanceof ToolProtocolError) return error.source === 'request' ? 400 : 502;
   if (error instanceof ConversationStateConflictError) return 409;
   if (error instanceof QueueFullError) return 429;
@@ -53,6 +74,12 @@ function statusForError(error: unknown): number {
 }
 
 function codeForError(error: unknown): string {
+  if (error instanceof SessionLimitExceededError) return 'session_limit_exceeded';
+  if (error instanceof InvalidSessionIdError) return 'invalid_session_id';
+  if (error instanceof SessionNotSupportedError) return 'session_not_supported';
+  if (error instanceof ProviderNoImageSupportError) return 'provider_no_image_support';
+  if (error instanceof ImageInputError) return 'image_input_error';
+  if (error instanceof ToolParseFailedError) return 'tool_parse_failed';
   if (error instanceof ToolProtocolError) return error.source === 'request'
     ? 'invalid_tool_request'
     : 'invalid_tool_call';
@@ -83,14 +110,41 @@ export function isTrustedBrowserOrigin(origin: string | undefined): boolean {
 }
 
 export async function startProxyServer(input: {
-  executor: ChatExecutor;
+  executor?: ChatExecutor;
+  manager?: SessionManager;
   config: AppConfig;
 }): Promise<Server> {
-  const { executor, config } = input;
+  const { config } = input;
+  const manager = input.manager ?? (input.executor ? new SessionManager({
+    defaultExecutor: input.executor,
+    provider: 'default',
+    config
+  }) : (() => { throw new Error('startProxyServer requer executor ou manager.'); })());
   const app = express();
-  const queue = new SerialQueue(config.maxQueue, config.minIntervalMs);
 
   app.disable('x-powered-by');
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const rawRequestId = req.get('x-kitt-request-id');
+    const requestId = rawRequestId && SAFE_REQUEST_ID.test(rawRequestId) ? rawRequestId : randomUUID();
+    res.setHeader('X-Kitt-Request-Id', requestId);
+
+    const sessionId = req.get('x-kitt-session-id') || 'default';
+    const startedAt = Date.now();
+
+    res.on('finish', () => {
+      const endpoint = req.baseUrl || req.path || 'unknown';
+      telemetry.recordRequest(manager.transport, endpoint, res.statusCode);
+    });
+
+    runWithRequestContext({
+      requestId,
+      sessionId,
+      provider: manager.transport,
+      startedAt
+    }, () => next());
+  });
+
   app.use((req: Request, res: Response, next: NextFunction) => {
     const unsafe = req.method === 'POST'
       || req.method === 'PUT'
@@ -113,15 +167,16 @@ export async function startProxyServer(input: {
   }
   app.use(apiKeyMiddleware(config.apiKey));
 
-  const execute = async (body: JsonObject, options?: ChatExecutionOptions) => queue.run(() => executor.execute(body, options));
+  const execute = async (sessionId: string | undefined, body: JsonObject, options?: ChatExecutionOptions) =>
+    manager.execute(sessionId, body, options);
 
   const openAiDiscoveryHandler = (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
       service: 'kitt-reverse-proxy',
       version: '3.0.0',
-      model: executor.modelId,
-      transport: executor.transport,
+      model: manager.modelId,
+      transport: manager.transport,
       endpoints: {
         openai: {
           chat: '/v1/chat/completions',
@@ -140,7 +195,9 @@ export async function startProxyServer(input: {
         },
         status: '/v1/kitt/status',
         capabilities: '/v1/capabilities',
-        health: '/healthz'
+        health: '/healthz',
+        sessions: '/v1/kitt/sessions',
+        metrics: '/v1/kitt/metrics'
       },
       capabilities: {
         openai_chat_completions: true,
@@ -151,7 +208,9 @@ export async function startProxyServer(input: {
         anthropic_tool_use: true,
         ollama_chat: true,
         ollama_tool_calls: true,
-        streaming: true
+        streaming: true,
+        structured_output: 'best_effort',
+        structured_output_retry: true
       }
     });
   };
@@ -163,8 +222,8 @@ export async function startProxyServer(input: {
         message: 'Ollama is running',
         service: 'kitt-reverse-proxy',
         version: '3.0.0',
-        model: executor.modelId,
-        transport: executor.transport
+        model: manager.modelId,
+        transport: manager.transport
       });
       return;
     }
@@ -175,18 +234,18 @@ export async function startProxyServer(input: {
   app.get('/v1', openAiDiscoveryHandler);
 
   app.get('/healthz', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', transport: executor.transport, model: executor.modelId, queueDepth: queue.depth });
+    res.json({ status: 'ok', transport: manager.transport, model: manager.modelId, queueDepth: manager.queueDepth() });
   });
 
   app.get('/v1/models', (_req: Request, res: Response) => {
     const defaultModels = [
       {
-        id: executor.modelId,
+        id: manager.modelId,
         object: 'model',
         created: 1700000000,
         owned_by: 'kitt-reverse-proxy',
         permission: [],
-        root: executor.modelId,
+        root: manager.modelId,
         parent: null,
         capabilities: {
           completion: true,
@@ -203,7 +262,7 @@ export async function startProxyServer(input: {
 
   app.get('/v1/models/:model', (req: Request, res: Response) => {
     const requested = req.params.model;
-    if (requested !== executor.modelId) {
+    if (requested !== manager.modelId) {
       sendOpenAiError(res, 404, `Modelo não encontrado: ${requested}`, 'model_not_found');
       return;
     }
@@ -229,8 +288,17 @@ export async function startProxyServer(input: {
   app.get(['/v1/capabilities', '/v1/kitt/capabilities'], (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
-      transport: executor.transport,
-      model: executor.modelId,
+      transport: manager.transport,
+      model: manager.modelId,
+      structured_output: 'best_effort',
+      structured_output_retry: true,
+      image_input: {
+        chatgpt: true,
+        claude: true,
+        gemini: true,
+        kimi: false,
+        deepseek: false
+      },
       protocols: {
         openai: {
           chat_completions: true,
@@ -242,7 +310,7 @@ export async function startProxyServer(input: {
           function_call_output: true,
           function_tools_only: true,
           previous_response_id: false,
-          structured_outputs: false
+          structured_outputs: true
         },
         anthropic: {
           messages: true,
@@ -260,17 +328,50 @@ export async function startProxyServer(input: {
         tool_execution: 'client',
         ui_tool_calling: 'protocol-emulated',
         strict_json_schema_enforcement: false,
-        conversation_scope: 'one browser conversation per proxy instance'
+        conversation_scope: 'multi_session_ui'
       }
     });
   });
 
+  app.get('/v1/kitt/sessions', (_req: Request, res: Response) => {
+    res.json({ sessions: manager.list() });
+  });
+
+  app.delete('/v1/kitt/sessions/:id', async (req: Request, res: Response) => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id || id === 'default') {
+        sendOpenAiError(res, 400, 'Não é permitido deletar a sessão default.', 'invalid_session_id');
+        return;
+      }
+      const deleted = await manager.delete(id);
+      if (!deleted) {
+        sendOpenAiError(res, 404, `Sessão não encontrada: ${id}`, 'session_not_found');
+        return;
+      }
+      res.json({ status: 'ok', id });
+    } catch (error) {
+      logger.warn(`delete session: ${error instanceof Error ? error.message : String(error)}`);
+      sendOpenAiError(res, statusForError(error), error instanceof Error ? error.message : 'Erro ao encerrar sessão.', codeForError(error));
+    }
+  });
+
+  app.get('/v1/kitt/metrics', (req: Request, res: Response) => {
+    const accept = req.headers.accept || '';
+    if (accept.includes('text/plain; version=0.0.4')) {
+      res.setHeader('content-type', 'text/plain; version=0.0.4; charset=utf-8');
+      res.send(telemetry.prometheus());
+      return;
+    }
+    res.json(telemetry.snapshot());
+  });
+
   app.get('/api/tags', (_req: Request, res: Response) => {
-    res.json(ollamaTagsResponse(executor.modelId));
+    res.json(ollamaTagsResponse(manager.modelId));
   });
 
   app.post('/api/show', (req: Request, res: Response) => {
-    const model = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : executor.modelId;
+    const model = typeof req.body?.name === 'string' && req.body.name.trim() ? req.body.name.trim() : manager.modelId;
     res.json(ollamaShowResponse(model));
   });
 
@@ -279,20 +380,22 @@ export async function startProxyServer(input: {
   });
 
   app.get('/api/ps', (_req: Request, res: Response) => {
-    res.json(ollamaTagsResponse(executor.modelId));
+    res.json(ollamaTagsResponse(manager.modelId));
   });
 
   app.get('/v1/kitt/status', (_req: Request, res: Response) => {
-    res.json({ ...executor.describe(), queueDepth: queue.depth, model: executor.modelId });
+    res.json({
+      model: manager.modelId,
+      transport: manager.transport,
+      sessions: manager.list().length,
+      queueDepth: manager.queueDepth()
+    });
   });
 
-  app.post('/v1/kitt/reset', async (_req: Request, res: Response) => {
+  app.post('/v1/kitt/reset', async (req: Request, res: Response) => {
     try {
-      if (!executor.reset) {
-        sendOpenAiError(res, 501, 'O transporte atual não oferece reset de conversa.', 'reset_not_supported');
-        return;
-      }
-      await queue.run(() => executor.reset!());
+      const sessionId = req.get('x-kitt-session-id');
+      await manager.reset(sessionId);
       res.json({ status: 'ok' });
     } catch (error) {
       logger.warn(`reset: ${error instanceof Error ? error.message : String(error)}`);
@@ -302,20 +405,28 @@ export async function startProxyServer(input: {
 
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
+      const sessionId = req.get('x-kitt-session-id');
       const body = validateChatBody(req.body);
-      const bufferTools = requestMayReturnToolCalls(body);
+      const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
       if (body.stream === true) {
-        const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+        const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
         const writer = new ChatStreamWriter(res, model);
         const result = await execute(
+          sessionId,
           body,
           bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
         );
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
         const completion = adaptCompletionForLegacyFunctions(result.completion, body);
         writer.finish(completion, bufferTools ? [] : result.deltas);
       } else {
-        const { completion } = await execute(body);
-        res.json(adaptCompletionForLegacyFunctions(completion, body));
+        const result = await execute(sessionId, body);
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
+        res.json(adaptCompletionForLegacyFunctions(result.completion, body));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
@@ -327,19 +438,27 @@ export async function startProxyServer(input: {
 
   app.post('/api/chat', async (req: Request, res: Response) => {
     try {
+      const sessionId = req.get('x-kitt-session-id');
       const body = validateOllamaChatBody(req.body);
-      const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
       if (body.stream === true || body.stream === undefined) {
         const writer = new OllamaChatStreamWriter(res, model);
-        const bufferTools = requestMayReturnToolCalls(body);
+        const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.format);
         const result = await execute(
+          sessionId,
           body,
           bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
         );
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
         writer.finish(result.completion);
       } else {
-        const { completion } = await execute(body);
-        res.json(completionToOllamaChat(completion, model));
+        const result = await execute(sessionId, body);
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
+        res.json(completionToOllamaChat(result.completion, model));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
@@ -351,15 +470,22 @@ export async function startProxyServer(input: {
 
   app.post('/api/generate', async (req: Request, res: Response) => {
     try {
+      const sessionId = req.get('x-kitt-session-id');
       const chatBody = ollamaGenerateBodyToChat(req.body);
-      const model = typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model : executor.modelId;
+      const model = typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model : manager.modelId;
       if (req.body?.stream === true || req.body?.stream === undefined) {
         const writer = new OllamaGenerateStreamWriter(res, model);
-        await execute(chatBody, { onDelta: (delta) => writer.delta(delta) });
+        const result = await execute(sessionId, chatBody, { onDelta: (delta) => writer.delta(delta) });
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
         writer.finish();
       } else {
-        const { completion } = await execute(chatBody);
-        res.json(completionToOllamaGenerate(completion, model));
+        const result = await execute(sessionId, chatBody);
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
+        res.json(completionToOllamaGenerate(result.completion, model));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'chat') ? 400 : statusForError(error);
@@ -371,31 +497,40 @@ export async function startProxyServer(input: {
 
   app.post('/v1/messages', async (req: Request, res: Response) => {
     try {
+      const sessionId = req.get('x-kitt-session-id');
       const body = anthropicBodyToChat(req.body);
       const bufferTools = requestMayReturnToolCalls(body);
       const requestedModel = typeof req.body?.model === 'string' && req.body.model.trim()
         ? req.body.model.trim()
-        : executor.modelId;
+        : manager.modelId;
       if (req.body?.stream === true) {
         const writer = new AnthropicStreamWriter(res, requestedModel);
         const result = await execute(
+          sessionId,
           body,
           bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
         );
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
         writer.finish(result.completion, bufferTools ? [] : result.deltas);
       } else {
-        const { completion } = await execute(body);
-        res.json(completionToAnthropic(completion));
+        const result = await execute(sessionId, body);
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
+        res.json(completionToAnthropic(result.completion));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'responses') ? 400 : statusForError(error);
+      const code = codeForError(error);
       logger.warn(`anthropic/messages: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) {
         sendAnthropicError(
           res,
           status,
           error instanceof Error ? error.message : 'Erro interno.',
-          status === 400 ? 'invalid_request_error' : 'api_error'
+          code === 'session_limit_exceeded' ? 'session_limit_exceeded' : (status === 400 ? 'invalid_request_error' : 'api_error')
         );
       } else {
         res.end();
@@ -405,19 +540,27 @@ export async function startProxyServer(input: {
 
   app.post('/v1/responses', async (req: Request, res: Response) => {
     try {
+      const sessionId = req.get('x-kitt-session-id');
       const body = responsesBodyToChat(req.body);
+      const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
       if (req.body?.stream === true) {
-        const model = typeof body.model === 'string' && body.model.trim() ? body.model : executor.modelId;
+        const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
         const writer = new ResponsesStreamWriter(res, model);
-        const bufferTools = requestMayReturnToolCalls(body);
         const result = await execute(
+          sessionId,
           body,
           bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
         );
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
         writer.finish(result.completion, bufferTools ? [] : result.deltas);
       } else {
-        const { completion } = await execute(body);
-        res.json(completionToResponses(completion));
+        const result = await execute(sessionId, body);
+        if (result.metadata?.structured_output === 'failed') {
+          res.setHeader('X-Kitt-Structured-Output', 'failed');
+        }
+        res.json(completionToResponses(result.completion));
       }
     } catch (error) {
       const status = isInvalidRequest(error, 'responses') ? 400 : statusForError(error);

@@ -6,6 +6,8 @@ export interface UiProviderConfig {
   responseSelectors: string[];
   streamingSelectors: string[];
   newChatUrl?: string;
+  uploadSelector?: string;
+  supportsImageUpload: boolean;
 }
 
 export interface ProviderPreset {
@@ -41,7 +43,8 @@ const GENERIC_UI: UiProviderConfig = {
     'button[aria-label*="stop" i]',
     'button[data-testid*="stop" i]',
     '[data-is-streaming="true"]'
-  ]
+  ],
+  supportsImageUpload: false
 };
 
 export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
@@ -90,7 +93,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'button[aria-label="Interromper geração"]',
         '[data-is-streaming="true"]'
       ],
-      newChatUrl: 'https://chatgpt.com/'
+      newChatUrl: 'https://chatgpt.com/',
+      uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
+      supportsImageUpload: true
     }
   },
   {
@@ -128,7 +133,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'button[aria-label="Stop Response"]',
         'button[aria-label="Stop generating"]'
       ],
-      newChatUrl: 'https://claude.ai/new'
+      newChatUrl: 'https://claude.ai/new',
+      uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
+      supportsImageUpload: true
     }
   },
   {
@@ -167,7 +174,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'button[aria-label="Stop response"]',
         'button[aria-label="Stop generation"]'
       ],
-      newChatUrl: 'https://gemini.google.com/app'
+      newChatUrl: 'https://gemini.google.com/app',
+      uploadSelector: 'input[type="file"]',
+      supportsImageUpload: true
     }
   },
   {
@@ -200,7 +209,8 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         '[data-is-streaming="true"]',
         'button[data-testid="stop-button"]'
       ],
-      newChatUrl: 'https://www.kimi.com/'
+      newChatUrl: 'https://www.kimi.com/',
+      supportsImageUpload: false
     }
   },
   {
@@ -236,7 +246,8 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         'button[aria-label="Stop generating"]',
         'button[aria-label="Parar geração"]'
       ],
-      newChatUrl: 'https://chat.deepseek.com/'
+      newChatUrl: 'https://chat.deepseek.com/',
+      supportsImageUpload: false
     }
   },
   {

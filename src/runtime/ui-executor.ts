@@ -15,9 +15,7 @@ import type {
 import { anyVisible, collectVisibleSnapshots, extractArtifactContents, filterNewArtifacts, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
 import {
-  assertToolChoiceSatisfied,
   buildToolProtocolPlan,
-  extractToolCalls,
   formatApiDirective,
   formatToolResultPrompt,
   requestMayReturnToolCalls,
@@ -35,6 +33,18 @@ import {
   userTurnsAreCompatible,
   type CanonicalMessage
 } from './ui-history.js';
+import {
+  parseUiToolResponse,
+  buildToolRetryPrompt,
+  ToolParseFailedError
+} from './tool-response.js';
+import {
+  structuredOutputPlan,
+  validateStructuredOutput,
+  buildStructuredRetryPrompt
+} from './structured-output.js';
+import { uploadImagesFromBody } from './multimodal.js';
+import { telemetry } from '../util/telemetry.js';
 
 const POLL_MS = 175;
 const MAX_UI_PROMPT_CHARS = 500_000;
@@ -64,7 +74,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function completion(model: string, content: string | null, toolCalls?: any[]): OpenAiCompletion {
+function completion(model: string, content: string | null, toolCalls?: OpenAiToolCall[]): OpenAiCompletion {
   return {
     id: `chatcmpl-web-${randomUUID()}`,
     object: 'chat.completion',
@@ -345,6 +355,7 @@ export class UiChatExecutor implements ChatExecutor {
       actionablePrompt = toolResults.join('\n');
     }
 
+    const structured = structuredOutputPlan(body);
     let prefix = protocolFingerprint !== this.protocolFingerprint
       ? formatApiDirective(plan)
       : '';
@@ -354,20 +365,27 @@ export class UiChatExecutor implements ChatExecutor {
     if (!plan.systemPrompt && this.systemContextWasEnabled) {
       prefix = `[API SYSTEM CONTEXT UPDATE]\nThe previous API system context is no longer active for this turn. Follow the current user request without that prior API system context.\n[END API SYSTEM CONTEXT UPDATE]\n\n${prefix}`;
     }
+    if (structured) {
+      prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
+    }
+
+    const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
+    if (fallbackPublicImageUrls.length > 0) {
+      actionablePrompt = `${actionablePrompt}\n\n${fallbackPublicImageUrls.map((url) => `Image: ${url}`).join('\n')}`;
+    }
+
     const prompt = `${prefix}${actionablePrompt}`;
 
     const artifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     await this.sendPrompt(prompt);
 
-    // Internal tool protocol text must never leak to an API stream. For a turn
-    // that can return tools we buffer the web response, parse/validate it, then
-    // emit the proper API-native tool-call representation.
-    const bufferToolProtocol = requestMayReturnToolCalls(body);
+    // Internal tool protocol text or structured validation buffer must never leak to an API stream prematurely.
+    const bufferResponse = requestMayReturnToolCalls(body) || Boolean(structured);
     const result = await this.awaitResponse(
       baseline,
       prompt,
-      bufferToolProtocol ? undefined : options?.onDelta
+      bufferResponse ? undefined : options?.onDelta
     );
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     let textToParse = result.text;
@@ -388,63 +406,45 @@ export class UiChatExecutor implements ChatExecutor {
       }
     }
 
-    const parsed = extractToolCalls(textToParse, plan);
-
-    // If the agent expected a file-writing tool (e.g. write_file, write_to_file, create_file)
-    // but the chat model only returned the file content as an artifact or markdown code block,
-    // synthesize the tool call automatically so the IDE executes the file creation locally.
-    if ((!parsed.tool_calls || parsed.tool_calls.length === 0) && artifacts.length > 0) {
-      const writeFileTool = plan.tools.find((tool) =>
-        ['write_file', 'write_to_file', 'create_file', 'apply_diff', 'edit_file'].includes(tool.name)
-      );
-      if (writeFileTool) {
-        const synthesizedCalls: OpenAiToolCall[] = [];
-        // Attempt to extract filename mentioned in response text (e.g. Baixar/abrir kitt-project-presentation.html)
-        const textFilenameMatch = textToParse.match(/(?:Baixar\/abrir|arquivo|salvar|criar)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})/i)
-          || textToParse.match(/`([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,8})`/);
-        const fallbackFilename = textFilenameMatch ? textFilenameMatch[1] : undefined;
-
-        for (const art of artifacts) {
-          const filename = art.filename || fallbackFilename || 'index.html';
-          const rawParams = writeFileTool.parameters as Record<string, any> | undefined;
-          const paramProps = rawParams?.properties as Record<string, any> | undefined;
-          const pathKey = paramProps && ('path' in paramProps)
-            ? 'path'
-            : paramProps && ('TargetFile' in paramProps)
-              ? 'TargetFile'
-              : paramProps && ('target_file' in paramProps)
-                ? 'target_file'
-                : 'path';
-          const contentKey = paramProps && ('content' in paramProps)
-            ? 'content'
-            : paramProps && ('CodeContent' in paramProps)
-              ? 'CodeContent'
-              : paramProps && ('code' in paramProps)
-                ? 'code'
-                : 'content';
-
-          synthesizedCalls.push({
-            id: `call_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
-            type: 'function',
-            function: {
-              name: writeFileTool.name,
-              arguments: JSON.stringify({
-                [pathKey]: filename,
-                [contentKey]: art.code,
-                ...(paramProps && 'Overwrite' in paramProps ? { Overwrite: true } : {}),
-                ...(paramProps && 'Description' in paramProps ? { Description: `Create ${filename}` } : {})
-              })
-            }
-          });
+    let parsed;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        parsed = parseUiToolResponse(textToParse, plan, artifacts, this.provider.id);
+        break;
+      } catch (error) {
+        const retryable = error instanceof ToolProtocolError && error.source === 'model';
+        if (!protocolEnabled || !retryable || attempt >= 2) {
+          throw error instanceof ToolParseFailedError
+            ? error
+            : retryable
+              ? new ToolParseFailedError(error instanceof Error ? error.message : String(error))
+              : error;
         }
-        if (synthesizedCalls.length > 0) {
-          parsed.tool_calls = synthesizedCalls;
-          parsed.content = textToParse.replace(/Baixar\/abrir[^\n]*/gi, '').trim();
-        }
+        telemetry.recordToolCall(this.provider.id, 'unknown', 'retry');
+        const retryPrompt = buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
+        const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        await this.sendPrompt(retryPrompt);
+        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt);
+        textToParse = retryResult.text;
       }
     }
 
-    assertToolChoiceSatisfied(plan, parsed.tool_calls);
+    let structuredOutputFailed = false;
+    if (!parsed.tool_calls?.length && structured) {
+      let checked = validateStructuredOutput(textToParse, structured);
+      if (!checked.ok) {
+        const retryPrompt = buildStructuredRetryPrompt(structured, checked.error);
+        const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        await this.sendPrompt(retryPrompt);
+        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt);
+        checked = validateStructuredOutput(retryResult.text, structured);
+      }
+      if (checked.ok) {
+        textToParse = checked.text;
+      } else {
+        structuredOutputFailed = true;
+      }
+    }
 
     for (const call of parsed.tool_calls || []) {
       this.toolNamesByCallId.set(call.id, call.function.name);
@@ -460,11 +460,12 @@ export class UiChatExecutor implements ChatExecutor {
     else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: textToParse }];
     else this.history = [...incoming, { role: 'assistant', text: textToParse }];
 
-    const execution = {
+    const execution: ChatExecutionResult = {
       completion: output,
       deltas: parsed.tool_calls?.length
         ? []
-        : computeDeltas(result.snapshots, responseContent || '')
+        : computeDeltas(result.snapshots, responseContent || ''),
+      ...(structuredOutputFailed ? { metadata: { structured_output: 'failed' } } : {})
     };
     if (incoming.length > 1) {
       this.lastRequestFingerprint = fingerprint;

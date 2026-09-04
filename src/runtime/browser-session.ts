@@ -23,10 +23,10 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     try {
       targetHostname = new URL(config.targetUrl).hostname;
     } catch {
-      // ignore
+      // ignore invalid target; validation happens in config
     }
     const matchingPage = targetHostname
-      ? context.pages().find((p: Page) => !p.isClosed() && p.url().includes(targetHostname))
+      ? context.pages().find((page: Page) => !page.isClosed() && page.url().includes(targetHostname))
       : undefined;
     const page = matchingPage ?? firstUsablePage(context) ?? await context.newPage();
     return {
@@ -44,9 +44,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     const userDataDir = await prepareUserDataDir(config.userDataDir);
     const launchOptions = {
       headless: !config.headed,
-      acceptDownloads: false,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--disable-blink-features=AutomationControlled']
+      acceptDownloads: false
     };
     const context = await chromium
       .launchPersistentContext(userDataDir, { ...launchOptions, channel: 'chrome' })
@@ -64,9 +62,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
 
   const browser = await chromium.launch({
     headless: !config.headed,
-    channel: 'chrome',
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: ['--disable-blink-features=AutomationControlled']
+    channel: 'chrome'
   }).catch(() => chromium.launch({ headless: !config.headed }));
   const context = await browser.newContext({ acceptDownloads: false });
   const page = await context.newPage();
