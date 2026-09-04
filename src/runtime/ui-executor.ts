@@ -204,15 +204,59 @@ export class UiChatExecutor implements ChatExecutor {
       }
     }
 
-    // Give the frontend 150ms to register the state update
-    await sleep(150);
+    // Give the frontend a brief moment to process input and enable submit controls
+    await sleep(200);
 
-    const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
-    if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ force: true, timeout: 3_000 }).catch(() => undefined);
-      return;
+    // Wait up to 2.5s for the send button to become enabled or fallback to Enter
+    const sendButtonDeadline = Date.now() + 2_500;
+    let submitted = false;
+
+    while (Date.now() < sendButtonDeadline) {
+      const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
+      if (send && await send.isEnabled().catch(() => false)) {
+        await send.click({ force: true, timeout: 2_000 }).catch(() => undefined);
+        submitted = true;
+        break;
+      }
+      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
+      if (streaming) {
+        submitted = true;
+        break;
+      }
+      await sleep(100);
     }
-    await input.press('Enter', { timeout: 3_000 }).catch(() => undefined);
+
+    if (!submitted) {
+      await input.focus().catch(() => undefined);
+      await input.press('Enter', { timeout: 2_000 }).catch(() => undefined);
+      await this.session.page.keyboard.press('Enter').catch(() => undefined);
+    }
+
+    // Verify submission: wait up to 1.5s to check if input was cleared or streaming started
+    const verifyDeadline = Date.now() + 1_500;
+    while (Date.now() < verifyDeadline) {
+      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
+      if (streaming) break;
+
+      const remainingText = await input.evaluate((el: Element) => {
+        if ('value' in el && typeof (el as HTMLInputElement).value === 'string') {
+          return (el as HTMLInputElement).value.trim();
+        }
+        return (el.textContent || '').trim();
+      }).catch(() => '');
+
+      if (!remainingText) break;
+
+      // If text is still in the input, try pressing Enter with focused keyboard or clicking send
+      const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
+      if (send && await send.isEnabled().catch(() => false)) {
+        await send.click({ force: true, timeout: 1_000 }).catch(() => undefined);
+      } else {
+        await input.focus().catch(() => undefined);
+        await this.session.page.keyboard.press('Enter').catch(() => undefined);
+      }
+      await sleep(250);
+    }
   }
 
   private async awaitResponse(
