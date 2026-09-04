@@ -304,7 +304,7 @@ ${toolChoiceDescription(plan.choice)}
 ${plan.parallel ? `You may return up to ${MAX_PARALLEL_CALLS} calls in one turn.` : 'Return at most one tool call in this turn.'}
 
 CRITICAL EXECUTION RULES:
-1. EXPLORATION FIRST: You MUST inspect the real workspace before generating project summaries or code. Do NOT invent repository contents, file names, or architecture from web search or memory. Invoke shell/execute/reading tools (e.g. ls, rg, list_dir, read_file, execute_command) to inspect the local project files first.
+1. EXPLORATION FIRST: You MUST inspect the real workspace before generating project summaries or code. Do NOT invent repository contents, file names, or architecture from web search or memory. Invoke shell/execute/reading tools (e.g. ls, rg, list_dir, read_file, execute_command) to inspect the local project files first. KITT may enforce this rule in code: a premature final answer or mutation can be rejected and reprompted.
 2. CREATING OR EDITING FILES: When generating, editing, or saving files, ALWAYS invoke the appropriate editing/writing function with the exact file path and content.
 3. NEVER tell the user to download an external file, click download links, or open a sandbox/canvas viewer.
 4. If no file-writing function is supplied in the tools list, provide the COMPLETE file content directly in your response inside markdown code blocks specifying the exact relative path/filename header.

@@ -45,6 +45,16 @@ import {
 } from './structured-output.js';
 import { uploadImagesFromBody } from './multimodal.js';
 import { telemetry } from '../util/telemetry.js';
+import {
+  ToolEnforcementError,
+  buildToolEnforcementDirective,
+  buildToolEnforcementPlan,
+  buildToolEnforcementRetryPrompt,
+  enforceToolResponse,
+  isExplorationToolCall,
+  toolEnforcementTaskKey,
+  type ToolEnforcementPlan
+} from './tool-enforcement.js';
 
 const POLL_MS = 175;
 const MAX_UI_PROMPT_CHARS = 500_000;
@@ -120,6 +130,10 @@ export class UiChatExecutor implements ChatExecutor {
   private readonly toolNamesByCallId = new Map<string, string>();
   private lastRequestFingerprint = '';
   private lastResult: ChatExecutionResult | undefined;
+  private enforcementTaskKey = '';
+  private explorationEvidence = false;
+  private toolEvidence = false;
+  private readonly explorationCallIds = new Set<string>();
 
   constructor(
     private readonly session: LiveBrowserSession,
@@ -269,6 +283,10 @@ export class UiChatExecutor implements ChatExecutor {
     this.toolProtocolWasEnabled = false;
     this.systemContextWasEnabled = false;
     this.toolNamesByCallId.clear();
+    this.enforcementTaskKey = '';
+    this.explorationEvidence = false;
+    this.toolEvidence = false;
+    this.explorationCallIds.clear();
     const destination = this.provider.ui.newChatUrl || this.config.targetUrl;
     await navigateSession(this.session, destination, this.config.manualInterventionTimeoutMs)
       .catch((error: unknown) => {
@@ -330,6 +348,19 @@ export class UiChatExecutor implements ChatExecutor {
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
     const protocolFingerprint = toolProtocolFingerprint(plan);
     const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
+    const currentTaskKey = toolEnforcementTaskKey(incoming);
+    if (currentTaskKey !== this.enforcementTaskKey) {
+      this.enforcementTaskKey = currentTaskKey;
+      this.explorationEvidence = false;
+      this.toolEvidence = false;
+      this.explorationCallIds.clear();
+    }
+    const latestUserText = [...incoming].reverse().find((message) => message.role === 'user')?.text ?? '';
+    const enforcement: ToolEnforcementPlan = buildToolEnforcementPlan(
+      plan,
+      latestUserText,
+      this.config.toolEnforcement ?? 'explore-first'
+    );
 
     let actionablePrompt = selectedPrompt.text;
     if (selectedPrompt.role === 'tool') {
@@ -345,6 +376,10 @@ export class UiChatExecutor implements ChatExecutor {
         const toolName = toolPrompt.toolName || rememberedName;
         if (toolName && plan.tools.length && !plan.tools.some((tool) => tool.name === toolName)) {
           throw new ToolProtocolError(`Resultado recebido para function não disponível: ${toolName}`);
+        }
+        this.toolEvidence = true;
+        if (toolPrompt.toolCallId && this.explorationCallIds.has(toolPrompt.toolCallId)) {
+          this.explorationEvidence = true;
         }
         return formatToolResultPrompt(
           toolPrompt.text,
@@ -368,6 +403,7 @@ export class UiChatExecutor implements ChatExecutor {
     if (structured) {
       prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
     }
+    prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence)}`;
 
     const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
     if (fallbackPublicImageUrls.length > 0) {
@@ -410,18 +446,26 @@ export class UiChatExecutor implements ChatExecutor {
     for (let attempt = 0; ; attempt += 1) {
       try {
         parsed = parseUiToolResponse(textToParse, plan, artifacts, this.provider.id);
+        enforceToolResponse({
+          enforcement,
+          protocol: plan,
+          calls: parsed.tool_calls,
+          explorationEvidence: this.explorationEvidence,
+          toolEvidence: this.toolEvidence
+        });
         break;
       } catch (error) {
         const retryable = error instanceof ToolProtocolError && error.source === 'model';
         if (!protocolEnabled || !retryable || attempt >= 2) {
-          throw error instanceof ToolParseFailedError
-            ? error
-            : retryable
-              ? new ToolParseFailedError(error instanceof Error ? error.message : String(error))
-              : error;
+          if (error instanceof ToolEnforcementError || error instanceof ToolParseFailedError) throw error;
+          throw retryable
+            ? new ToolParseFailedError(error instanceof Error ? error.message : String(error))
+            : error;
         }
         telemetry.recordToolCall(this.provider.id, 'unknown', 'retry');
-        const retryPrompt = buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
+        const retryPrompt = error instanceof ToolEnforcementError
+          ? buildToolEnforcementRetryPrompt(enforcement, error)
+          : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         await this.sendPrompt(retryPrompt);
         const retryResult = await this.awaitResponse(retryBaseline, retryPrompt);
@@ -448,6 +492,7 @@ export class UiChatExecutor implements ChatExecutor {
 
     for (const call of parsed.tool_calls || []) {
       this.toolNamesByCallId.set(call.id, call.function.name);
+      if (isExplorationToolCall(call, plan)) this.explorationCallIds.add(call.id);
     }
 
     const responseContent = parsed.tool_calls?.length ? parsed.content : textToParse;
@@ -487,7 +532,8 @@ export class UiChatExecutor implements ChatExecutor {
       manualChallengeHandling: true,
       progressiveUiStreaming: true,
       toolCalling: 'protocol-emulated',
-      toolExecution: 'client-side'
+      toolExecution: 'client-side',
+      toolEnforcement: this.config.toolEnforcement ?? 'explore-first'
     };
   }
 }

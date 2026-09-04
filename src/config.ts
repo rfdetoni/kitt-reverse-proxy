@@ -32,6 +32,7 @@ const DEFAULTS = Object.freeze({
   maxSessions: Number(process.env.PROXY_MAX_SESSIONS || numberSetting(CENTER, 'max_sessions') || 4),
   sessionIdleTimeoutMs: Number(process.env.PROXY_SESSION_IDLE_TIMEOUT_MS || numberSetting(CENTER, 'session_idle_timeout_ms') || 1_800_000),
   logFormat: (process.env.PROXY_LOG_FORMAT || stringSetting(CENTER, 'log_format') || 'text') === 'json' ? 'json' : 'text',
+  toolEnforcement: (process.env.PROXY_TOOL_ENFORCEMENT || stringSetting(CENTER, 'tool_enforcement') || 'explore-first') as NonNullable<AppConfig['toolEnforcement']>,
   apiKey: process.env.PROXY_API_KEY || (secretEnv ? process.env[secretEnv] : undefined),
   userDataDir: process.env.BROWSER_USER_DATA_DIR || stringSetting(CENTER, 'user_data_dir') || undefined,
   cdpUrl: process.env.CDP_URL || stringSetting(CENTER, 'cdp_url') || undefined,
@@ -44,6 +45,7 @@ const DEFAULTS = Object.freeze({
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
 const PROVIDER_IDS = new Set<ProviderId>(['auto', ...providerIds()]);
 const LOG_FORMATS = new Set<AppConfig['logFormat']>(['text', 'json']);
+const TOOL_ENFORCEMENTS = new Set<NonNullable<AppConfig['toolEnforcement']>>(['auto', 'explore-first', 'required']);
 
 
 export interface CliLaunchPreset {
@@ -131,6 +133,14 @@ function logFormat(value: string): AppConfig['logFormat'] {
   return normalized;
 }
 
+function toolEnforcement(value: string): NonNullable<AppConfig['toolEnforcement']> {
+  const normalized = value.toLowerCase() as NonNullable<AppConfig['toolEnforcement']>;
+  if (!TOOL_ENFORCEMENTS.has(normalized)) {
+    throw new Error(`Tool enforcement inválido: ${value}. Use: auto, explore-first ou required.`);
+  }
+  return normalized;
+}
+
 function validateDefaults(config: AppConfig): void {
   config.port = integer(config.port, 'PROXY_PORT');
   config.captureTimeoutMs = integer(config.captureTimeoutMs, 'CAPTURE_TIMEOUT_MS');
@@ -146,6 +156,7 @@ function validateDefaults(config: AppConfig): void {
   config.maxSessions = integer(config.maxSessions, 'PROXY_MAX_SESSIONS');
   config.sessionIdleTimeoutMs = integer(config.sessionIdleTimeoutMs, 'PROXY_SESSION_IDLE_TIMEOUT_MS');
   config.logFormat = logFormat(config.logFormat);
+  config.toolEnforcement = toolEnforcement(config.toolEnforcement ?? 'explore-first');
   config.provider = provider(config.provider);
   config.transport = transport(config.transport);
 }
@@ -176,6 +187,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     maxSessions: DEFAULTS.maxSessions,
     sessionIdleTimeoutMs: DEFAULTS.sessionIdleTimeoutMs,
     logFormat: DEFAULTS.logFormat,
+    toolEnforcement: DEFAULTS.toolEnforcement,
     allowedEndpointHosts: stringListSetting(CENTER, 'allowed_endpoint_hosts') || [],
     followRedirects: DEFAULTS.followRedirects,
     provider: DEFAULTS.provider,
@@ -215,6 +227,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--max-sessions': config.maxSessions = integer(readValue(args, index, arg), arg); index += 1; break;
       case '--session-idle-timeout': config.sessionIdleTimeoutMs = integer(readValue(args, index, arg), arg) * 1000; index += 1; break;
       case '--log-format': config.logFormat = logFormat(readValue(args, index, arg)); index += 1; break;
+      case '--tool-enforcement': config.toolEnforcement = toolEnforcement(readValue(args, index, arg)); index += 1; break;
       case '--profile': config.profilePath = readValue(args, index, arg); index += 1; break;
       case '--save-profile': config.saveProfilePath = readValue(args, index, arg); index += 1; break;
       case '--user-data-dir': config.userDataDir = readValue(args, index, arg); index += 1; break;
@@ -247,5 +260,5 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
 }
 
 export function printHelp(): void {
-  console.log(`\nkitt-reverse-proxy v3\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy mcp [--mcp-port <porta>] <provider>\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --cdp-url <url>             Conecta a navegador já aberto com remote debugging (ex.: http://127.0.0.1:9222)\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --max-sessions <n>          Limite de sessões simultâneas (default: ${DEFAULTS.maxSessions})\n  --session-idle-timeout <seg> Timeout de inatividade de sessões (default: ${DEFAULTS.sessionIdleTimeoutMs / 1000}s)\n  --log-format <formato>      Formato de log: text|json (default: ${DEFAULTS.logFormat})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
+  console.log(`\nkitt-reverse-proxy v3\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy mcp [--mcp-port <porta>] <provider>\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --cdp-url <url>             Conecta a navegador já aberto com remote debugging (ex.: http://127.0.0.1:9222)\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --max-sessions <n>          Limite de sessões simultâneas (default: ${DEFAULTS.maxSessions})\n  --session-idle-timeout <seg> Timeout de inatividade de sessões (default: ${DEFAULTS.sessionIdleTimeoutMs / 1000}s)\n  --log-format <formato>      Formato de log: text|json (default: ${DEFAULTS.logFormat})\n  --tool-enforcement <modo>    auto|explore-first|required (default: ${DEFAULTS.toolEnforcement})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --headless                  Chromium invisível\n  --headed                    Chromium visível (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
 }

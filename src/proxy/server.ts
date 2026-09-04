@@ -23,6 +23,7 @@ import {
 } from '../runtime/session-manager.js';
 import { ProviderNoImageSupportError, ImageInputError } from '../runtime/multimodal.js';
 import { ToolParseFailedError } from '../runtime/tool-response.js';
+import { ToolEnforcementError } from '../runtime/tool-enforcement.js';
 import { runWithRequestContext } from '../util/request-context.js';
 import { telemetry } from '../util/telemetry.js';
 import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../types.js';
@@ -58,7 +59,7 @@ function statusForError(error: unknown): number {
   if (error instanceof SessionLimitExceededError) return 429;
   if (error instanceof InvalidSessionIdError || error instanceof SessionNotSupportedError) return 400;
   if (error instanceof ProviderNoImageSupportError || error instanceof ImageInputError) return 400;
-  if (error instanceof ToolParseFailedError) return 502;
+  if (error instanceof ToolEnforcementError || error instanceof ToolParseFailedError) return 502;
   if (error instanceof ToolProtocolError) return error.source === 'request' ? 400 : 502;
   if (error instanceof ConversationStateConflictError) return 409;
   if (error instanceof QueueFullError) return 429;
@@ -79,6 +80,7 @@ function codeForError(error: unknown): string {
   if (error instanceof SessionNotSupportedError) return 'session_not_supported';
   if (error instanceof ProviderNoImageSupportError) return 'provider_no_image_support';
   if (error instanceof ImageInputError) return 'image_input_error';
+  if (error instanceof ToolEnforcementError) return 'tool_required_but_not_called';
   if (error instanceof ToolParseFailedError) return 'tool_parse_failed';
   if (error instanceof ToolProtocolError) return error.source === 'request'
     ? 'invalid_tool_request'
@@ -210,7 +212,8 @@ export async function startProxyServer(input: {
         ollama_tool_calls: true,
         streaming: true,
         structured_output: 'best_effort',
-        structured_output_retry: true
+        structured_output_retry: true,
+        tool_enforcement: config.toolEnforcement ?? 'explore-first'
       }
     });
   };

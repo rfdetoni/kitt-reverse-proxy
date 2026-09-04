@@ -37,6 +37,7 @@ export interface AppConfig {
   maxSessions: number;
   sessionIdleTimeoutMs: number;
   logFormat: 'text' | 'json';
+  toolEnforcement?: 'auto' | 'explore-first' | 'required';
   provider: ProviderId;
   transport: TransportMode;
 }

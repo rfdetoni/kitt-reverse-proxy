@@ -519,3 +519,35 @@ A KITT process still represents one active web provider. Therefore MCP exposes t
 OpenAI-style content parts with `image_url`, `input_image`, or `image_base64` are accepted for UI providers that declare image upload support. Remote images are limited in size/type, HTTPS-only, and protected against private/reserved-address SSRF. Buffers stay in memory and are sent with Playwright `setInputFiles()`.
 
 If the upload input cannot be located, public HTTPS URLs may be appended to the text prompt as a fallback. Base64 content cannot use that fallback.
+
+## Workspace exploration enforcement
+
+UI coding-agent traffic supports a proxy-enforced tool policy:
+
+- `auto`: preserves ordinary `tool_choice=auto` behavior.
+- `explore-first` (default): workspace/code-change requests must obtain evidence through a read/search/list/inspect-style tool before KITT accepts a final answer or any mutating tool call.
+- `required`: every new user task must use at least one tool before a final answer; workspace-dependent tasks still require exploration first when an exploration tool exists.
+
+Configure with:
+
+```bash
+--tool-enforcement auto|explore-first|required
+```
+
+or:
+
+```bash
+PROXY_TOOL_ENFORCEMENT=explore-first
+```
+
+The rule is enforced in code, not only in the model prompt. A premature final answer or write/edit/patch/delete call is rejected internally and the model is reprompted using the existing bounded protocol retry budget.
+
+Exploration is considered complete only after the client returns the `tool_result` for a call previously classified as exploratory. Merely emitting `read_file` is not treated as evidence that the file was actually read.
+
+For mixed shell tools such as `execute_command`, only recognized read-only commands such as `ls`, `rg`, `grep`, `find`, `cat`, `git status`, `git diff`, and `git log` count as exploration. Shell control/redirection and obvious mutation commands do not count.
+
+When the retry budget is exhausted, KITT returns error code:
+
+```text
+tool_required_but_not_called
+```
