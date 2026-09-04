@@ -213,7 +213,14 @@ export async function startProxyServer(input: {
         streaming: true,
         structured_output: 'best_effort',
         structured_output_retry: true,
-        tool_enforcement: config.toolEnforcement ?? 'explore-first'
+        tool_enforcement: config.toolEnforcement ?? 'explore-first',
+        kitt_agent_cli: {
+          protocol: 'openai-chat-completions',
+          native_tool_roundtrip: true,
+          session_header: 'X-Kitt-Session-Id',
+          request_id_header: 'X-Kitt-Request-Id',
+          parallel_tool_calls_recommended: false
+        }
       }
     });
   };
@@ -295,6 +302,14 @@ export async function startProxyServer(input: {
       model: manager.modelId,
       structured_output: 'best_effort',
       structured_output_retry: true,
+      tool_enforcement: config.toolEnforcement ?? 'explore-first',
+      kitt_agent_cli: {
+        protocol: 'openai-chat-completions',
+        native_tool_roundtrip: true,
+        session_header: 'X-Kitt-Session-Id',
+        request_id_header: 'X-Kitt-Request-Id',
+        parallel_tool_calls_recommended: false
+      },
       image_input: {
         chatgpt: true,
         claude: true,
