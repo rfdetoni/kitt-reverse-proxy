@@ -44,3 +44,14 @@ test('schema-invalid tool arguments fail closed', () => {
     ToolParseFailedError
   );
 });
+
+test('artifacts never synthesize local writes and disabled tools remain text', () => {
+  const tools = [{ type: 'function', function: { name: 'write_file' } }];
+  const plan = buildToolProtocolPlan({ tools });
+  assert.deepEqual(parseUiToolResponse('Example code', plan, [{ code: 'hello' }]), {
+    content: 'Example code'
+  });
+  const disabled = buildToolProtocolPlan({ tools, tool_choice: 'none' });
+  const text = '<tool_call>{"name":"write_file","arguments":{}}</tool_call>';
+  assert.deepEqual(parseUiToolResponse(text, disabled), { content: text });
+});

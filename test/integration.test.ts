@@ -5,6 +5,9 @@ import { startProxyServer } from '../src/proxy/server.js';
 import { SessionManager } from '../src/runtime/session-manager.js';
 import { ToolParseFailedError } from '../src/runtime/tool-response.js';
 import { ProviderNoImageSupportError } from '../src/runtime/multimodal.js';
+import { UiChatExecutor } from '../src/runtime/ui-executor.js';
+import { detectProvider } from '../src/providers/catalog.js';
+import type { LiveBrowserSession } from '../src/types.js';
 import type { AppConfig, ChatExecutor, JsonObject } from '../src/types.js';
 
 function createMockExecutor(name: string, handler?: (body: JsonObject) => JsonObject | Promise<JsonObject>): ChatExecutor {
@@ -67,6 +70,62 @@ const baseConfig: AppConfig = {
   provider: 'chatgpt',
   transport: 'ui'
 };
+
+test('UI protocol retries premature final answers and completes an API tool round trip', async () => {
+  const prompts: string[] = [];
+  const answers = [
+    'I inspected the project.',
+    '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</tool_call>',
+    'README.md describes KITT.'
+  ];
+  const ui = new UiChatExecutor({
+    page: { frames: () => [], evaluate: async () => [] }, persistent: false
+  } as unknown as LiveBrowserSession, detectProvider('https://chatgpt.com/'), baseConfig);
+  // Replace browser I/O only: exercise the real history, enforcement and parser.
+  Object.assign(ui, {
+    sendPrompt: async (prompt: string) => { prompts.push(prompt); },
+    awaitResponse: async () => {
+      const text = answers.shift();
+      assert.notEqual(text, undefined, 'unexpected extra browser turn');
+      return { text, snapshots: [text] };
+    }
+  });
+  const manager = new SessionManager({ defaultExecutor: ui, provider: 'chatgpt', config: baseConfig });
+  const server = await startProxyServer({ manager, config: baseConfig });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const tools = [{ type: 'function', function: { name: 'kitt_runtime', parameters: {
+    type: 'object', properties: { operation: { type: 'string' }, arguments: { type: 'object' } }, required: ['operation', 'arguments']
+  } } }];
+  try {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'inspect this repository' }], tools, stream: true })
+    });
+    assert.equal(response.status, 200);
+    const sse = await response.text();
+    assert.doesNotMatch(sse, /<tool_call>|I inspected/);
+    const chunks = sse.split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
+    const call = chunks.flatMap((chunk) => chunk.choices[0].delta.tool_calls ?? [])[0];
+    assert.equal(call.function.name, 'kitt_runtime');
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0]!, /visible assistant reply/);
+    assert.match(prompts[1]!, /exploration tool/);
+    const final = await fetch(`${baseUrl}/v1/responses`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructions: 'Continue using the tool result.', tools,
+        input: [{ type: 'function_call_output', call_id: call.id, output: 'KITT coding agent' }] })
+    });
+    assert.equal(final.status, 200);
+    assert.equal((await final.json() as any).output_text, 'README.md describes KITT.');
+    assert.match(prompts[2]!, /<tool_result name="kitt_runtime"/);
+    assert.equal(answers.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
 
 test('proxy server handles session header, request ID, metrics, errors and limits', async () => {
   let createdNamedCount = 0;

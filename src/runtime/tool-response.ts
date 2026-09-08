@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import type { JsonObject } from '../types.js';
 import {
   assertToolChoiceSatisfied,
   extractToolCalls,
@@ -77,53 +75,13 @@ function normalizeProviderPatterns(text: string): string {
   return normalized;
 }
 
-function synthesizeWriteCalls(
-  text: string,
-  plan: ToolProtocolPlan,
-  artifacts: readonly UiArtifactLike[]
-): OpenAiToolCall[] {
-  if (!artifacts.length) return [];
-  const writeTool = plan.tools.find((tool) =>
-    ['write_file', 'write_to_file', 'create_file', 'apply_diff', 'edit_file'].includes(tool.name)
-  );
-  if (!writeTool) return [];
-
-  const schema = isRecord(writeTool.parameters) ? writeTool.parameters : undefined;
-  const properties = schema && isRecord(schema.properties) ? schema.properties : undefined;
-  const has = (key: string): boolean => Boolean(properties && Object.prototype.hasOwnProperty.call(properties, key));
-
-  const pathKey = has('path') ? 'path' : has('TargetFile') ? 'TargetFile' : has('target_file') ? 'target_file' : 'path';
-  const contentKey = has('content') ? 'content' : has('CodeContent') ? 'CodeContent' : has('code') ? 'code' : 'content';
-
-  const named = text.match(/(?:Baixar\/abrir|arquivo|salvar|criar)\s+([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,12})/i)
-    ?? text.match(/`([a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]{1,12})`/);
-  const fallbackFilename = named?.[1];
-
-  return artifacts.map((artifact) => {
-    const filename = artifact.filename || fallbackFilename || 'index.html';
-    const args: JsonObject = {
-      [pathKey]: filename,
-      [contentKey]: artifact.code
-    };
-    if (has('Overwrite')) args.Overwrite = true;
-    if (has('Description')) args.Description = `Create ${filename}`;
-    return {
-      id: `call_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
-      type: 'function',
-      function: {
-        name: writeTool.name,
-        arguments: JSON.stringify(args)
-      }
-    };
-  });
-}
-
 export function parseUiToolResponse(
   text: string,
   plan: ToolProtocolPlan,
-  artifacts: readonly UiArtifactLike[] = [],
+  _artifacts: readonly UiArtifactLike[] = [],
   provider = 'unknown'
 ): ParsedModelOutput {
+  if (!plan.tools.length || plan.choice.mode === 'none') return { content: text };
   const normalized = normalizeProviderPatterns(text);
   let parsed: ParsedModelOutput;
 
@@ -138,14 +96,6 @@ export function parseUiToolResponse(
   } catch (error) {
     telemetry.recordParseFailure(/```/u.test(normalized) ? 'codeblock' : /<tool_call\b/iu.test(normalized) ? 'regex' : 'json');
     throw error;
-  }
-
-  if (!parsed.tool_calls?.length && artifacts.length) {
-    const synthesized = synthesizeWriteCalls(text, plan, artifacts);
-    if (synthesized.length) {
-      parsed.tool_calls = synthesized;
-      parsed.content = text.replace(/Baixar\/abrir[^\n]*/gi, '').trim() || null;
-    }
   }
 
   if (parsed.tool_calls?.length) {
@@ -180,6 +130,7 @@ export function buildToolRetryPrompt(plan: ToolProtocolPlan, reason: string): st
     'Your previous response could not be parsed as a valid tool call.',
     `Reason: ${reason.slice(0, 600)}`,
     `Respond ONLY with valid JSON matching: ${payload}`,
-    'Do not use markdown or explanatory text.'
+    'Print the JSON in the visible assistant reply. Hidden website tool calls are not forwarded.',
+    'Do not use markdown or explanatory text. Stop and wait for the external agent to return the result.'
   ].join('\n');
 }

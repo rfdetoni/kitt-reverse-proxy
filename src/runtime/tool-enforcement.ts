@@ -13,7 +13,10 @@ const EXPLORATION_NAME =
 const MUTATION_NAME =
   /(?:^|[_.:-])(write|edit|patch|apply|create|delete|remove|move|rename|mkdir|touch|replace)(?:$|[_.:-])/i;
 const MIXED_SHELL_NAME =
-  /^(?:execute_command|run_command|exec|shell|bash|terminal|command)$/i;
+  /(?:^|[_.:-])(?:execute_command|exec_command|run_command|exec|shell|bash|terminal|command)$/i;
+const RUNTIME_EXPLORATION = new Set([
+  'repo.read', 'repo.search', 'repo.inspect_symbol', 'repo.read_symbol', 'repo.references'
+]);
 
 const WORKSPACE_REFERENCE =
   /\b(?:workspace|repo(?:sitory)?|codebase|project|projeto|src|source tree|working tree|arquivo(?:s)?|file(?:s)?|diret[oó]rio|directory|pasta|module|m[oó]dulo)\b/i;
@@ -27,7 +30,7 @@ const PATH_LIKE =
 const READ_ONLY_COMMAND =
   /^(?:(?:rtk\s+)?(?:pwd|ls|tree|rg|grep|find|cat|head|tail|wc|file|stat)\b|git\s+(?:status|diff|log|show|branch\b|rev-parse\b|ls-files\b)|sed\s+-n\b)/i;
 const SHELL_CONTROL_OR_WRITE =
-  /(?:[;&|><`]|\$\(|\b(?:rm|mv|cp|mkdir|touch|truncate|tee|chmod|chown|sed\s+-i|perl\s+-pi|git\s+(?:checkout|switch|reset|clean|commit|merge|rebase|apply)|npm\s+(?:install|uninstall|update)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install))\b)/i;
+  /(?:[\r\n;&|><`]|\$\(|\b(?:rm|mv|cp|mkdir|touch|truncate|tee|chmod|chown|sed\s+-i|perl\s+-pi|git\s+(?:checkout|switch|reset|clean|commit|merge|rebase|apply)|npm\s+(?:install|uninstall|update)|pnpm\s+(?:add|remove|install)|yarn\s+(?:add|remove|install))\b)/i;
 
 export class ToolEnforcementError extends ToolProtocolError {
   readonly code = 'tool_required_but_not_called';
@@ -58,6 +61,7 @@ function toolDescriptor(tool: CanonicalFunctionTool): string {
 }
 
 function isDedicatedExplorationTool(tool: CanonicalFunctionTool): boolean {
+  if (isMixedShellTool(tool) || tool.name === 'kitt_runtime' || isDedicatedMutationTool(tool)) return false;
   const descriptor = toolDescriptor(tool);
   return EXPLORATION_NAME.test(tool.name)
     || /\b(?:read|list|search|grep|glob|find|inspect|lookup|query|scan)\b/i.test(descriptor);
@@ -97,7 +101,12 @@ function commandFromCall(call: OpenAiToolCall): string | undefined {
 function isReadOnlyShellCommand(command: string | undefined): boolean {
   if (!command || command.length > 8_192) return false;
   if (SHELL_CONTROL_OR_WRITE.test(command)) return false;
-  return READ_ONLY_COMMAND.test(command.trim());
+  const normalized = command.trim().replace(/^rtk\s+(?:proxy\s+)?/i, '');
+  if (/(?:^|\s)(?:-delete|-exec(?:dir)?|-ok(?:dir)?|-fprint\w*|--pre(?:=|\s)|--hostname-bin(?:=|\s)|--output(?:=|\s))/.test(normalized)) return false;
+  if (/^git\s+branch\b/i.test(normalized)) {
+    return /^git\s+branch(?:\s+(?:--list|--show-current|-a|-r|-v|-vv))*\s*$/i.test(normalized);
+  }
+  return READ_ONLY_COMMAND.test(normalized);
 }
 
 function isMutatingShellCommand(command: string | undefined): boolean {
@@ -143,7 +152,7 @@ export function buildToolEnforcementPlan(
 
   const workspaceDependent = isWorkspaceDependentRequest(latestUserText);
   const explorationTools = plan.tools.filter((tool) =>
-    isDedicatedExplorationTool(tool) || isMixedShellTool(tool)
+    isDedicatedExplorationTool(tool) || isMixedShellTool(tool) || tool.name === 'kitt_runtime'
   );
 
   const requireExploration = explorationTools.length > 0 && workspaceDependent;
@@ -164,9 +173,16 @@ export function isExplorationToolCall(
 ): boolean {
   const tool = plan.tools.find((candidate) => candidate.name === call.function.name);
   if (!tool) return false;
-  if (isDedicatedExplorationTool(tool)) return true;
+  if (tool.name === 'kitt_runtime') {
+    const args = parseArguments(call);
+    if (RUNTIME_EXPLORATION.has(String(args?.operation))) return true;
+    if (args?.operation !== 'process.run') return false;
+    return isReadOnlyShellCommand(commandFromCall({
+      ...call, function: { ...call.function, arguments: JSON.stringify(args.arguments ?? {}) }
+    }));
+  }
   if (isMixedShellTool(tool)) return isReadOnlyShellCommand(commandFromCall(call));
-  return false;
+  return isDedicatedExplorationTool(tool);
 }
 
 export function isMutationToolCall(
@@ -175,6 +191,7 @@ export function isMutationToolCall(
 ): boolean {
   const tool = plan.tools.find((candidate) => candidate.name === call.function.name);
   if (!tool) return false;
+  if (tool.name === 'kitt_runtime') return !isExplorationToolCall(call, plan);
   if (isDedicatedMutationTool(tool)) return true;
   if (isMixedShellTool(tool)) return isMutatingShellCommand(commandFromCall(call));
   return false;
@@ -207,7 +224,7 @@ export function enforceToolResponse(input: {
     }
 
     const explorationCalls = calls.filter((call) => isExplorationToolCall(call, protocol));
-    if (explorationCalls.length === 0) {
+    if (explorationCalls.length === 0 || explorationCalls.length !== calls.length) {
       throw new ToolEnforcementError(
         `The task depends on the workspace. Call an exploration tool before producing a final answer. Available exploration tools: ${enforcement.explorationToolNames.join(', ') || '(none)'}.`,
         'exploration_required'

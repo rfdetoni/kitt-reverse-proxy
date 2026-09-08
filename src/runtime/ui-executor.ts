@@ -28,7 +28,6 @@ import {
   computeDeltas,
   deltaFromCumulative,
   selectMinimalUiPrompts,
-  historyFingerprint,
   historyIsPrefix,
   userTurnsAreCompatible,
   type CanonicalMessage
@@ -358,7 +357,7 @@ export class UiChatExecutor implements ChatExecutor {
     const incoming = canonicalMessages(body);
     if (!incoming.length) throw new UiAutomationError('Nenhuma mensagem textual utilizável foi recebida.');
 
-    const fingerprint = historyFingerprint(incoming);
+    const fingerprint = JSON.stringify(body);
     if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) {
       return this.lastResult;
     }
@@ -367,6 +366,7 @@ export class UiChatExecutor implements ChatExecutor {
     const incomingUserTurns = incoming.filter((message) => message.role === 'user').length;
     if (
       incoming.length > 1
+      && incomingUserTurns > 0
       && this.history.length
       && (
         !userTurnsAreCompatible(this.history, incoming)
@@ -392,14 +392,17 @@ export class UiChatExecutor implements ChatExecutor {
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
     const protocolFingerprint = toolProtocolFingerprint(plan);
     const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
-    const currentTaskKey = toolEnforcementTaskKey(incoming);
+    const currentTaskKey = selectedPrompt.role === 'tool'
+      ? this.enforcementTaskKey
+      : toolEnforcementTaskKey(incoming);
     if (currentTaskKey !== this.enforcementTaskKey) {
       this.enforcementTaskKey = currentTaskKey;
       this.explorationEvidence = false;
       this.toolEvidence = false;
       this.explorationCallIds.clear();
     }
-    const latestUserText = [...incoming].reverse().find((message) => message.role === 'user')?.text ?? '';
+    const latestUserText = [...incoming].reverse().find((message) => message.role === 'user')?.text
+      ?? [...this.history].reverse().find((message) => message.role === 'user')?.text ?? '';
     const enforcement: ToolEnforcementPlan = buildToolEnforcementPlan(
       plan,
       latestUserText,
@@ -412,16 +415,19 @@ export class UiChatExecutor implements ChatExecutor {
         const rememberedName = toolPrompt.toolCallId
           ? this.toolNamesByCallId.get(toolPrompt.toolCallId)
           : undefined;
-        if (toolPrompt.toolCallId && !rememberedName && !toolPrompt.toolName) {
+        if (toolPrompt.toolCallId && !rememberedName) {
           throw new ToolProtocolError(
             `tool_call_id desconhecido para esta conversa: ${toolPrompt.toolCallId}`
           );
+        }
+        if (rememberedName && toolPrompt.toolName && rememberedName !== toolPrompt.toolName) {
+          throw new ToolProtocolError('tool_call_id não corresponde ao nome da function.');
         }
         const toolName = toolPrompt.toolName || rememberedName;
         if (toolName && plan.tools.length && !plan.tools.some((tool) => tool.name === toolName)) {
           throw new ToolProtocolError(`Resultado recebido para function não disponível: ${toolName}`);
         }
-        this.toolEvidence = true;
+        if (rememberedName) this.toolEvidence = true;
         if (toolPrompt.toolCallId && this.explorationCallIds.has(toolPrompt.toolCallId)) {
           this.explorationEvidence = true;
         }
@@ -443,6 +449,9 @@ export class UiChatExecutor implements ChatExecutor {
     }
     if (!plan.systemPrompt && this.systemContextWasEnabled) {
       prefix = `[API SYSTEM CONTEXT UPDATE]\nThe previous API system context is no longer active for this turn. Follow the current user request without that prior API system context.\n[END API SYSTEM CONTEXT UPDATE]\n\n${prefix}`;
+    }
+    if (protocolEnabled && protocolFingerprint === this.protocolFingerprint) {
+      prefix += 'Print any requested tool calls as visible <tool_call>{"name":"allowed_name","arguments":{}}</tool_call> blocks. The external agent executes them; stop and wait for its tool_result.\n\n';
     }
     if (structured) {
       prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
@@ -473,7 +482,7 @@ export class UiChatExecutor implements ChatExecutor {
     // Check if the chat generated artifacts/files (e.g. Canvas or download buttons) that were not inlined
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
     const artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
-    if (artifacts.length > 0) {
+    if (!protocolEnabled && artifacts.length > 0) {
       const artifactBlocks = artifacts
         .filter((art) => !textToParse.includes(art.code))
         .map((art) => {

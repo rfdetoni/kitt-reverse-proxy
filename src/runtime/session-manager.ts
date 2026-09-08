@@ -205,7 +205,7 @@ export class SessionManager {
   }
 
   private async create(id: string): Promise<ManagedSession> {
-    if (this.sessions.size >= this.options.config.maxSessions) throw new SessionLimitExceededError();
+    if (this.sessions.size + this.creating.size >= this.options.config.maxSessions) throw new SessionLimitExceededError();
     const result = await this.options.factory!(id);
     const now = Date.now();
     const session: ManagedSession = {

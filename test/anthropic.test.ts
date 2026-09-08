@@ -3,7 +3,8 @@ import test from 'node:test';
 
 import {
   anthropicBodyToChat,
-  completionToAnthropic
+  completionToAnthropic,
+  AnthropicStreamWriter
 } from '../src/proxy/anthropic.js';
 
 test('Anthropic system/user maps to canonical chat', () => {
@@ -83,4 +84,30 @@ test('OpenAI tool call maps to Anthropic tool_use', () => {
   assert.equal(result.stop_reason, 'tool_use');
   assert.equal((result.content as any[])[0].type, 'tool_use');
   assert.equal((result.content as any[])[0].name, 'read_file');
+});
+
+test('Anthropic parallel tool restriction is preserved', () => {
+  const body = anthropicBodyToChat({
+    messages: [{ role: 'user', content: 'inspect' }],
+    tool_choice: { type: 'auto', disable_parallel_tool_use: true }
+  });
+  assert.equal(body.parallel_tool_calls, false);
+});
+
+test('Anthropic streaming starts text once and never replays emitted deltas', () => {
+  let output = '';
+  const writer = new AnthropicStreamWriter({
+    status() { return this; }, setHeader() {}, flushHeaders() {},
+    write(chunk: string) { output += chunk; return true; }, end() {}
+  } as never, 'claude-web');
+  writer.delta('hel');
+  writer.delta('lo');
+  writer.finish({
+    id: 'test', object: 'chat.completion', created: 1, model: 'claude-web',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'hello world' }, finish_reason: 'stop' }]
+  }, ['hello', ' world']);
+  const events = output.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
+  assert.equal(events.filter((event) => event.type === 'content_block_start').length, 1);
+  assert.equal(events.filter((event) => event.type === 'content_block_delta').map((event) => event.delta.text).join(''), 'hello world');
+  assert.equal(events.at(-1).type, 'message_stop');
 });

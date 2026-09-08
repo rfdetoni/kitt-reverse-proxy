@@ -138,3 +138,17 @@ test('required and forced tool choices are enforced', async () => {
     id: 'call_1', type: 'function', function: { name: 'other', arguments: '{}' }
   }] as any), ToolProtocolError);
 });
+
+test('mixed invalid tool batches fail atomically and overlong names are rejected', async () => {
+  const { buildToolProtocolPlan, ToolProtocolError, formatApiDirective } = await import('../src/mapping/tool-calling.js');
+  const plan = buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'read_file' } }] });
+  assert.throws(() => extractToolCalls(JSON.stringify({ tool_calls: [
+    { name: 'read_file', arguments: { path: 'README.md' } },
+    { name: 'unknown', arguments: {} }
+  ] }), plan), ToolProtocolError);
+  assert.throws(() => buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'x'.repeat(65) } }] }), ToolProtocolError);
+  assert.equal(formatApiDirective(buildToolProtocolPlan({})), '');
+  assert.match(formatApiDirective(plan), /PRINT.*visible assistant reply/);
+  const plain = '{"arguments":{"summary":"ordinary JSON content"}}';
+  assert.deepEqual(extractToolCalls(plain, plan), { content: plain });
+});

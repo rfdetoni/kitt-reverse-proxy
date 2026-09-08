@@ -128,6 +128,10 @@ export function anthropicBodyToChat(value: unknown): JsonObject {
 
   const tools = toolsToOpenAi(body.tools);
   const toolChoice = toolChoiceToOpenAi(body.tool_choice);
+  const disableParallel = record(body.tool_choice)?.disable_parallel_tool_use;
+  if (disableParallel !== undefined && typeof disableParallel !== 'boolean') {
+    throw new Error('Anthropic disable_parallel_tool_use deve ser boolean.');
+  }
 
   return {
     model: typeof body.model === 'string' ? body.model : '',
@@ -137,7 +141,8 @@ export function anthropicBodyToChat(value: unknown): JsonObject {
     ...(typeof body.top_p === 'number' ? { top_p: body.top_p } : {}),
     ...(body.stream === true ? { stream: true } : {}),
     ...(tools?.length ? { tools } : {}),
-    ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {})
+    ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    ...(disableParallel !== undefined ? { parallel_tool_calls: !disableParallel } : {})
   };
 }
 
@@ -195,7 +200,8 @@ export function sendAnthropicError(
 
 export class AnthropicStreamWriter {
   private started = false;
-  private index = 0;
+  private textStarted = false;
+  private accumulated = '';
   private readonly messageId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
 
   constructor(private readonly res: Response, private readonly model: string) {}
@@ -230,13 +236,15 @@ export class AnthropicStreamWriter {
   delta(text: string): void {
     if (!text) return;
     this.begin();
-    if (this.index === 0) {
+    if (!this.textStarted) {
+      this.textStarted = true;
       this.event('content_block_start', {
         type: 'content_block_start',
         index: 0,
         content_block: { type: 'text', text: '' }
       });
     }
+    this.accumulated += text;
     this.event('content_block_delta', {
       type: 'content_block_delta',
       index: 0,
@@ -251,12 +259,9 @@ export class AnthropicStreamWriter {
     const toolCalls = message?.tool_calls || [];
     let contentIndex = 0;
 
-    if (text) {
-      if (fallbackDeltas.length) {
-        for (const delta of fallbackDeltas) this.delta(delta);
-      } else {
-        this.delta(text);
-      }
+    if (text || this.textStarted) {
+      if (!this.accumulated) this.delta(text);
+      else if (text.startsWith(this.accumulated)) this.delta(text.slice(this.accumulated.length));
       this.event('content_block_stop', {
         type: 'content_block_stop',
         index: contentIndex

@@ -68,3 +68,22 @@ test('session manager creates isolated named sessions and enforces max', async (
     await manager.close();
   }
 });
+
+test('concurrent creation reserves capacity before awaiting browser startup', async () => {
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  let creations = 0;
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'), provider: 'chatgpt', config,
+    factory: async (id) => { creations += 1; await ready; return { executor: executor(id) }; }
+  });
+  const first = manager.execute('A1', { messages: [{ role: 'user', content: 'first' }] });
+  try {
+    await assert.rejects(manager.execute('B2', { messages: [{ role: 'user', content: 'second' }] }), SessionLimitExceededError);
+    assert.equal(creations, 1);
+  } finally {
+    release();
+    await first;
+    await manager.close();
+  }
+});

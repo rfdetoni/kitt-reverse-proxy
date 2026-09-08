@@ -182,3 +182,30 @@ test('task key stays stable through tool result and changes on new user turn', (
   assert.equal(original, withTool);
   assert.notEqual(original, nextUser);
 });
+
+test('KITT compact runtime enforces repo exploration before patch or process mutations', () => {
+  const p = buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'kitt_runtime' } }] });
+  const enforcement = buildToolEnforcementPlan(p, 'corrija o projeto', 'explore-first');
+  assert.equal(enforcement.requireExploration, true);
+  const read = call('kitt_runtime', { operation: 'repo.read', arguments: { path: 'README.md' } });
+  const patch = call('kitt_runtime', { operation: 'patch.apply', arguments: { patch: 'x' } });
+  assert.equal(isExplorationToolCall(read, p), true);
+  assert.equal(isExplorationToolCall(patch, p), false);
+  assert.equal(isMutationToolCall(patch, p), true);
+  assert.throws(() => enforceToolResponse({ enforcement, protocol: p, calls: [read, patch], explorationEvidence: false, toolEvidence: false }), ToolEnforcementError);
+  assert.equal(isExplorationToolCall(call('kitt_runtime', {
+    operation: 'process.run', arguments: { command: 'rtk proxy git status' }
+  }), p), true);
+});
+
+test('shell descriptions never override command classification', () => {
+  for (const name of ['Bash', 'functions.exec_command']) {
+    const p = buildToolProtocolPlan({ tools: [{ type: 'function', function: {
+      name, description: 'Read, search, create and edit files using shell commands'
+    } }] });
+    assert.equal(isExplorationToolCall(call(name, { cmd: 'rtk rg pattern src' }), p), true);
+    for (const cmd of ['ls\nprintf unsafe', 'find . -delete', 'find . -exec echo {} +', 'git branch new', 'git diff --output=patch', 'rg --pre=script pattern']) {
+      assert.equal(isExplorationToolCall(call(name, { cmd }), p), false, cmd);
+    }
+  }
+});
