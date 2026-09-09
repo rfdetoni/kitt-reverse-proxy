@@ -8,15 +8,26 @@ import { ProviderNoImageSupportError } from '../src/runtime/multimodal.js';
 import { UiChatExecutor } from '../src/runtime/ui-executor.js';
 import { detectProvider } from '../src/providers/catalog.js';
 import type { LiveBrowserSession } from '../src/types.js';
-import type { AppConfig, ChatExecutor, JsonObject } from '../src/types.js';
+import type {
+  AppConfig,
+  ChatExecutionOptions,
+  ChatExecutor,
+  JsonObject
+} from '../src/types.js';
 
-function createMockExecutor(name: string, handler?: (body: JsonObject) => JsonObject | Promise<JsonObject>): ChatExecutor {
+function createMockExecutor(
+  name: string,
+  handler?: (
+    body: JsonObject,
+    options?: ChatExecutionOptions
+  ) => JsonObject | Promise<JsonObject>
+): ChatExecutor {
   return {
     modelId: name,
     transport: 'ui',
-    async execute(body: JsonObject) {
+    async execute(body: JsonObject, options?: ChatExecutionOptions) {
       if (handler) {
-        const res = await handler(body);
+        const res = await handler(body, options);
         return {
           completion: {
             id: 'mock-cmpl',
@@ -127,10 +138,14 @@ test('UI protocol retries premature final answers and completes an API tool roun
   }
 });
 
-test('proxy server handles session header, request ID, metrics, errors and limits', async () => {
+test('proxy server handles session header, native reasoning, request ID, metrics, errors and limits', async () => {
   let createdNamedCount = 0;
+  let receivedReasoning: number | undefined;
   const manager = new SessionManager({
-    defaultExecutor: createMockExecutor('default-model'),
+    defaultExecutor: createMockExecutor('default-model', (_body, options) => {
+      receivedReasoning = options?.reasoningEffort;
+      return {};
+    }),
     provider: 'chatgpt',
     config: baseConfig,
     factory: async (id) => {
@@ -147,10 +162,14 @@ test('proxy server handles session header, request ID, metrics, errors and limit
   try {
     const res1 = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Kitt-Reasoning-Effort': '80'
+      },
       body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
     });
     assert.equal(res1.status, 200);
+    assert.equal(receivedReasoning, 80);
     const reqId1 = res1.headers.get('X-Kitt-Request-Id');
     assert(reqId1 && reqId1.length > 0);
     assert.equal(createdNamedCount, 0);
@@ -168,6 +187,17 @@ test('proxy server handles session header, request ID, metrics, errors and limit
     assert.equal(res2.status, 200);
     assert.equal(res2.headers.get('X-Kitt-Request-Id'), customReqId);
     assert.equal(createdNamedCount, 1);
+
+    const resInvalidReasoning = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Kitt-Reasoning-Effort': '101'
+      },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'invalid reasoning' }] })
+    });
+    assert.equal(resInvalidReasoning.status, 400);
+    assert.equal((await resInvalidReasoning.json() as any).error.code, 'invalid_reasoning_effort');
 
     const resInvalidSess = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',

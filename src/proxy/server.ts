@@ -24,6 +24,12 @@ import {
 import { ProviderNoImageSupportError, ImageInputError } from '../runtime/multimodal.js';
 import { ToolParseFailedError } from '../runtime/tool-response.js';
 import { ToolEnforcementError } from '../runtime/tool-enforcement.js';
+import {
+  InvalidReasoningEffortError,
+  ReasoningLevelUnavailableError,
+  ReasoningNotSupportedError,
+  parseReasoningEffortHeader
+} from '../runtime/reasoning.js';
 import { runWithRequestContext } from '../util/request-context.js';
 import { telemetry } from '../util/telemetry.js';
 import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../types.js';
@@ -59,6 +65,11 @@ function statusForError(error: unknown): number {
   if (error instanceof SessionLimitExceededError) return 429;
   if (error instanceof InvalidSessionIdError || error instanceof SessionNotSupportedError) return 400;
   if (error instanceof ProviderNoImageSupportError || error instanceof ImageInputError) return 400;
+  if (
+    error instanceof InvalidReasoningEffortError
+    || error instanceof ReasoningNotSupportedError
+    || error instanceof ReasoningLevelUnavailableError
+  ) return 400;
   if (error instanceof ToolEnforcementError || error instanceof ToolParseFailedError) return 502;
   if (error instanceof ToolProtocolError) return error.source === 'request' ? 400 : 502;
   if (error instanceof ConversationStateConflictError) return 409;
@@ -80,6 +91,9 @@ function codeForError(error: unknown): string {
   if (error instanceof SessionNotSupportedError) return 'session_not_supported';
   if (error instanceof ProviderNoImageSupportError) return 'provider_no_image_support';
   if (error instanceof ImageInputError) return 'image_input_error';
+  if (error instanceof InvalidReasoningEffortError) return 'invalid_reasoning_effort';
+  if (error instanceof ReasoningNotSupportedError) return 'reasoning_not_supported';
+  if (error instanceof ReasoningLevelUnavailableError) return 'reasoning_level_unavailable';
   if (error instanceof ToolEnforcementError) return 'tool_required_but_not_called';
   if (error instanceof ToolParseFailedError) return 'tool_parse_failed';
   if (error instanceof ToolProtocolError) return error.source === 'request'
@@ -219,6 +233,9 @@ export async function startProxyServer(input: {
           native_tool_roundtrip: true,
           session_header: 'X-Kitt-Session-Id',
           request_id_header: 'X-Kitt-Request-Id',
+          reasoning_header: 'X-Kitt-Reasoning-Effort',
+          reasoning_range: [0, 100],
+          reasoning_dynamic: true,
           parallel_tool_calls_recommended: false
         }
       }
@@ -308,6 +325,9 @@ export async function startProxyServer(input: {
         native_tool_roundtrip: true,
         session_header: 'X-Kitt-Session-Id',
         request_id_header: 'X-Kitt-Request-Id',
+        reasoning_header: 'X-Kitt-Reasoning-Effort',
+        reasoning_range: [0, 100],
+        reasoning_dynamic: true,
         parallel_tool_calls_recommended: false
       },
       image_input: {
@@ -424,15 +444,22 @@ export async function startProxyServer(input: {
   app.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
       const sessionId = req.get('x-kitt-session-id');
+      const reasoningEffort = parseReasoningEffortHeader(
+        req.get('x-kitt-reasoning-effort')
+      );
       const body = validateChatBody(req.body);
       const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
       if (body.stream === true) {
         const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
         const writer = new ChatStreamWriter(res, model);
+        const executionOptions: ChatExecutionOptions = {
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
+        };
         const result = await execute(
           sessionId,
           body,
-          bufferTools ? undefined : { onDelta: (delta) => writer.delta(delta) }
+          executionOptions
         );
         if (result.metadata?.structured_output === 'failed') {
           res.setHeader('X-Kitt-Structured-Output', 'failed');
@@ -440,7 +467,11 @@ export async function startProxyServer(input: {
         const completion = adaptCompletionForLegacyFunctions(result.completion, body);
         writer.finish(completion, bufferTools ? [] : result.deltas);
       } else {
-        const result = await execute(sessionId, body);
+        const result = await execute(
+          sessionId,
+          body,
+          reasoningEffort === undefined ? undefined : { reasoningEffort }
+        );
         if (result.metadata?.structured_output === 'failed') {
           res.setHeader('X-Kitt-Structured-Output', 'failed');
         }

@@ -210,6 +210,7 @@ export interface UpstreamResult {
 
 export interface ChatExecutionOptions {
   onDelta?: (delta: string) => void | Promise<void>;
+  reasoningEffort?: number;
 }
 
 export interface ChatExecutionResult {

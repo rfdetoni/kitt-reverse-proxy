@@ -44,6 +44,7 @@ import {
 } from './structured-output.js';
 import { uploadImagesFromBody } from './multimodal.js';
 import { telemetry } from '../util/telemetry.js';
+import { applyReasoningEffort } from './reasoning.js';
 import {
   ToolEnforcementError,
   buildToolEnforcementDirective,
@@ -357,7 +358,10 @@ export class UiChatExecutor implements ChatExecutor {
     const incoming = canonicalMessages(body);
     if (!incoming.length) throw new UiAutomationError('Nenhuma mensagem textual utilizável foi recebida.');
 
-    const fingerprint = JSON.stringify(body);
+    const fingerprint = JSON.stringify({
+      body,
+      reasoningEffort: options?.reasoningEffort ?? null
+    });
     if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) {
       return this.lastResult;
     }
@@ -375,6 +379,14 @@ export class UiChatExecutor implements ChatExecutor {
     ) {
       logger.info('Novo histórico de conversa detectado pelo cliente API. Executando reset automático da sessão browser...');
       await this.reset();
+    }
+
+    if (options?.reasoningEffort !== undefined) {
+      await applyReasoningEffort(
+        this.session.page,
+        this.provider,
+        options.reasoningEffort
+      );
     }
 
     const pending = this.pendingMessages(incoming);
@@ -584,6 +596,15 @@ export class UiChatExecutor implements ChatExecutor {
       persistentSession: this.session.persistent,
       manualChallengeHandling: true,
       progressiveUiStreaming: true,
+      reasoning: this.provider.id === 'chatgpt'
+        ? {
+            supported: true,
+            dynamic: true,
+            header: 'X-Kitt-Reasoning-Effort',
+            range: [0, 100],
+            levels: ['instant', 'medium', 'high', 'extra_high']
+          }
+        : { supported: false },
       toolCalling: 'protocol-emulated',
       toolExecution: 'client-side',
       toolEnforcement: this.config.toolEnforcement ?? 'explore-first'
