@@ -49,6 +49,7 @@ export interface SessionInfo {
 }
 
 export interface SessionCapacitySnapshot {
+  provider: string;
   active: number;
   named: number;
   busy: number;
@@ -194,6 +195,7 @@ export class SessionManager {
         && session.queue.depth === 0
     ).length;
     return {
+      provider: this.options.provider,
       active: values.length,
       named: values.filter((session) => !session.isDefault).length,
       busy,
