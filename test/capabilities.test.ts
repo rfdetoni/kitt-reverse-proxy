@@ -68,6 +68,7 @@ test('publishes live session capacity through discovery, capabilities and status
     const capabilities = await (await fetch(`${baseUrl}/v1/capabilities`)).json() as any;
     const sessionContract = capabilities.kitt_agent_cli.session_management;
     assert.equal(sessionContract.version, 1);
+    assert.equal(sessionContract.provider, 'chatgpt');
     assert.equal(sessionContract.header, 'X-Kitt-Session-Id');
     assert.equal(sessionContract.active, 2);
     assert.equal(sessionContract.named, 1);
