@@ -113,6 +113,10 @@ export class SessionManager {
     return this.sessions.get('default')!.executor.transport;
   }
 
+  get providerId(): string {
+    return this.options.provider;
+  }
+
   normalizeSessionId(value: string | undefined): string {
     if (value === undefined || value === '') return 'default';
     if (value === 'default') return 'default';
