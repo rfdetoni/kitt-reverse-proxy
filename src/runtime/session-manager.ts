@@ -144,6 +144,7 @@ export class SessionManager {
     if (id === 'default') return false;
     const session = this.sessions.get(id);
     if (!session) return false;
+    if (session.status === 'busy' || session.queue.depth > 0) return false;
     session.status = 'closing';
     this.sessions.delete(id);
     await session.browserSession?.close().catch(() => undefined);
@@ -177,13 +178,19 @@ export class SessionManager {
       && session.queue.depth === 0
       && now - session.lastActivity >= timeout
     );
-    await Promise.all(stale.map((session) => this.delete(session.id)));
+    for (const session of stale) {
+      await this.delete(session.id);
+    }
   }
 
   async close(): Promise<void> {
     clearInterval(this.timer);
     const named = [...this.sessions.values()].filter((session) => !session.isDefault);
-    await Promise.all(named.map((session) => this.delete(session.id)));
+    for (const session of named) {
+      if (session.status !== 'busy' && session.queue.depth === 0) {
+        await this.delete(session.id);
+      }
+    }
   }
 
   private async resolve(requestedId: string | undefined): Promise<ManagedSession> {
@@ -205,7 +212,7 @@ export class SessionManager {
   }
 
   private async create(id: string): Promise<ManagedSession> {
-    if (this.sessions.size + this.creating.size >= this.options.config.maxSessions) throw new SessionLimitExceededError();
+    await this.ensureCapacity();
     const result = await this.options.factory!(id);
     const now = Date.now();
     const session: ManagedSession = {
@@ -223,5 +230,27 @@ export class SessionManager {
     telemetry.sessionCreated();
     telemetry.setSessionsActive(this.sessions.size);
     return session;
+  }
+
+  private async ensureCapacity(): Promise<void> {
+    if (this.sessions.size + this.creating.size < this.options.config.maxSessions) return;
+
+    const candidate = [...this.sessions.values()]
+      .filter((session) =>
+        !session.isDefault
+        && session.status === 'idle'
+        && session.queue.depth === 0
+      )
+      .sort((left, right) =>
+        left.lastActivity - right.lastActivity || left.createdAt - right.createdAt
+      )[0];
+
+    if (!candidate || !(await this.delete(candidate.id))) {
+      throw new SessionLimitExceededError();
+    }
+
+    if (this.sessions.size + this.creating.size >= this.options.config.maxSessions) {
+      throw new SessionLimitExceededError();
+    }
   }
 }
