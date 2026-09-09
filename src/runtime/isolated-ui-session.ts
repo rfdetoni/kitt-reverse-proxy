@@ -21,7 +21,7 @@ export async function createIsolatedUiSession(
     const session: LiveBrowserSession = {
       context: base.context,
       page,
-      browser: base.browser,
+      ...(base.browser ? { browser: base.browser } : {}),
       persistent: true,
       headed,
       async close(): Promise<void> {
