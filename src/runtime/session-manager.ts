@@ -48,6 +48,20 @@ export interface SessionInfo {
   status: 'idle' | 'busy' | 'closing';
 }
 
+export interface SessionCapacitySnapshot {
+  active: number;
+  named: number;
+  busy: number;
+  idle: number;
+  pending_creation: number;
+  recyclable_idle_named: number;
+  max: number;
+  idle_timeout_ms: number;
+  eviction: 'lru_idle';
+  accepts_named_sessions: boolean;
+  shutting_down: boolean;
+}
+
 interface ManagedSession {
   id: string;
   provider: string;
@@ -160,6 +174,34 @@ export class SessionManager {
         ultima_atividade: new Date(session.lastActivity).toISOString(),
         status: session.status
       }));
+  }
+
+  capacity(): SessionCapacitySnapshot {
+    const values = [...this.sessions.values()];
+    const busy = values.filter(
+      (session) => session.status === 'busy' || session.queue.depth > 0
+    ).length;
+    const idle = values.filter(
+      (session) => session.status === 'idle' && session.queue.depth === 0
+    ).length;
+    const recyclable = values.filter(
+      (session) => !session.isDefault
+        && session.status === 'idle'
+        && session.queue.depth === 0
+    ).length;
+    return {
+      active: values.length,
+      named: values.filter((session) => !session.isDefault).length,
+      busy,
+      idle,
+      pending_creation: this.creating.size,
+      recyclable_idle_named: recyclable,
+      max: this.options.config.maxSessions,
+      idle_timeout_ms: this.options.config.sessionIdleTimeoutMs,
+      eviction: 'lru_idle',
+      accepts_named_sessions: Boolean(this.options.factory),
+      shutting_down: this.closed
+    };
   }
 
   queueDepth(requestedId?: string): number {
