@@ -248,9 +248,5 @@ export class SessionManager {
     if (!candidate || !(await this.delete(candidate.id))) {
       throw new SessionLimitExceededError();
     }
-
-    if (this.sessions.size + this.creating.size >= this.options.config.maxSessions) {
-      throw new SessionLimitExceededError();
-    }
   }
 }
