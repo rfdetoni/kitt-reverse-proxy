@@ -425,14 +425,13 @@ kitt-reverse-proxy https://site.example/chat --transport network
 
 O fluxo tenta capturar/identificar um endpoint legítimo do chat.
 
-### Sem modelo Ollama
+### Sem modelo LLM local (padrão)
 
-R11 não possui mais modelo hardcoded.
+O `kitt-reverse-proxy` não exige nenhum modelo LLM local para operar:
+- Para presets conhecidos (ChatGPT, Claude, Gemini, Kimi, DeepSeek), usa UI transport diretamente no navegador.
+- Para chats genéricos/network transport, usa o profile heurístico determinístico nativo sem necessidade de LLM local.
 
-Se nenhum mapping model estiver configurado, o proxy pula Ollama e usa o
-profile heurístico determinístico.
-
-### Com Ollama explicitamente
+### Com Ollama opcional para mapping customizado
 
 ```bash
 export OLLAMA_MODEL="<modelo-local>"

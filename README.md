@@ -89,7 +89,7 @@ Os seletores UI são fallbacks heurísticos centralizados em `src/providers/cata
 - Node.js 20+
 - npm
 - Chromium do Playwright
-- Ollama local apenas para **network transport** sem `--profile`
+
 
 ## Instalação
 
