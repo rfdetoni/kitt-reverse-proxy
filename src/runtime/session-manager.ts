@@ -64,6 +64,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
   private readonly timer: NodeJS.Timeout;
+  private closed = false;
 
   constructor(private readonly options: {
     defaultExecutor: ChatExecutor;
@@ -145,11 +146,7 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return false;
     if (session.status === 'busy' || session.queue.depth > 0) return false;
-    session.status = 'closing';
-    this.sessions.delete(id);
-    await session.browserSession?.close().catch(() => undefined);
-    telemetry.sessionEvicted();
-    telemetry.setSessionsActive(this.sessions.size);
+    await this.removeSession(session);
     return true;
   }
 
@@ -171,6 +168,7 @@ export class SessionManager {
   }
 
   async sweepIdle(now = Date.now()): Promise<void> {
+    if (this.closed) return;
     const timeout = this.options.config.sessionIdleTimeoutMs;
     const stale = [...this.sessions.values()].filter((session) =>
       !session.isDefault
@@ -184,16 +182,23 @@ export class SessionManager {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
     clearInterval(this.timer);
-    const named = [...this.sessions.values()].filter((session) => !session.isDefault);
-    for (const session of named) {
-      if (session.status !== 'busy' && session.queue.depth === 0) {
-        await this.delete(session.id);
+
+    await Promise.allSettled([...this.creating.values()]);
+    const snapshot = [...this.sessions.values()];
+    await Promise.all(snapshot.map((session) => session.queue.drain()));
+
+    for (const session of snapshot) {
+      if (!session.isDefault && this.sessions.get(session.id) === session) {
+        await this.removeSession(session);
       }
     }
   }
 
   private async resolve(requestedId: string | undefined): Promise<ManagedSession> {
+    if (this.closed) throw new SessionNotSupportedError();
     const id = this.normalizeSessionId(requestedId);
     const current = this.sessions.get(id);
     if (current) return current;
@@ -248,5 +253,13 @@ export class SessionManager {
     if (!candidate || !(await this.delete(candidate.id))) {
       throw new SessionLimitExceededError();
     }
+  }
+
+  private async removeSession(session: ManagedSession): Promise<void> {
+    session.status = 'closing';
+    this.sessions.delete(session.id);
+    await session.browserSession?.close().catch(() => undefined);
+    telemetry.sessionEvicted();
+    telemetry.setSessionsActive(this.sessions.size);
   }
 }
