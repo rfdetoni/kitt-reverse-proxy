@@ -33,4 +33,9 @@ export class SerialQueue {
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
+
+  /** Resolves once all work accepted before this call has finished. */
+  drain(): Promise<void> {
+    return this.tail;
+  }
 }
