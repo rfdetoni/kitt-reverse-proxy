@@ -157,3 +157,42 @@ test('close drains active named work before releasing its browser session', asyn
   assert.deepEqual(closed, ['a']);
   assert.deepEqual(manager.list().map((session) => session.id), ['default']);
 });
+
+test('capacity snapshot is explicit about LRU policy, pending creation and shutdown', async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const manager = new SessionManager({
+    defaultExecutor: executor(),
+    provider: 'chatgpt',
+    config: config(3),
+    factory: async (id) => ({
+      executor: executor(id === 'busy' ? async () => blocked : undefined)
+    })
+  });
+
+  const running = manager.execute('busy', {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await manager.execute('idle', {});
+
+  const snapshot = manager.capacity();
+  assert.deepEqual(snapshot, {
+    active: 3,
+    named: 2,
+    busy: 1,
+    idle: 2,
+    pending_creation: 0,
+    recyclable_idle_named: 1,
+    max: 3,
+    idle_timeout_ms: 60_000,
+    eviction: 'lru_idle',
+    accepts_named_sessions: true,
+    shutting_down: false
+  });
+
+  release();
+  await running;
+  await manager.close();
+  assert.equal(manager.capacity().shutting_down, true);
+});
