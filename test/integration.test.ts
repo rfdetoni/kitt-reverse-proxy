@@ -1,15 +1,63 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Server } from 'node:http';
-import { createProxyServer, startProxyServer } from '../src/proxy/server.js';
+import { startProxyServer } from '../src/proxy/server.js';
 import { SessionManager } from '../src/runtime/session-manager.js';
-import type { AppConfig, ChatExecutionOptions, ChatExecutor, JsonObject } from '../src/types.js';
-import { ToolProtocolError } from '../src/mapping/tool-calling.js';
-import { UiImageNotSupportedError } from '../src/runtime/multimodal.js';
+import { ToolParseFailedError } from '../src/runtime/tool-response.js';
+import { ProviderNoImageSupportError } from '../src/runtime/multimodal.js';
+import { UiChatExecutor } from '../src/runtime/ui-executor.js';
+import { detectProvider } from '../src/providers/catalog.js';
+import type { LiveBrowserSession } from '../src/types.js';
+import type {
+  AppConfig,
+  ChatExecutionOptions,
+  ChatExecutor,
+  JsonObject
+} from '../src/types.js';
+
+function createMockExecutor(
+  name: string,
+  handler?: (
+    body: JsonObject,
+    options?: ChatExecutionOptions
+  ) => JsonObject | Promise<JsonObject>
+): ChatExecutor {
+  return {
+    modelId: name,
+    transport: 'ui',
+    async execute(body: JsonObject, options?: ChatExecutionOptions) {
+      if (handler) {
+        const res = await handler(body, options);
+        return {
+          completion: {
+            id: 'mock-cmpl',
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model: name,
+            choices: [{ index: 0, message: { role: 'assistant', content: 'mock output' }, finish_reason: 'stop' }],
+            ...res
+          },
+          deltas: []
+        };
+      }
+      return {
+        completion: {
+          id: 'mock-cmpl',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: name,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'hello world' }, finish_reason: 'stop' }]
+        },
+        deltas: []
+      };
+    },
+    describe() { return { mock: true }; }
+  };
+}
 
 const baseConfig: AppConfig = {
   targetUrl: 'https://chatgpt.com/',
-  model: '',
+  model: 'gpt-4o',
   ollamaUrl: 'http://127.0.0.1:11434/api/generate',
   host: '127.0.0.1',
   port: 0,
@@ -21,88 +69,53 @@ const baseConfig: AppConfig = {
   uiResponseTimeoutMs: 1000,
   uiSettleMs: 100,
   manualInterventionTimeoutMs: 1000,
+  maxSessions: 2,
+  sessionIdleTimeoutMs: 200,
+  logFormat: 'text',
   headed: false,
   cors: false,
   maxQueue: 4,
   minIntervalMs: 0,
   allowedEndpointHosts: [],
   followRedirects: false,
-  maxSessions: 2,
-  sessionIdleTimeoutMs: 60_000,
-  logFormat: 'text',
   provider: 'chatgpt',
   transport: 'ui'
 };
 
-function createMockExecutor(
-  modelId: string,
-  handler?: (body: JsonObject, options?: ChatExecutionOptions) => JsonObject
-): ChatExecutor {
-  return {
-    modelId,
-    transport: 'ui',
-    async execute(body, options) {
-      const extras = handler?.(body, options) ?? {};
-      return {
-        completion: {
-          id: 'mock',
-          object: 'chat.completion',
-          created: 1,
-          model: modelId,
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }]
-        },
-        deltas: [],
-        metadata: extras
-      };
-    },
-    describe() { return {}; }
-  };
-}
-
 test('UI protocol retries premature final answers and completes an API tool round trip', async () => {
-  const tools = [{ type: 'function', function: { name: 'kitt_runtime', description: 'runtime', parameters: { type: 'object' } } }];
-  const answers: string[] = [];
   const prompts: string[] = [];
-  let callCount = 0;
-  const executor: ChatExecutor = {
-    modelId: 'chatgpt-web',
-    transport: 'ui',
-    async execute(body, options) {
-      const messages = body.messages as any[];
-      const latest = messages[messages.length - 1];
-      prompts.push(String(latest?.content ?? ''));
-      callCount += 1;
-      const content = callCount === 1
-        ? 'I can answer this directly.'
-        : callCount === 2
-          ? '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.search","arguments":{"query":"README"}}}</tool_call>'
-          : 'README.md describes KITT.';
-      if (options?.onDelta) await options.onDelta(content);
-      return {
-        completion: {
-          id: `mock-${callCount}`,
-          object: 'chat.completion',
-          created: 1,
-          model: 'chatgpt-web',
-          choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }]
-        },
-        deltas: [content]
-      };
-    },
-    describe() { return {}; }
-  };
-  const manager = new SessionManager({ defaultExecutor: executor, provider: 'chatgpt', config: baseConfig });
-  const server: Server = await startProxyServer({ manager, config: baseConfig });
+  const answers = [
+    'I inspected the project.',
+    '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</tool_call>',
+    'README.md describes KITT.'
+  ];
+  const ui = new UiChatExecutor({
+    page: { frames: () => [], evaluate: async () => [] }, persistent: false
+  } as unknown as LiveBrowserSession, detectProvider('https://chatgpt.com/'), baseConfig);
+  Object.assign(ui, {
+    sendPrompt: async (prompt: string) => { prompts.push(prompt); },
+    awaitResponse: async () => {
+      const text = answers.shift();
+      assert.notEqual(text, undefined, 'unexpected extra browser turn');
+      return { text, snapshots: [text] };
+    }
+  });
+  const manager = new SessionManager({ defaultExecutor: ui, provider: 'chatgpt', config: baseConfig });
+  const server = await startProxyServer({ manager, config: baseConfig });
   const address = server.address();
   assert(address && typeof address === 'object');
   const baseUrl = `http://127.0.0.1:${address.port}`;
+  const tools = [{ type: 'function', function: { name: 'kitt_runtime', parameters: {
+    type: 'object', properties: { operation: { type: 'string' }, arguments: { type: 'object' } }, required: ['operation', 'arguments']
+  } } }];
   try {
-    const first = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'Inspect the repository and answer.' }], tools, stream: true })
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'inspect this repository' }], tools, stream: true })
     });
-    assert.equal(first.status, 200);
-    const sse = await first.text();
+    assert.equal(response.status, 200);
+    const sse = await response.text();
+    assert.doesNotMatch(sse, /<tool_call>|I inspected/);
     const chunks = sse.split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
     const call = chunks.flatMap((chunk) => chunk.choices[0].delta.tool_calls ?? [])[0];
     assert.equal(call.function.name, 'kitt_runtime');
@@ -229,7 +242,25 @@ test('proxy server handles session header, native reasoning, request ID, metrics
     });
     assert.equal(metricsPromRes.status, 200);
     const metricsProm = await metricsPromRes.text();
-    assert.match(metricsProm, /kitt_proxy_requests_total/);
+    assert.match(metricsProm, /requests_total\{/);
+    assert.match(metricsProm, /sessions_active \d+/);
+
+    const sessionsRes = await fetch(`${baseUrl}/v1/kitt/sessions`);
+    const sessionsList = (await sessionsRes.json()) as any;
+    assert.equal(sessionsList.sessions.length, 2);
+
+    const delDefault = await fetch(`${baseUrl}/v1/kitt/sessions/default`, { method: 'DELETE' });
+    assert.equal(delDefault.status, 400);
+
+    const delNamed = await fetch(`${baseUrl}/v1/kitt/sessions/sess3`, { method: 'DELETE' });
+    assert.equal(delNamed.status, 200);
+    assert.equal(manager.list().length, 1);
+
+    await manager.execute('sess4', { messages: [{ role: 'user', content: 'test' }] });
+    assert.equal(manager.list().length, 2);
+    await new Promise((r) => setTimeout(r, 250));
+    await manager.sweepIdle(Date.now() + 500);
+    assert.equal(manager.list().length, 1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
@@ -237,42 +268,80 @@ test('proxy server handles session header, native reasoning, request ID, metrics
 });
 
 test('proxy server handles structured output failed header, tool parse failed and image support error', async () => {
-  const errorExecutor: ChatExecutor = {
-    modelId: 'mock',
+  let structuredFailed = false;
+  let throwToolParse = false;
+  let throwImageError = false;
+
+  const mockExec: ChatExecutor = {
+    modelId: 'test-model',
     transport: 'ui',
-    async execute(body) {
-      const marker = String((body.messages as any[])?.[0]?.content ?? '');
-      if (marker.includes('toolparse')) throw new ToolProtocolError('Could not parse tool call from model output', 'tool_parse_failed');
-      if (marker.includes('image')) throw new UiImageNotSupportedError();
+    async execute() {
+      if (throwToolParse) {
+        throw new ToolParseFailedError('Could not parse tool call from model output');
+      }
+      if (throwImageError) {
+        throw new ProviderNoImageSupportError();
+      }
       return {
         completion: {
-          id: 'x', object: 'chat.completion', created: 1, model: 'mock',
-          choices: [{ index: 0, message: { role: 'assistant', content: '{bad json' }, finish_reason: 'stop' }]
+          id: 'cmpl-1',
+          object: 'chat.completion',
+          created: 1,
+          model: 'test-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'raw output' }, finish_reason: 'stop' }]
         },
-        deltas: []
+        deltas: [],
+        metadata: structuredFailed ? { structured_output: 'failed' } : undefined
       };
     },
     describe() { return {}; }
   };
-  const manager = new SessionManager({ defaultExecutor: errorExecutor, provider: 'chatgpt', config: baseConfig });
-  const app = createProxyServer({ manager, config: baseConfig });
-  const server = app.listen(0);
-  await new Promise<void>((resolve) => server.once('listening', resolve));
+
+  const manager = new SessionManager({
+    defaultExecutor: mockExec,
+    provider: 'chatgpt',
+    config: baseConfig
+  });
+
+  const server: Server = await startProxyServer({ manager, config: baseConfig });
   const address = server.address();
   assert(address && typeof address === 'object');
   const baseUrl = `http://127.0.0.1:${address.port}`;
-  try {
-    const toolParse = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'toolparse' }], tools: [{ type: 'function', function: { name: 'x', parameters: { type: 'object' } } }] })
-    });
-    assert.equal(toolParse.status, 502);
 
-    const image = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'image' }, { role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/x.png' } }] }] })
+  try {
+    structuredFailed = true;
+    const res1 = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'give me json' }],
+        response_format: { type: 'json_object' }
+      })
     });
-    assert.equal(image.status, 400);
+    assert.equal(res1.status, 200);
+    assert.equal(res1.headers.get('X-Kitt-Structured-Output'), 'failed');
+
+    structuredFailed = false;
+    throwToolParse = true;
+    const resToolError = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'call tool' }] })
+    });
+    assert.equal(resToolError.status, 502);
+    const toolErrBody = (await resToolError.json()) as any;
+    assert.equal(toolErrBody.error?.code, 'tool_parse_failed');
+
+    throwToolParse = false;
+    throwImageError = true;
+    const resImgError = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'look at image' }] })
+    });
+    assert.equal(resImgError.status, 400);
+    const imgErrBody = (await resImgError.json()) as any;
+    assert.equal(imgErrBody.error?.code, 'provider_no_image_support');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
