@@ -38,7 +38,6 @@
   "files": [
     "dist",
     "README.md",
-    "AGENT_COMPATIBILITY.md",
     "SECURITY.md",
     "LICENSE"
   ]

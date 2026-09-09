@@ -3,6 +3,21 @@ import { resolve } from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import type { AppConfig, LiveBrowserSession } from '../types.js';
 
+const RESOURCE_SAVING_ARGS = [
+  '--no-first-run',
+  '--no-default-browser-check',
+  '--disable-default-apps',
+  '--disable-background-networking',
+  '--disable-component-update',
+  '--disable-sync',
+  '--metrics-recording-only',
+  '--mute-audio'
+] as const;
+
+export function browserLaunchArgs(): string[] {
+  return [...RESOURCE_SAVING_ARGS];
+}
+
 function firstUsablePage(context: BrowserContext): Page | undefined {
   return context.pages().find((page: Page) => !page.isClosed());
 }
@@ -23,7 +38,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     try {
       targetHostname = new URL(config.targetUrl).hostname;
     } catch {
-      // ignore invalid target; validation happens in config
+      // Config validation rejects malformed targets before runtime creation.
     }
     const matchingPage = targetHostname
       ? context.pages().find((page: Page) => !page.isClosed() && page.url().includes(targetHostname))
@@ -36,7 +51,9 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
       persistent: true,
       headed: config.headed,
       async close(): Promise<void> {
-        await browser.close().catch(() => undefined);
+        // CDP browser ownership belongs to the user. Closing the Playwright
+        // Browser object can terminate that browser, so detach by leaving the
+        // connection to be reclaimed with the proxy process instead.
       }
     };
   }
@@ -45,7 +62,8 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     const userDataDir = await prepareUserDataDir(config.userDataDir);
     const launchOptions = {
       headless: !config.headed,
-      acceptDownloads: false
+      acceptDownloads: false,
+      args: browserLaunchArgs()
     };
     const context = await chromium
       .launchPersistentContext(userDataDir, { ...launchOptions, channel: 'chrome' })
@@ -62,10 +80,14 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     };
   }
 
-  const browser = await chromium.launch({
+  const launchOptions = {
     headless: !config.headed,
+    args: browserLaunchArgs()
+  };
+  const browser = await chromium.launch({
+    ...launchOptions,
     channel: 'chrome'
-  }).catch(() => chromium.launch({ headless: !config.headed }));
+  }).catch(() => chromium.launch(launchOptions));
   const context = await browser.newContext({ acceptDownloads: false });
   const page = await context.newPage();
   return {
