@@ -6,6 +6,7 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type JsonObject = { [key: string]: JsonValue };
 
 export type TransportMode = 'auto' | 'network' | 'ui';
+export type BrowserMode = 'auto' | 'headed' | 'headless';
 export type ProviderId = 'auto' | 'generic' | 'chatgpt' | 'claude' | 'gemini' | 'kimi' | 'deepseek';
 
 export interface AppConfig {
@@ -24,6 +25,7 @@ export interface AppConfig {
   uiSettleMs: number;
   manualInterventionTimeoutMs: number;
   headed: boolean;
+  browserMode?: BrowserMode | undefined;
   cors: boolean;
   apiKey?: string;
   profilePath?: string;
@@ -66,6 +68,7 @@ export interface LiveBrowserSession {
   context: BrowserContext;
   page: Page;
   persistent: boolean;
+  headed?: boolean | undefined;
   close(): Promise<void>;
 }
 

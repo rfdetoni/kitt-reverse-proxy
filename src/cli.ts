@@ -68,7 +68,11 @@ async function main(): Promise<void> {
     logger.success(`Proxy iniciado em http://${config.host}:${config.port}`);
     logger.info('Endpoints: POST /v1/chat/completions, POST /v1/responses, GET /v1/models, GET /healthz');
     logger.info('Extensões: GET /v1/kitt/status, POST /v1/kitt/reset, GET /v1/kitt/sessions, GET /v1/kitt/metrics');
-    logger.info('A sessão do Chromium permanecerá ativa enquanto o proxy estiver rodando.');
+    logger.info(
+      runtime.session.headed
+        ? 'Chromium visível ativo enquanto o transporte UI precisar da página. Não feche essa janela.'
+        : 'Chromium headless ativo em segundo plano; nenhuma janela precisa permanecer aberta.'
+    );
 
     let shuttingDown = false;
     const shutdown = async (signal: string): Promise<void> => {

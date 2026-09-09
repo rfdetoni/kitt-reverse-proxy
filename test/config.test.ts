@@ -17,6 +17,7 @@ test('provider presets resolve target URL, UI transport and persistent profile',
   assert.equal(config.provider, 'chatgpt');
   assert.equal(config.transport, 'ui');
   assert.equal(config.apiModel, 'chatgpt-web');
+  assert.equal(config.browserMode, 'auto');
   assert.match(config.userDataDir || '', /\.kitt-reverse-proxy[\\/]chatgpt$/);
 });
 
@@ -26,6 +27,7 @@ test('optional start verb preserves preset convenience', () => {
   assert.equal(config.targetUrl, 'https://claude.ai/new');
   assert.equal(config.provider, 'claude');
   assert.equal(config.headed, false);
+  assert.equal(config.browserMode, 'headless');
 });
 
 test('explicit CLI options override preset-derived defaults', () => {

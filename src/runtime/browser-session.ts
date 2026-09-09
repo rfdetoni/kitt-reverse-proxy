@@ -34,6 +34,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
       context,
       page,
       persistent: true,
+      headed: config.headed,
       async close(): Promise<void> {
         await browser.close().catch(() => undefined);
       }
@@ -54,6 +55,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
       context,
       page,
       persistent: true,
+      headed: config.headed,
       async close(): Promise<void> {
         await context.close().catch(() => undefined);
       }
@@ -71,6 +73,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     context,
     page,
     persistent: false,
+    headed: config.headed,
     async close(): Promise<void> {
       await context.close().catch(() => undefined);
       await browser.close().catch(() => undefined);

@@ -13,12 +13,13 @@ export async function createIsolatedUiSession(
   const storageState = await base.context.storageState({ indexedDB: true });
   let ownedBrowser: Browser | undefined;
   let browser = base.browser;
+  const headed = base.headed ?? config.headed;
 
   if (!browser || !browser.isConnected()) {
     ownedBrowser = await chromium.launch({
-      headless: !config.headed,
+      headless: !headed,
       channel: 'chrome'
-    }).catch(() => chromium.launch({ headless: !config.headed }));
+    }).catch(() => chromium.launch({ headless: !headed }));
     browser = ownedBrowser;
   }
 
@@ -32,6 +33,7 @@ export async function createIsolatedUiSession(
     page,
     browser,
     persistent: false,
+    headed,
     async close(): Promise<void> {
       await context.close().catch(() => undefined);
       await ownedBrowser?.close().catch(() => undefined);
