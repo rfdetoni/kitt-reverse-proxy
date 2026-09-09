@@ -122,3 +122,38 @@ test('never evicts a busy session to admit a new one', async () => {
   await running;
   await manager.close();
 });
+
+test('close drains active named work before releasing its browser session', async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const closed: string[] = [];
+
+  const manager = new SessionManager({
+    defaultExecutor: executor(),
+    provider: 'chatgpt',
+    config: config(2),
+    factory: async (id) => ({
+      executor: executor(async () => blocked),
+      browserSession: browserSession(id, closed)
+    })
+  });
+
+  const running = manager.execute('a', {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let shutdownComplete = false;
+  const shutdown = manager.close().then(() => {
+    shutdownComplete = true;
+  });
+
+  await tick();
+  assert.equal(shutdownComplete, false);
+  assert.deepEqual(closed, []);
+
+  release();
+  await running;
+  await shutdown;
+  assert.deepEqual(closed, ['a']);
+  assert.deepEqual(manager.list().map((session) => session.id), ['default']);
+});
