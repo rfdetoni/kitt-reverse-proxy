@@ -114,6 +114,32 @@ function isInvalidRequest(error: unknown, route: 'chat' | 'responses'): boolean 
   return route === 'chat' ? /Body|messages|mensagem/i.test(error.message) : /Body|input|mensagem/i.test(error.message);
 }
 
+function sessionManagementContract(manager: SessionManager) {
+  return {
+    version: 1,
+    header: 'X-Kitt-Session-Id',
+    list_endpoint: '/v1/kitt/sessions',
+    reset_endpoint: '/v1/kitt/reset',
+    delete_endpoint_template: '/v1/kitt/sessions/:id',
+    ...manager.capacity()
+  };
+}
+
+function kittAgentCliCapabilities(manager: SessionManager) {
+  const sessions = sessionManagementContract(manager);
+  return {
+    protocol: 'openai-chat-completions',
+    native_tool_roundtrip: true,
+    session_header: sessions.header,
+    request_id_header: 'X-Kitt-Request-Id',
+    reasoning_header: 'X-Kitt-Reasoning-Effort',
+    reasoning_range: [0, 100],
+    reasoning_dynamic: true,
+    session_management: sessions,
+    parallel_tool_calls_recommended: false
+  };
+}
+
 export function isTrustedBrowserOrigin(origin: string | undefined): boolean {
   if (!origin) return true;
   try {
@@ -228,16 +254,7 @@ export async function startProxyServer(input: {
         structured_output: 'best_effort',
         structured_output_retry: true,
         tool_enforcement: config.toolEnforcement ?? 'explore-first',
-        kitt_agent_cli: {
-          protocol: 'openai-chat-completions',
-          native_tool_roundtrip: true,
-          session_header: 'X-Kitt-Session-Id',
-          request_id_header: 'X-Kitt-Request-Id',
-          reasoning_header: 'X-Kitt-Reasoning-Effort',
-          reasoning_range: [0, 100],
-          reasoning_dynamic: true,
-          parallel_tool_calls_recommended: false
-        }
+        kitt_agent_cli: kittAgentCliCapabilities(manager)
       }
     });
   };
@@ -320,16 +337,7 @@ export async function startProxyServer(input: {
       structured_output: 'best_effort',
       structured_output_retry: true,
       tool_enforcement: config.toolEnforcement ?? 'explore-first',
-      kitt_agent_cli: {
-        protocol: 'openai-chat-completions',
-        native_tool_roundtrip: true,
-        session_header: 'X-Kitt-Session-Id',
-        request_id_header: 'X-Kitt-Request-Id',
-        reasoning_header: 'X-Kitt-Reasoning-Effort',
-        reasoning_range: [0, 100],
-        reasoning_dynamic: true,
-        parallel_tool_calls_recommended: false
-      },
+      kitt_agent_cli: kittAgentCliCapabilities(manager),
       image_input: {
         chatgpt: true,
         claude: true,
@@ -372,7 +380,7 @@ export async function startProxyServer(input: {
   });
 
   app.get('/v1/kitt/sessions', (_req: Request, res: Response) => {
-    res.json({ sessions: manager.list() });
+    res.json({ sessions: manager.list(), capacity: manager.capacity() });
   });
 
   app.delete('/v1/kitt/sessions/:id', async (req: Request, res: Response) => {
@@ -387,7 +395,7 @@ export async function startProxyServer(input: {
         sendOpenAiError(res, 404, `Sessão não encontrada: ${id}`, 'session_not_found');
         return;
       }
-      res.json({ status: 'ok', id });
+      res.json({ status: 'ok', id, capacity: manager.capacity() });
     } catch (error) {
       logger.warn(`delete session: ${error instanceof Error ? error.message : String(error)}`);
       sendOpenAiError(res, statusForError(error), error instanceof Error ? error.message : 'Erro ao encerrar sessão.', codeForError(error));
@@ -426,6 +434,7 @@ export async function startProxyServer(input: {
       model: manager.modelId,
       transport: manager.transport,
       sessions: manager.list().length,
+      session_capacity: manager.capacity(),
       queueDepth: manager.queueDepth()
     });
   });
