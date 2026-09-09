@@ -178,6 +178,7 @@ test('capacity snapshot is explicit about LRU policy, pending creation and shutd
 
   const snapshot = manager.capacity();
   assert.deepEqual(snapshot, {
+    provider: 'chatgpt',
     active: 3,
     named: 2,
     busy: 1,
