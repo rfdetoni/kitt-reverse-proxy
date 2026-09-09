@@ -44,7 +44,11 @@ import {
 } from './structured-output.js';
 import { uploadImagesFromBody } from './multimodal.js';
 import { telemetry } from '../util/telemetry.js';
-import { applyReasoningEffort } from './reasoning.js';
+import {
+  applyReasoningEffort,
+  ReasoningLevelUnavailableError,
+  ReasoningNotSupportedError
+} from './reasoning.js';
 import {
   ToolEnforcementError,
   buildToolEnforcementDirective,
@@ -382,11 +386,24 @@ export class UiChatExecutor implements ChatExecutor {
     }
 
     if (options?.reasoningEffort !== undefined) {
-      await applyReasoningEffort(
-        this.session.page,
-        this.provider,
-        options.reasoningEffort
-      );
+      try {
+        await applyReasoningEffort(
+          this.session.page,
+          this.provider,
+          options.reasoningEffort
+        );
+      } catch (error) {
+        if (
+          error instanceof ReasoningLevelUnavailableError
+          || error instanceof ReasoningNotSupportedError
+        ) {
+          logger.warn(
+            `chat/completions: reasoning effort ${options.reasoningEffort} não pôde ser aplicado (${error.message}). Prosseguindo com o nível ativo.`
+          );
+        } else {
+          throw error;
+        }
+      }
     }
 
     const pending = this.pendingMessages(incoming);
