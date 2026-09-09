@@ -50,7 +50,7 @@ function executor(name: string): ChatExecutor {
   };
 }
 
-test('session manager creates isolated named sessions and enforces max', async () => {
+test('session manager evicts an idle named session when capacity is reached', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
     provider: 'chatgpt',
@@ -59,11 +59,10 @@ test('session manager creates isolated named sessions and enforces max', async (
   });
   try {
     await manager.execute('A1', { messages: [{ role: 'user', content: 'x' }] });
-    assert.equal(manager.list().length, 2);
-    await assert.rejects(
-      () => manager.execute('B2', { messages: [{ role: 'user', content: 'x' }] }),
-      SessionLimitExceededError
-    );
+    assert.deepEqual(manager.list().map((session) => session.id), ['default', 'A1']);
+
+    await manager.execute('B2', { messages: [{ role: 'user', content: 'x' }] });
+    assert.deepEqual(manager.list().map((session) => session.id), ['default', 'B2']);
   } finally {
     await manager.close();
   }
