@@ -37,9 +37,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
 fi
 
 command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
-command -v node >/dev/null || { echo "Node.js 20+ is required" >&2; exit 1; }
+command -v node >/dev/null || { echo "Node.js 24+ is required" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
-node -e "const m=Number(process.versions.node.split('.')[0]); if(m<20) process.exit(1)" || { echo "Node.js 20+ is required" >&2; exit 1; }
+node -e "const m=Number(process.versions.node.split('.')[0]); if(m<24) process.exit(1)" || { echo "Node.js 24+ is required" >&2; exit 1; }
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 if [[ ! -d "$SRC/.git" ]]; then
