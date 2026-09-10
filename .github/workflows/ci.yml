@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - run: npm run verify
       - name: Validate POSIX installer syntax
         if: runner.os != 'Windows'
@@ -70,7 +70,7 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
-      - run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - name: Reject production vulnerabilities at moderate or above
         run: npm audit --omit=dev --audit-level=moderate
       - name: Reject any high or critical dependency vulnerability
