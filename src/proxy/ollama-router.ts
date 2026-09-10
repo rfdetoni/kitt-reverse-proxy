@@ -12,7 +12,7 @@ import {
   ollamaTagsResponse,
   validateOllamaChatBody
 } from './ollama.js';
-import { sendProxyError } from './http-errors.js';
+import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 
 export function createOllamaRouter(manager: SessionManager): Router {
@@ -30,7 +30,7 @@ export function createOllamaRouter(manager: SessionManager): Router {
     try {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
-        const body = validateOllamaChatBody(req.body);
+        const body = parseRequestBody(validateOllamaChatBody, req.body);
         const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
         const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.format);
 
@@ -61,7 +61,7 @@ export function createOllamaRouter(manager: SessionManager): Router {
     try {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
-        const chatBody = ollamaGenerateBodyToChat(req.body);
+        const chatBody = parseRequestBody(ollamaGenerateBodyToChat, req.body);
         const model = typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model : manager.modelId;
 
         if (req.body?.stream === true || req.body?.stream === undefined) {
