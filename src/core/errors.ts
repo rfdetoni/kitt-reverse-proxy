@@ -3,7 +3,7 @@ import {
   ManualInterventionRequiredError,
   UiAutomationError,
   UiTimeoutError
-} from '../runtime/ui-executor.js';
+} from '../runtime/ui-errors.js';
 import { UpstreamHttpError, UpstreamRedirectError, UpstreamResponseTooLargeError } from '../runtime/upstream.js';
 import { QueueFullError, RequestAbortedError } from '../runtime/serial-queue.js';
 import {
@@ -69,12 +69,7 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof UpstreamHttpError) {
     if (error.status === 429) return { status: 429, code: 'upstream_error', message };
     if (error.status === 401 || error.status === 403) return { status: 502, code: 'upstream_auth_required', message };
-    return {
-      status: error.status >= 500 ? 502 : 400,
-      code: 'upstream_error',
-      message
-    };
+    return { status: error.status >= 500 ? 502 : 400, code: 'upstream_error', message };
   }
-
   return { status: 500, code: 'proxy_error', message };
 }
