@@ -3,6 +3,7 @@ export const RESOURCE_LIMITS = Object.freeze({
   mcpRequestBytes: 2 * 1024 * 1024,
   discoveryRequestBytes: 2 * 1024 * 1024,
   discoveryResponseBytes: 5 * 1024 * 1024,
+  discoveryCandidates: 128,
   upstreamResponseBytes: 8 * 1024 * 1024,
   gatewayJsonBytes: 1024 * 1024,
   uiPromptChars: 500_000,
