@@ -10,20 +10,18 @@ export function requestLifecycle(req: Request, res: Response): RequestLifecycle 
   const abort = (): void => {
     if (!controller.signal.aborted) controller.abort();
   };
-  const onClose = (): void => {
+  const onResponseClose = (): void => {
     if (!res.writableEnded) abort();
   };
 
   req.once('aborted', abort);
-  req.once('close', onClose);
-  res.once('close', onClose);
+  res.once('close', onResponseClose);
 
   return {
     signal: controller.signal,
     dispose(): void {
       req.removeListener('aborted', abort);
-      req.removeListener('close', onClose);
-      res.removeListener('close', onClose);
+      res.removeListener('close', onResponseClose);
     }
   };
 }
