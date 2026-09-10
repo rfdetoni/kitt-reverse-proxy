@@ -9,6 +9,7 @@ import {
   isWorkspaceDependentRequest,
   toolEnforcementTaskKey
 } from '../src/runtime/tool-enforcement.js';
+import { runtimeOperationEffect } from '../src/runtime/tool-policy.js';
 import { buildToolProtocolPlan, type OpenAiToolCall } from '../src/mapping/tool-calling.js';
 
 function protocol() {
@@ -67,6 +68,14 @@ function call(name: string, args: Record<string, unknown>): OpenAiToolCall {
       arguments: JSON.stringify(args)
     }
   };
+}
+
+function runtimeProtocol() {
+  return buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'kitt_runtime' } }] });
+}
+
+function runtimeCall(operation: string, args: Record<string, unknown> = {}): OpenAiToolCall {
+  return call('kitt_runtime', { operation, arguments: args });
 }
 
 test('detects coding requests that require workspace evidence', () => {
@@ -184,18 +193,54 @@ test('task key stays stable through tool result and changes on new user turn', (
 });
 
 test('KITT compact runtime enforces repo exploration before patch or process mutations', () => {
-  const p = buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'kitt_runtime' } }] });
+  const p = runtimeProtocol();
   const enforcement = buildToolEnforcementPlan(p, 'corrija o projeto', 'explore-first');
   assert.equal(enforcement.requireExploration, true);
-  const read = call('kitt_runtime', { operation: 'repo.read', arguments: { path: 'README.md' } });
-  const patch = call('kitt_runtime', { operation: 'patch.apply', arguments: { patch: 'x' } });
+  const read = runtimeCall('repo.read', { path: 'README.md' });
+  const patch = runtimeCall('patch.apply', { patch: 'x' });
   assert.equal(isExplorationToolCall(read, p), true);
   assert.equal(isExplorationToolCall(patch, p), false);
   assert.equal(isMutationToolCall(patch, p), true);
   assert.throws(() => enforceToolResponse({ enforcement, protocol: p, calls: [read, patch], explorationEvidence: false, toolEvidence: false }), ToolEnforcementError);
-  assert.equal(isExplorationToolCall(call('kitt_runtime', {
-    operation: 'process.run', arguments: { command: 'rtk proxy git status' }
-  }), p), true);
+  assert.equal(isExplorationToolCall(runtimeCall('process.run', { command: 'rtk proxy git status' }), p), true);
+});
+
+test('KITT runtime policy covers semantic exploration without treating read-only operations as mutations', () => {
+  const p = runtimeProtocol();
+  for (const operation of [
+    'repo.context_map',
+    'repo.definition',
+    'repo.hover',
+    'repo.references_semantic',
+    'repo.diagnostics',
+    'repo.call_hierarchy',
+    'repo.outline',
+    'repo.ast_search',
+    'security.scan'
+  ]) {
+    assert.equal(runtimeOperationEffect(operation), 'explore', operation);
+    assert.equal(isExplorationToolCall(runtimeCall(operation), p), true, operation);
+    assert.equal(isMutationToolCall(runtimeCall(operation), p), false, operation);
+  }
+
+  for (const operation of ['artifacts.read', 'children.inspect', 'goal.inspect', 'memory.query', 'session.search', 'state.get', 'state.list', 'handles.resolve']) {
+    assert.equal(runtimeOperationEffect(operation), 'neutral', operation);
+    assert.equal(isExplorationToolCall(runtimeCall(operation), p), false, operation);
+    assert.equal(isMutationToolCall(runtimeCall(operation), p), false, operation);
+  }
+
+  assert.equal(runtimeOperationEffect('state.set'), 'mutate');
+  assert.equal(isMutationToolCall(runtimeCall('state.set'), p), true);
+  assert.equal(runtimeOperationEffect('future.unknown'), undefined);
+  assert.equal(isMutationToolCall(runtimeCall('future.unknown'), p), false);
+});
+
+test('process.run is classified from the actual command rather than the operation name', () => {
+  const p = runtimeProtocol();
+  assert.equal(isExplorationToolCall(runtimeCall('process.run', { command: 'git diff' }), p), true);
+  assert.equal(isMutationToolCall(runtimeCall('process.run', { command: 'git diff' }), p), false);
+  assert.equal(isExplorationToolCall(runtimeCall('process.run', { command: 'git reset --hard HEAD~1' }), p), false);
+  assert.equal(isMutationToolCall(runtimeCall('process.run', { command: 'git reset --hard HEAD~1' }), p), true);
 });
 
 test('shell descriptions never override command classification', () => {
