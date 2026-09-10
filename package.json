@@ -5,11 +5,10 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "bin": {
     "kitt-reverse-proxy": "./dist/cli.js",
-    "adaptive-chat-proxy": "./dist/cli.js",
     "kitt-agent-gateway": "./dist/gateway/cli.js"
   },
   "scripts": {
