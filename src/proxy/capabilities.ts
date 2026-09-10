@@ -1,8 +1,7 @@
 import { PROVIDERS } from '../providers/catalog.js';
 import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
-
-const SERVICE_VERSION = '3.0.0';
+import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
 
 function asObject(value: JsonValue | undefined): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -63,7 +62,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
 
   return {
     status: 'ok',
-    service: 'kitt-reverse-proxy',
+    service: SERVICE_NAME,
     version: SERVICE_VERSION,
     provider: manager.providerId,
     transport: manager.transport,
@@ -119,7 +118,7 @@ export function modelRecord(manager: SessionManager): JsonObject {
   const model: JsonObject = {
     id: manager.modelId,
     object: 'model',
-    owned_by: 'kitt-reverse-proxy',
+    owned_by: SERVICE_NAME,
     root: manager.modelId,
     parent: null,
     capabilities: {
