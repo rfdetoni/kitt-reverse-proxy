@@ -39,7 +39,7 @@ Invoke-Native 'git' @('-C',$Src,'checkout','--detach','--force','FETCH_HEAD')
 Invoke-Native 'git' @('-C',$Src,'clean','-ffd')
 Push-Location $Src
 try {
-  Invoke-Native 'npm' @('ci','--no-audit','--no-fund')
+  Invoke-Native 'npm' @('ci','--no-audit','--no-fund','--strict-allow-scripts')
   Invoke-Native 'npm' @('run','build')
   Invoke-Native 'npm' @('prune','--omit=dev','--no-audit','--no-fund')
   $ChromeCandidates = @(
