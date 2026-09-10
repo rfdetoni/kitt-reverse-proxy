@@ -1,5 +1,5 @@
 import type { DeclarativeAdapter } from '../mapping/engine.js';
-import type { AdapterProfile, AppConfig, CapturedExchange, ChatExecutionResult, ChatExecutor, JsonObject, LiveBrowserSession } from '../types.js';
+import type { AdapterProfile, AppConfig, CapturedExchange, ChatExecutionOptions, ChatExecutionResult, ChatExecutor, JsonObject, LiveBrowserSession } from '../types.js';
 import { messageToText, normalizeMessages } from '../mapping/messages.js';
 import { BrowserUpstreamClient } from './upstream.js';
 import {
@@ -12,6 +12,7 @@ import {
   formatApiDirective,
   requestMayReturnToolCalls
 } from '../mapping/tool-calling.js';
+import { RequestAbortedError } from './serial-queue.js';
 
 export class NetworkChatExecutor implements ChatExecutor {
   readonly transport = 'network' as const;
@@ -40,7 +41,8 @@ export class NetworkChatExecutor implements ChatExecutor {
 
   private readonly capture: CapturedExchange;
 
-  async execute(body: JsonObject): Promise<ChatExecutionResult> {
+  async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
+    if (options?.signal?.aborted) throw new RequestAbortedError();
     const messages = normalizeMessages(Array.isArray(body.messages) ? body.messages : undefined);
     const systemPrompt = messages
       .filter((message) => message.role === 'system' || message.role === 'developer')
@@ -70,9 +72,9 @@ export class NetworkChatExecutor implements ChatExecutor {
 
     let requestBody = body;
     if (needsPolicyEmulation) {
-      const messages = Array.isArray(body.messages) ? structuredClone(body.messages) : [];
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
+      const requestMessages = Array.isArray(body.messages) ? structuredClone(body.messages) : [];
+      for (let index = requestMessages.length - 1; index >= 0; index -= 1) {
+        const message = requestMessages[index];
         if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
         const record = message as JsonObject;
         if (!['user', 'tool'].includes(String(record.role || ''))) continue;
@@ -88,11 +90,12 @@ export class NetworkChatExecutor implements ChatExecutor {
         record.content = `${formatApiDirective(promptPlan)}${content}`;
         break;
       }
-      requestBody = { ...body, messages };
+      requestBody = { ...body, messages: requestMessages };
     }
 
+    if (options?.signal?.aborted) throw new RequestAbortedError();
     const mapped = this.adapter.mapRequest(requestBody);
-    const result = await this.upstream.post(mapped);
+    const result = await this.upstream.post(mapped, options?.signal);
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     const structuredCalls = extractStructuredToolCalls(result.body, plan);
 
@@ -110,9 +113,7 @@ export class NetworkChatExecutor implements ChatExecutor {
       : extractToolCalls(textual, plan);
 
     assertToolChoiceSatisfied(plan, parsed.tool_calls);
-    if (parsed.tool_calls?.length) {
-      applyToolCallsToCompletion(completion, parsed.tool_calls, parsed.content);
-    }
+    if (parsed.tool_calls?.length) applyToolCallsToCompletion(completion, parsed.tool_calls, parsed.content);
 
     const deltas = parsed.tool_calls?.length ? [] : this.adapter.mapResponseDeltas(result.body);
     this.adapter.applyState(result.body);
@@ -128,7 +129,8 @@ export class NetworkChatExecutor implements ChatExecutor {
       requestCodec: this.capture.requestCodec.kind,
       followRedirects: this.config.followRedirects,
       toolCalling: 'native-or-protocol-emulated',
-      toolExecution: 'client-side'
+      toolExecution: 'client-side',
+      cancellation: 'cooperative'
     };
   }
 }

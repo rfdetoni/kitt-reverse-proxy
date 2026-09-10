@@ -1,8 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import type { Page } from 'playwright';
+import { createHash, randomUUID } from 'node:crypto';
+import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { logger } from '../logger.js';
 import type { ProviderPreset } from '../providers/catalog.js';
-import { detectBrowserGate, type BrowserGate } from '../security/challenge.js';
 import type {
   AppConfig,
   ChatExecutionOptions,
@@ -12,7 +11,12 @@ import type {
   OpenAiCompletion,
   LiveBrowserSession
 } from '../types.js';
-import { anyVisible, collectVisibleSnapshots, extractArtifactContents, filterNewArtifacts, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
+import {
+  collectVisibleSnapshots,
+  extractArtifactContents,
+  filterNewArtifacts,
+  type UiTextSnapshot
+} from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
 import {
   buildToolProtocolPlan,
@@ -26,7 +30,6 @@ import {
 import {
   canonicalMessages,
   computeDeltas,
-  deltaFromCumulative,
   selectMinimalUiPrompts,
   historyIsPrefix,
   userTurnsAreCompatible,
@@ -59,34 +62,24 @@ import {
   toolEnforcementTaskKey,
   type ToolEnforcementPlan
 } from './tool-enforcement.js';
+import { throwIfAborted } from './cancellation.js';
+import { sendUiPrompt, waitForUiReady } from './ui-interaction.js';
+import { awaitUiResponse } from './ui-response-monitor.js';
+import {
+  ConversationStateConflictError,
+  ManualInterventionRequiredError,
+  UiAutomationError,
+  UiTimeoutError
+} from './ui-errors.js';
 
-const POLL_MS = 175;
-const MAX_UI_PROMPT_CHARS = 500_000;
+export {
+  ConversationStateConflictError,
+  ManualInterventionRequiredError,
+  UiAutomationError,
+  UiTimeoutError
+} from './ui-errors.js';
 
-export class ManualInterventionRequiredError extends Error {
-  constructor(public readonly reason: string) {
-    super(reason);
-    this.name = 'ManualInterventionRequiredError';
-  }
-}
-
-export class UiAutomationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UiAutomationError';
-  }
-}
-
-export class ConversationStateConflictError extends Error {
-  constructor() {
-    super('O histórico recebido pertence a outra conversa. Use /v1/kitt/reset ou uma instância/porta dedicada.');
-    this.name = 'ConversationStateConflictError';
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const MAX_TRACKED_TOOL_CALLS = 256;
 
 function completion(model: string, content: string | null, toolCalls?: OpenAiToolCall[]): OpenAiCompletion {
   return {
@@ -107,21 +100,18 @@ function completion(model: string, content: string | null, toolCalls?: OpenAiToo
   };
 }
 
-async function gateMessage(page: Page, provider: ProviderPreset): Promise<BrowserGate | null> {
-  return detectBrowserGate(page, provider.ui.inputSelectors);
+function requestFingerprint(body: JsonObject, reasoningEffort?: number): string {
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify(body));
+  hash.update('\u0000');
+  hash.update(reasoningEffort === undefined ? '-' : String(reasoningEffort));
+  return hash.digest('hex');
 }
 
-function isThinkingIndicator(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  return (
-    t === 'pensando' ||
-    t === 'pensando...' ||
-    t === 'thinking' ||
-    t === 'thinking...' ||
-    /^pensou (durante|por|há) \d+/i.test(t) ||
-    /^thought for \d+/i.test(t) ||
-    /^pensando (há|por) \d+/i.test(t)
-  );
+function historyChars(messages: readonly CanonicalMessage[]): number {
+  let total = 0;
+  for (const message of messages) total += message.role.length + message.text.length + (message.toolCallId?.length ?? 0) + (message.toolName?.length ?? 0);
+  return total;
 }
 
 export class UiChatExecutor implements ChatExecutor {
@@ -151,179 +141,25 @@ export class UiChatExecutor implements ChatExecutor {
     await this.waitForReady('inicialização');
   }
 
-  private async waitForReady(reason: string): Promise<void> {
-    const deadline = Date.now() + this.config.manualInterventionTimeoutMs;
-    let lastGate = '';
-    let waitingLogged = false;
-
-    while (Date.now() < deadline) {
-      const input = await firstVisibleLocator(this.session.page, this.provider.ui.inputSelectors);
-      if (input) return;
-
-      const gate = await gateMessage(this.session.page, this.provider);
-      if (gate) {
-        if (!this.config.headed) {
-          throw new ManualInterventionRequiredError(`${gate.message} Reinicie em modo headed e resolva manualmente.`);
-        }
-        if (lastGate !== gate.kind) {
-          logger.warn(`${gate.message} Resolva manualmente no Chromium; o proxy retomará quando o chat estiver disponível.`);
-          lastGate = gate.kind;
-        }
-      } else if (!waitingLogged) {
-        logger.info(`Aguardando campo de chat (${reason}). Se houver login ou consentimento, conclua manualmente no Chromium.`);
-        waitingLogged = true;
-      }
-      await sleep(500);
-    }
-
-    throw new ManualInterventionRequiredError(
-      `Campo de chat não ficou disponível em ${Math.round(this.config.manualInterventionTimeoutMs / 1000)}s.`
-    );
+  private async waitForReady(reason: string, signal?: AbortSignal): Promise<void> {
+    await waitForUiReady(this.session, this.provider, this.config, reason, signal);
   }
 
-  private async sendPrompt(prompt: string): Promise<void> {
-    if (!prompt.trim()) throw new UiAutomationError('Não há conteúdo novo para enviar ao chat web.');
-    if (prompt.length > MAX_UI_PROMPT_CHARS) throw new UiAutomationError(`Prompt via UI excede ${MAX_UI_PROMPT_CHARS} caracteres.`);
-
-    await this.waitForReady('envio');
-    const input = await firstVisibleLocator(this.session.page, this.provider.ui.inputSelectors);
-    if (!input) throw new UiAutomationError('Campo de entrada do chat não foi localizado.');
-
-    await input.focus().catch(() => undefined);
-    await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
-
-    // Modern Lexical/ProseMirror editors require true input/keyboard events
-    const isContentEditable = await input.getAttribute('contenteditable').catch(() => null);
-    if (isContentEditable === 'true' || isContentEditable === '') {
-      await input.press('ControlOrMeta+A').catch(() => undefined);
-      await input.press('Backspace').catch(() => undefined);
-      await this.session.page.keyboard.insertText(prompt);
-    } else {
-      try {
-        await input.fill(prompt, { timeout: 2_000 });
-      } catch {
-        await input.press('ControlOrMeta+A').catch(() => undefined);
-        await input.press('Backspace').catch(() => undefined);
-        await this.session.page.keyboard.insertText(prompt);
-      }
-    }
-
-    // Give the frontend a brief moment to process input and enable submit controls
-    await sleep(200);
-
-    // Wait up to 2.5s for the send button to become enabled or fallback to Enter
-    const sendButtonDeadline = Date.now() + 2_500;
-    let submitted = false;
-
-    while (Date.now() < sendButtonDeadline) {
-      const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
-      if (send && await send.isEnabled().catch(() => false)) {
-        await send.click({ force: true, timeout: 2_000 }).catch(() => undefined);
-        submitted = true;
-        break;
-      }
-      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
-      if (streaming) {
-        submitted = true;
-        break;
-      }
-      await sleep(100);
-    }
-
-    if (!submitted) {
-      await input.focus().catch(() => undefined);
-      await input.press('Enter', { timeout: 2_000 }).catch(() => undefined);
-      await this.session.page.keyboard.press('Enter').catch(() => undefined);
-    }
-
-    // Verify submission: wait up to 1.5s to check if input was cleared or streaming started
-    const verifyDeadline = Date.now() + 1_500;
-    while (Date.now() < verifyDeadline) {
-      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
-      if (streaming) break;
-
-      const remainingText = await input.evaluate((el: Element) => {
-        if ('value' in el && typeof (el as HTMLInputElement).value === 'string') {
-          return (el as HTMLInputElement).value.trim();
-        }
-        return (el.textContent || '').trim();
-      }).catch(() => '');
-
-      if (!remainingText) break;
-
-      // If text is still in the input, try pressing Enter with focused keyboard or clicking send
-      const send = await firstVisibleLocator(this.session.page, this.provider.ui.sendSelectors);
-      if (send && await send.isEnabled().catch(() => false)) {
-        await send.click({ force: true, timeout: 1_000 }).catch(() => undefined);
-      } else {
-        await input.focus().catch(() => undefined);
-        await this.session.page.keyboard.press('Enter').catch(() => undefined);
-      }
-      await sleep(250);
-    }
+  private async sendPrompt(prompt: string, signal?: AbortSignal): Promise<void> {
+    await sendUiPrompt(this.session, this.provider, this.config, prompt, signal);
   }
 
   private async awaitResponse(
     baseline: readonly UiTextSnapshot[],
     sentPrompt: string,
-    onDelta?: ChatExecutionOptions['onDelta']
-  ): Promise<{ text: string; snapshots: string[] }> {
-    const deadline = Date.now() + this.config.uiResponseTimeoutMs;
-    let lastText = '';
-    let streamedText = '';
-    let stableSince = 0;
-    const snapshots: string[] = [];
-
-    // Give web chat a moment to transition to thinking/generating state
-    await sleep(350);
-
-    while (Date.now() < deadline) {
-      const gate = await gateMessage(this.session.page, this.provider);
-      if (gate) {
-        if (!this.config.headed) throw new ManualInterventionRequiredError(`${gate.message} Requer intervenção manual.`);
-        await this.waitForReady('desafio de segurança');
-      }
-
-      const streaming = await anyVisible(this.session.page, this.provider.ui.streamingSelectors);
-      const current = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-      const activeSnapshot = selectChangedSnapshot(baseline, current, sentPrompt);
-
-      if (activeSnapshot?.text) {
-        if (activeSnapshot.text !== lastText) {
-          lastText = activeSnapshot.text;
-          snapshots.push(activeSnapshot.text);
-          stableSince = Date.now();
-          if (!isThinkingIndicator(activeSnapshot.text)) {
-            const delta = deltaFromCumulative(streamedText, activeSnapshot.text);
-            if (delta) {
-              streamedText = activeSnapshot.text.trim();
-              await onDelta?.(delta);
-            }
-          }
-        }
-      }
-
-      // Finish when the model has completed thinking/generating (stop button gone), is not thinking indicator, and text settled
-      if (!streaming && lastText && !isThinkingIndicator(lastText)) {
-        if (stableSince === 0) stableSince = Date.now();
-        if (Date.now() - stableSince >= Math.max(1500, this.config.uiSettleMs)) {
-          return { text: lastText, snapshots };
-        }
-      }
-
-      // Safety completion ONLY when not streaming and text is a real answer
-      if (!streaming && lastText && !isThinkingIndicator(lastText) && stableSince > 0 && Date.now() - stableSince >= Math.max(3000, this.config.uiSettleMs * 2)) {
-        return { text: lastText, snapshots };
-      }
-
-      await sleep(POLL_MS);
-    }
-
-    if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, snapshots };
-    throw new UiAutomationError(`Nenhuma resposta do chat foi detectada em ${Math.round(this.config.uiResponseTimeoutMs / 1000)}s.`);
+    onDelta?: ChatExecutionOptions['onDelta'],
+    signal?: AbortSignal
+  ): Promise<{ text: string; deltas?: string[]; snapshots?: string[] }> {
+    return await awaitUiResponse(this.session, this.provider, this.config, baseline, sentPrompt, onDelta, signal);
   }
 
-  async reset(): Promise<void> {
+  async reset(signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
     this.history = [];
     this.lastRequestFingerprint = '';
     this.lastResult = undefined;
@@ -340,35 +176,51 @@ export class UiChatExecutor implements ChatExecutor {
       .catch((error: unknown) => {
         throw new UiAutomationError(`Falha ao iniciar nova conversa: ${error instanceof Error ? error.message : String(error)}`);
       });
-    await this.waitForReady('nova conversa');
+    await this.waitForReady('nova conversa', signal);
   }
 
   private pendingMessages(incoming: CanonicalMessage[]): CanonicalMessage[] {
     if (!this.history.length) return incoming;
     if (historyIsPrefix(this.history, incoming)) return incoming.slice(this.history.length);
 
-    // If incoming contains a multi-turn array, extract only the new messages following the last assistant turn
-    const lastAsstIdx = incoming.map((m) => m.role).lastIndexOf('assistant');
-    if (lastAsstIdx >= 0 && lastAsstIdx < incoming.length - 1) {
-      return incoming.slice(lastAsstIdx + 1);
-    }
-
-    // If only user/tool turns without assistant, send the last turn or all incoming
+    const lastAssistant = incoming.map((message) => message.role).lastIndexOf('assistant');
+    if (lastAssistant >= 0 && lastAssistant < incoming.length - 1) return incoming.slice(lastAssistant + 1);
     if (incoming.length === 1 && ['user', 'tool'].includes(incoming[0]!.role)) return incoming;
     return [incoming[incoming.length - 1]!];
   }
 
+  private rememberToolCall(call: OpenAiToolCall, exploration: boolean): void {
+    if (!this.toolNamesByCallId.has(call.id) && this.toolNamesByCallId.size >= MAX_TRACKED_TOOL_CALLS) {
+      const oldest = this.toolNamesByCallId.keys().next().value as string | undefined;
+      if (oldest) {
+        this.toolNamesByCallId.delete(oldest);
+        this.explorationCallIds.delete(oldest);
+      }
+    }
+    this.toolNamesByCallId.set(call.id, call.function.name);
+    if (exploration) this.explorationCallIds.add(call.id);
+  }
+
+  private storeHistory(incoming: CanonicalMessage[], assistantText: string): void {
+    let next: CanonicalMessage[];
+    if (historyIsPrefix(this.history, incoming)) next = [...incoming, { role: 'assistant', text: assistantText }];
+    else if (incoming.length === 1 && this.history.length) next = [...this.history, ...incoming, { role: 'assistant', text: assistantText }];
+    else next = [...incoming, { role: 'assistant', text: assistantText }];
+
+    // Keep the client-provided prefix if caching the assistant answer would cross the memory budget.
+    this.history = historyChars(next) <= RESOURCE_LIMITS.uiHistoryChars ? next : [...incoming];
+  }
+
   async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
+    throwIfAborted(options?.signal);
     const incoming = canonicalMessages(body);
     if (!incoming.length) throw new UiAutomationError('Nenhuma mensagem textual utilizável foi recebida.');
-
-    const fingerprint = JSON.stringify({
-      body,
-      reasoningEffort: options?.reasoningEffort ?? null
-    });
-    if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) {
-      return this.lastResult;
+    if (historyChars(incoming) > RESOURCE_LIMITS.uiHistoryChars) {
+      throw new UiAutomationError(`Histórico UI excede ${RESOURCE_LIMITS.uiHistoryChars} caracteres.`);
     }
+
+    const fingerprint = requestFingerprint(body, options?.reasoningEffort);
+    if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) return this.lastResult;
 
     const previousUserTurns = this.history.filter((message) => message.role === 'user').length;
     const incomingUserTurns = incoming.filter((message) => message.role === 'user').length;
@@ -376,62 +228,54 @@ export class UiChatExecutor implements ChatExecutor {
       incoming.length > 1
       && incomingUserTurns > 0
       && this.history.length
-      && (
-        !userTurnsAreCompatible(this.history, incoming)
-        || incomingUserTurns < previousUserTurns
-      )
+      && (!userTurnsAreCompatible(this.history, incoming) || incomingUserTurns < previousUserTurns)
     ) {
       logger.info('Novo histórico de conversa detectado pelo cliente API. Executando reset automático da sessão browser...');
-      await this.reset();
+      await this.reset(options?.signal);
     }
 
+    throwIfAborted(options?.signal);
     if (options?.reasoningEffort !== undefined) {
       try {
-        await applyReasoningEffort(
-          this.session.page,
-          this.provider,
-          options.reasoningEffort
-        );
+        await applyReasoningEffort(this.session.page, this.provider, options.reasoningEffort);
       } catch (error) {
-        if (
-          error instanceof ReasoningLevelUnavailableError
-          || error instanceof ReasoningNotSupportedError
-        ) {
-          logger.warn(
-            `chat/completions: reasoning effort ${options.reasoningEffort} não pôde ser aplicado (${error.message}). Prosseguindo com o nível ativo.`
-          );
+        if (error instanceof ReasoningLevelUnavailableError || error instanceof ReasoningNotSupportedError) {
+          logger.warn(`Reasoning effort ${options.reasoningEffort} não pôde ser aplicado (${error.message}). Prosseguindo com o nível ativo.`);
         } else {
           throw error;
         }
       }
     }
 
+    throwIfAborted(options?.signal);
     const pending = this.pendingMessages(incoming);
     if (!pending.length) throw new UiAutomationError('A requisição não contém um novo turno para enviar ao chat web.');
 
     const selectedPrompts = selectMinimalUiPrompts(pending);
     const selectedPrompt = selectedPrompts.at(-1);
     if (!selectedPrompt) {
-      throw new UiAutomationError(
-        'O transporte UI não injeta mensagens system/developer/assistant no chat web. Envie um novo turno user (ou tool quando indispensável).'
-      );
+      throw new UiAutomationError('O transporte UI exige um novo turno user ou tool para avançar a conversa.');
     }
-    const systemMessages = incoming.filter((m) => ['system', 'developer'].includes(m.role));
-    const systemPrompt = systemMessages.map((m) => m.text).filter(Boolean).join('\n\n');
+
+    const systemPrompt = incoming
+      .filter((message) => ['system', 'developer'].includes(message.role))
+      .map((message) => message.text)
+      .filter(Boolean)
+      .join('\n\n');
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
     const protocolFingerprint = toolProtocolFingerprint(plan);
     const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
-    const currentTaskKey = selectedPrompt.role === 'tool'
-      ? this.enforcementTaskKey
-      : toolEnforcementTaskKey(incoming);
+    const currentTaskKey = selectedPrompt.role === 'tool' ? this.enforcementTaskKey : toolEnforcementTaskKey(incoming);
     if (currentTaskKey !== this.enforcementTaskKey) {
       this.enforcementTaskKey = currentTaskKey;
       this.explorationEvidence = false;
       this.toolEvidence = false;
       this.explorationCallIds.clear();
     }
+
     const latestUserText = [...incoming].reverse().find((message) => message.role === 'user')?.text
-      ?? [...this.history].reverse().find((message) => message.role === 'user')?.text ?? '';
+      ?? [...this.history].reverse().find((message) => message.role === 'user')?.text
+      ?? '';
     const enforcement: ToolEnforcementPlan = buildToolEnforcementPlan(
       plan,
       latestUserText,
@@ -441,14 +285,9 @@ export class UiChatExecutor implements ChatExecutor {
     let actionablePrompt = selectedPrompt.text;
     if (selectedPrompt.role === 'tool') {
       const toolResults = selectedPrompts.map((toolPrompt) => {
-        const rememberedName = toolPrompt.toolCallId
-          ? this.toolNamesByCallId.get(toolPrompt.toolCallId)
-          : undefined;
-        if (toolPrompt.toolCallId && !rememberedName) {
-          throw new ToolProtocolError(
-            `tool_call_id desconhecido para esta conversa: ${toolPrompt.toolCallId}`
-          );
-        }
+        const callId = toolPrompt.toolCallId;
+        const rememberedName = callId ? this.toolNamesByCallId.get(callId) : undefined;
+        if (callId && !rememberedName) throw new ToolProtocolError(`tool_call_id desconhecido para esta conversa: ${callId}`);
         if (rememberedName && toolPrompt.toolName && rememberedName !== toolPrompt.toolName) {
           throw new ToolProtocolError('tool_call_id não corresponde ao nome da function.');
         }
@@ -457,22 +296,19 @@ export class UiChatExecutor implements ChatExecutor {
           throw new ToolProtocolError(`Resultado recebido para function não disponível: ${toolName}`);
         }
         if (rememberedName) this.toolEvidence = true;
-        if (toolPrompt.toolCallId && this.explorationCallIds.has(toolPrompt.toolCallId)) {
-          this.explorationEvidence = true;
+        if (callId && this.explorationCallIds.has(callId)) this.explorationEvidence = true;
+        const result = formatToolResultPrompt(toolPrompt.text, callId, toolName);
+        if (callId) {
+          this.toolNamesByCallId.delete(callId);
+          this.explorationCallIds.delete(callId);
         }
-        return formatToolResultPrompt(
-          toolPrompt.text,
-          toolPrompt.toolCallId,
-          toolName
-        );
+        return result;
       });
       actionablePrompt = toolResults.join('\n');
     }
 
     const structured = structuredOutputPlan(body);
-    let prefix = protocolFingerprint !== this.protocolFingerprint
-      ? formatApiDirective(plan)
-      : '';
+    let prefix = protocolFingerprint !== this.protocolFingerprint ? formatApiDirective(plan) : '';
     if (!protocolEnabled && this.toolProtocolWasEnabled) {
       prefix = `[API TOOL PROTOCOL UPDATE]\nTools are disabled for this turn. Do not emit tool calls.\n[END API TOOL PROTOCOL UPDATE]\n\n${prefix}`;
     }
@@ -482,50 +318,55 @@ export class UiChatExecutor implements ChatExecutor {
     if (protocolEnabled && protocolFingerprint === this.protocolFingerprint) {
       prefix += 'Print any requested tool calls as visible <tool_call>{"name":"allowed_name","arguments":{}}</tool_call> blocks. The external agent executes them; stop and wait for its tool_result.\n\n';
     }
-    if (structured) {
-      prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
-    }
+    if (structured) prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
     prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence)}`;
 
+    throwIfAborted(options?.signal);
     const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
+    throwIfAborted(options?.signal);
     if (fallbackPublicImageUrls.length > 0) {
       actionablePrompt = `${actionablePrompt}\n\n${fallbackPublicImageUrls.map((url) => `Image: ${url}`).join('\n')}`;
     }
 
     const prompt = `${prefix}${actionablePrompt}`;
+    if (prompt.length > RESOURCE_LIMITS.uiPromptChars) {
+      throw new UiAutomationError(`Prompt via UI excede ${RESOURCE_LIMITS.uiPromptChars} caracteres.`);
+    }
 
     const artifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-    await this.sendPrompt(prompt);
+    await this.sendPrompt(prompt, options?.signal);
 
-    // Internal tool protocol text or structured validation buffer must never leak to an API stream prematurely.
     const bufferResponse = requestMayReturnToolCalls(body) || Boolean(structured);
     const result = await this.awaitResponse(
       baseline,
       prompt,
-      bufferResponse ? undefined : options?.onDelta
+      bufferResponse ? undefined : options?.onDelta,
+      options?.signal
     );
+    throwIfAborted(options?.signal);
+
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     let textToParse = result.text;
-
-    // Check if the chat generated artifacts/files (e.g. Canvas or download buttons) that were not inlined
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
     const artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
     if (!protocolEnabled && artifacts.length > 0) {
       const artifactBlocks = artifacts
-        .filter((art) => !textToParse.includes(art.code))
-        .map((art) => {
-          const lang = art.language || (art.filename?.split('.').pop()) || '';
-          const header = art.filename ? `File: ${art.filename}\n` : '';
-          return `${header}\`\`\`${lang}\n${art.code}\n\`\`\``;
+        .filter((artifact) => !textToParse.includes(artifact.code))
+        .map((artifact) => {
+          const language = artifact.language || artifact.filename?.split('.').pop() || '';
+          const header = artifact.filename ? `File: ${artifact.filename}\n` : '';
+          return `${header}\`\`\`${language}\n${artifact.code}\n\`\`\``;
         });
-      if (artifactBlocks.length > 0) {
-        textToParse = `${textToParse}\n\n${artifactBlocks.join('\n\n')}`;
-      }
+      if (artifactBlocks.length > 0) textToParse = `${textToParse}\n\n${artifactBlocks.join('\n\n')}`;
+    }
+    if (textToParse.length > RESOURCE_LIMITS.uiDeltaChars) {
+      throw new UiAutomationError(`Resposta UI excede ${RESOURCE_LIMITS.uiDeltaChars} caracteres.`);
     }
 
     let parsed;
     for (let attempt = 0; ; attempt += 1) {
+      throwIfAborted(options?.signal);
       try {
         parsed = parseUiToolResponse(textToParse, plan, artifacts, this.provider.id);
         enforceToolResponse({
@@ -549,9 +390,8 @@ export class UiChatExecutor implements ChatExecutor {
           ? buildToolEnforcementRetryPrompt(enforcement, error)
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-        await this.sendPrompt(retryPrompt);
-        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt);
-        textToParse = retryResult.text;
+        await this.sendPrompt(retryPrompt, options?.signal);
+        textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
       }
     }
 
@@ -561,20 +401,16 @@ export class UiChatExecutor implements ChatExecutor {
       if (!checked.ok) {
         const retryPrompt = buildStructuredRetryPrompt(structured, checked.error);
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-        await this.sendPrompt(retryPrompt);
-        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt);
+        await this.sendPrompt(retryPrompt, options?.signal);
+        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal);
         checked = validateStructuredOutput(retryResult.text, structured);
       }
-      if (checked.ok) {
-        textToParse = checked.text;
-      } else {
-        structuredOutputFailed = true;
-      }
+      if (checked.ok) textToParse = checked.text;
+      else structuredOutputFailed = true;
     }
 
     for (const call of parsed.tool_calls || []) {
-      this.toolNamesByCallId.set(call.id, call.function.name);
-      if (isExplorationToolCall(call, plan)) this.explorationCallIds.add(call.id);
+      this.rememberToolCall(call, isExplorationToolCall(call, plan));
     }
 
     const responseContent = parsed.tool_calls?.length ? parsed.content : textToParse;
@@ -582,18 +418,18 @@ export class UiChatExecutor implements ChatExecutor {
     this.protocolFingerprint = protocolFingerprint;
     this.toolProtocolWasEnabled = protocolEnabled;
     this.systemContextWasEnabled = Boolean(plan.systemPrompt);
+    this.storeHistory(incoming, textToParse);
 
-    if (historyIsPrefix(this.history, incoming)) this.history = [...incoming, { role: 'assistant', text: textToParse }];
-    else if (incoming.length === 1 && this.history.length) this.history = [...this.history, ...incoming, { role: 'assistant', text: textToParse }];
-    else this.history = [...incoming, { role: 'assistant', text: textToParse }];
-
+    const deltas = parsed.tool_calls?.length
+      ? []
+      : result.deltas
+        ?? (result.snapshots ? computeDeltas(result.snapshots, responseContent || '') : (responseContent ? [responseContent] : []));
     const execution: ChatExecutionResult = {
       completion: output,
-      deltas: parsed.tool_calls?.length
-        ? []
-        : computeDeltas(result.snapshots, responseContent || ''),
+      deltas,
       ...(structuredOutputFailed ? { metadata: { structured_output: 'failed' } } : {})
     };
+
     if (incoming.length > 1) {
       this.lastRequestFingerprint = fingerprint;
       this.lastResult = execution;
@@ -613,6 +449,8 @@ export class UiChatExecutor implements ChatExecutor {
       persistentSession: this.session.persistent,
       manualChallengeHandling: true,
       progressiveUiStreaming: true,
+      boundedHistoryChars: RESOURCE_LIMITS.uiHistoryChars,
+      cancellation: 'cooperative',
       reasoning: this.provider.id === 'chatgpt'
         ? {
             supported: true,

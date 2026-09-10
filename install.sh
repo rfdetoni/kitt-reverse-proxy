@@ -37,9 +37,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
 fi
 
 command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
-command -v node >/dev/null || { echo "Node.js 20+ is required" >&2; exit 1; }
+command -v node >/dev/null || { echo "Node.js 24+ is required" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
-node -e "const m=Number(process.versions.node.split('.')[0]); if(m<20) process.exit(1)" || { echo "Node.js 20+ is required" >&2; exit 1; }
+node -e "const m=Number(process.versions.node.split('.')[0]); if(m<24) process.exit(1)" || { echo "Node.js 24+ is required" >&2; exit 1; }
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 if [[ ! -d "$SRC/.git" ]]; then
@@ -51,7 +51,7 @@ git -C "$SRC" fetch --force --depth 1 origin "$REF"
 git -C "$SRC" checkout --detach --force FETCH_HEAD
 git -C "$SRC" clean -ffd
 
-(cd "$SRC" && npm ci --no-audit --no-fund && npm run build && npm prune --omit=dev --no-audit --no-fund)
+(cd "$SRC" && npm ci --no-audit --no-fund --strict-allow-scripts && npm run build && npm prune --omit=dev --no-audit --no-fund)
 
 has_system_browser=0
 for candidate in google-chrome google-chrome-stable chromium chromium-browser; do

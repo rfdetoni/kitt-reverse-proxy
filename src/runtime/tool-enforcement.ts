@@ -5,6 +5,7 @@ import {
   type ToolProtocolPlan
 } from '../mapping/tool-calling.js';
 import type { CanonicalMessage } from './ui-history.js';
+import { runtimeOperationEffect } from './tool-policy.js';
 
 export type ToolEnforcementMode = 'auto' | 'explore-first' | 'required';
 
@@ -14,9 +15,6 @@ const MUTATION_NAME =
   /(?:^|[_.:-])(write|edit|patch|apply|create|delete|remove|move|rename|mkdir|touch|replace)(?:$|[_.:-])/i;
 const MIXED_SHELL_NAME =
   /(?:^|[_.:-])(?:execute_command|exec_command|run_command|exec|shell|bash|terminal|command)$/i;
-const RUNTIME_EXPLORATION = new Set([
-  'repo.read', 'repo.search', 'repo.inspect_symbol', 'repo.read_symbol', 'repo.references'
-]);
 
 const WORKSPACE_REFERENCE =
   /\b(?:workspace|repo(?:sitory)?|codebase|project|projeto|src|source tree|working tree|arquivo(?:s)?|file(?:s)?|diret[oó]rio|directory|pasta|module|m[oó]dulo)\b/i;
@@ -98,6 +96,17 @@ function commandFromCall(call: OpenAiToolCall): string | undefined {
   return undefined;
 }
 
+function runtimeCommandFromCall(call: OpenAiToolCall): string | undefined {
+  const args = parseArguments(call);
+  const nested = args?.arguments;
+  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined;
+  const synthetic: OpenAiToolCall = {
+    ...call,
+    function: { ...call.function, arguments: JSON.stringify(nested) }
+  };
+  return commandFromCall(synthetic);
+}
+
 function isReadOnlyShellCommand(command: string | undefined): boolean {
   if (!command || command.length > 8_192) return false;
   if (SHELL_CONTROL_OR_WRITE.test(command)) return false;
@@ -154,7 +163,6 @@ export function buildToolEnforcementPlan(
   const explorationTools = plan.tools.filter((tool) =>
     isDedicatedExplorationTool(tool) || isMixedShellTool(tool) || tool.name === 'kitt_runtime'
   );
-
   const requireExploration = explorationTools.length > 0 && workspaceDependent;
 
   return {
@@ -175,11 +183,10 @@ export function isExplorationToolCall(
   if (!tool) return false;
   if (tool.name === 'kitt_runtime') {
     const args = parseArguments(call);
-    if (RUNTIME_EXPLORATION.has(String(args?.operation))) return true;
-    if (args?.operation !== 'process.run') return false;
-    return isReadOnlyShellCommand(commandFromCall({
-      ...call, function: { ...call.function, arguments: JSON.stringify(args.arguments ?? {}) }
-    }));
+    const effect = runtimeOperationEffect(args?.operation);
+    if (effect === 'explore') return true;
+    if (effect !== 'mixed') return false;
+    return isReadOnlyShellCommand(runtimeCommandFromCall(call));
   }
   if (isMixedShellTool(tool)) return isReadOnlyShellCommand(commandFromCall(call));
   return isDedicatedExplorationTool(tool);
@@ -191,7 +198,13 @@ export function isMutationToolCall(
 ): boolean {
   const tool = plan.tools.find((candidate) => candidate.name === call.function.name);
   if (!tool) return false;
-  if (tool.name === 'kitt_runtime') return !isExplorationToolCall(call, plan);
+  if (tool.name === 'kitt_runtime') {
+    const args = parseArguments(call);
+    const effect = runtimeOperationEffect(args?.operation);
+    if (effect === 'mutate') return true;
+    if (effect !== 'mixed') return false;
+    return isMutatingShellCommand(runtimeCommandFromCall(call));
+  }
   if (isDedicatedMutationTool(tool)) return true;
   if (isMixedShellTool(tool)) return isMutatingShellCommand(commandFromCall(call));
   return false;
