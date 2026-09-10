@@ -11,6 +11,11 @@ $Src = Join-Path $Root 'src'
 $ProxyCmd = Join-Path $Bin 'kitt-reverse-proxy.cmd'
 $GatewayCmd = Join-Path $Bin 'kitt-agent-gateway.cmd'
 
+function Invoke-Native([string]$Command, [string[]]$Arguments) {
+  & $Command @Arguments
+  if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE" }
+}
+
 if ($Uninstall) {
   Remove-Item $Root -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $ProxyCmd,$GatewayCmd -Force -ErrorAction SilentlyContinue
@@ -20,26 +25,23 @@ if ($Uninstall) {
 foreach ($Tool in @('git','node','npm')) {
   if (-not (Get-Command $Tool -ErrorAction SilentlyContinue)) { throw "$Tool is required" }
 }
-& node -e "if(Number(process.versions.node.split('.')[0])<20)process.exit(1)"
-if ($LASTEXITCODE -ne 0) { throw 'Node.js 20+ is required' }
+& node -e "if(Number(process.versions.node.split('.')[0])<24)process.exit(1)"
+if ($LASTEXITCODE -ne 0) { throw 'Node.js 24+ is required' }
 
 New-Item -ItemType Directory -Force -Path $Root,$Bin | Out-Null
 if (-not (Test-Path (Join-Path $Src '.git'))) {
   Remove-Item $Src -Recurse -Force -ErrorAction SilentlyContinue
-  & git clone --filter=blob:none --no-checkout $Repo $Src
+  Invoke-Native 'git' @('clone','--filter=blob:none','--no-checkout',$Repo,$Src)
 }
-& git -C $Src remote set-url origin $Repo
-& git -C $Src fetch --force --depth 1 origin $Ref
-& git -C $Src checkout --detach --force FETCH_HEAD
-& git -C $Src clean -ffd
+Invoke-Native 'git' @('-C',$Src,'remote','set-url','origin',$Repo)
+Invoke-Native 'git' @('-C',$Src,'fetch','--force','--depth','1','origin',$Ref)
+Invoke-Native 'git' @('-C',$Src,'checkout','--detach','--force','FETCH_HEAD')
+Invoke-Native 'git' @('-C',$Src,'clean','-ffd')
 Push-Location $Src
 try {
-  & npm ci --no-audit --no-fund
-  if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-  & npm run build
-  if ($LASTEXITCODE -ne 0) { throw 'build failed' }
-  & npm prune --omit=dev --no-audit --no-fund
-  if ($LASTEXITCODE -ne 0) { throw 'npm prune failed' }
+  Invoke-Native 'npm' @('ci','--no-audit','--no-fund')
+  Invoke-Native 'npm' @('run','build')
+  Invoke-Native 'npm' @('prune','--omit=dev','--no-audit','--no-fund')
   $ChromeCandidates = @(
     "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
     "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
@@ -47,8 +49,7 @@ try {
   )
   $HasChrome = $ChromeCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
   if ($Browser -eq 'bundled' -or ($Browser -eq 'auto' -and -not $HasChrome)) {
-    & npx --yes playwright install chromium
-    if ($LASTEXITCODE -ne 0) { throw 'Playwright Chromium installation failed' }
+    Invoke-Native 'npx' @('--yes','playwright','install','chromium')
   }
 } finally { Pop-Location }
 
@@ -60,6 +61,6 @@ if ($Parts -notcontains $Bin) {
   [Environment]::SetEnvironmentVariable('Path', (($Parts + $Bin) -join ';'), 'User')
   $env:Path = "$Bin;$env:Path"
 }
-& $ProxyCmd --help | Out-Null
+Invoke-Native $ProxyCmd @('--help')
 Write-Host "K.I.T.T. Reverse Proxy installed/updated at $Root."
 Write-Host 'Open a new terminal and run: kitt-reverse-proxy start chatgpt'
