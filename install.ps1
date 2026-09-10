@@ -1,5 +1,5 @@
 param(
-  [string]$Ref = $(if ($env:KITT_PROXY_REF) { $env:KITT_PROXY_REF } else { 'main' }),
+  [string]$Ref = $(if ($env:KITT_PROXY_REF) { $env:KITT_PROXY_REF } else { 'stable' }),
   [ValidateSet('auto','bundled','system')][string]$Browser = 'auto',
   [switch]$Uninstall
 )
@@ -27,6 +27,21 @@ foreach ($Tool in @('git','node','npm')) {
 }
 & node -e "if(Number(process.versions.node.split('.')[0])<24)process.exit(1)"
 if ($LASTEXITCODE -ne 0) { throw 'Node.js 24+ is required' }
+
+if ($Ref -eq 'stable') {
+  $TagLines = & git ls-remote --refs --tags $Repo 'refs/tags/v*'
+  if ($LASTEXITCODE -ne 0) { throw "Could not list stable release tags from $Repo" }
+  $Versions = @(
+    foreach ($Line in $TagLines) {
+      if ($Line -match 'refs/tags/v(\d+\.\d+\.\d+)$') {
+        [pscustomobject]@{ Tag = "v$($Matches[1])"; Version = [version]$Matches[1] }
+      }
+    }
+  )
+  if ($Versions.Count -eq 0) { throw "Could not resolve a stable release tag from $Repo" }
+  $Ref = ($Versions | Sort-Object Version -Descending | Select-Object -First 1).Tag
+  Write-Host "Resolved stable release: $Ref"
+}
 
 New-Item -ItemType Directory -Force -Path $Root,$Bin | Out-Null
 if (-not (Test-Path (Join-Path $Src '.git'))) {
@@ -62,5 +77,5 @@ if ($Parts -notcontains $Bin) {
   $env:Path = "$Bin;$env:Path"
 }
 Invoke-Native $ProxyCmd @('--help')
-Write-Host "K.I.T.T. Reverse Proxy installed/updated at $Root."
+Write-Host "K.I.T.T. Reverse Proxy $Ref installed/updated at $Root."
 Write-Host 'Open a new terminal and run: kitt-reverse-proxy start chatgpt'
