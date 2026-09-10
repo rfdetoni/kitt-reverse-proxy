@@ -1,0 +1,46 @@
+name: Dispatch v3.0.2 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dispatch-v302-release.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: dispatch-v3.0.2-release
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Remove bootstrap and push clean main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/dispatch-v302-release.yml
+          git commit -m 'chore: remove v3.0.2 release bootstrap'
+          git push origin HEAD:main
+      - name: Dispatch permanent release workflow and clean merged branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref main -f tag=v3.0.2
+          branch='fix/node24-types-v3.0.2'
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          fi
