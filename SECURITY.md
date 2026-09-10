@@ -1,126 +1,124 @@
-# Security Model — kitt-reverse-proxy v3
+# Security Model — K.I.T.T. Reverse Proxy v3
 
-## Uso pretendido
+## Intended use
 
-Use apenas com chats, contas, sessões e endpoints que você esteja autorizado a automatizar.
+Use the proxy only with chats, accounts, sessions and endpoints you are authorized to automate.
 
-A v3 **não implementa**:
+The project does **not** implement CAPTCHA solving, stealth/fingerprint evasion, WAF or anti-bot bypass, authentication bypass, credential harvesting, or removal of provider rate limits and abuse controls. The CLI explicitly rejects `--stealth`, `--captcha-solver` and `--bypass`.
 
-- CAPTCHA solving;
-- stealth/evasão de detecção de automação;
-- fingerprint spoofing para ocultar Playwright;
-- bypass de WAF/anti-bot;
-- bypass de autenticação/autorização;
-- harvesting de credenciais;
-- remoção de rate limits ou controles anti-abuso.
+## Trust boundaries
 
-O CLI rejeita explicitamente `--stealth`, `--captcha-solver` e `--bypass`.
+The main boundaries are:
 
-## Providers conhecidos: UI-first
+1. local API/MCP clients;
+2. the proxy process and its in-memory session state;
+3. Playwright browser contexts that may contain authenticated provider state;
+4. provider websites/upstream endpoints;
+5. generated model output and tool-call text.
 
-ChatGPT, Claude, Gemini, Kimi e DeepSeek usam UI transport por padrão. A decisão é de segurança e manutenção: o navegador realiza a interação pelo fluxo normal do site, em vez de o proxy codificar ou tentar reproduzir mecanismos privados como tokens efêmeros, assinaturas, proof-of-work, RPC IDs ou challenges do backend web.
+Model output is treated as data. The reverse proxy does not execute generated code. Client-side agents remain responsible for authorizing and executing tool calls.
 
-UI automation ainda é automação e pode estar sujeita aos termos e controles do site.
+## Local HTTP API
 
-## CAPTCHA / anti-bot / login
+The server listens on `127.0.0.1` by default. A non-loopback bind requires `--api-key` or `PROXY_API_KEY`.
 
-`security/challenge.ts` detecta sinais comuns de:
+Authentication is evaluated **before** JSON body parsing. API-key comparison hashes both values with SHA-256 and uses `timingSafeEqual` over constant-length buffers.
 
-- reCAPTCHA;
-- hCaptcha;
-- Cloudflare challenge;
-- páginas com captcha/challenge/checkpoint;
-- textos de verificação humana/anti-bot;
-- login/autenticação.
+CORS is opt-in and accepts only loopback browser origins (`localhost`, `127.0.0.1`, `::1`). CLI clients do not depend on CORS.
 
-Em modo headed, o proxy aguarda intervenção humana e retoma apenas quando o campo normal de chat volta a estar visível.
+`/healthz` is a minimal liveness endpoint. Operational/runtime state is exposed through readiness and KITT management endpoints rather than the public liveness response.
 
-Em headless, um desafio que necessita de interação resulta em erro de intervenção manual. O projeto não tenta contorná-lo.
+Request lifecycle cancellation is propagated into session queues and executors so a disconnected client does not leave queued work active indefinitely.
 
-## Sessão persistente
+## MCP HTTP boundary
 
-`--user-data-dir` usa `chromium.launchPersistentContext()`.
+Streamable HTTP MCP binds only to loopback. The gateway constructs its internal origin from the configured local listener rather than trusting the incoming `Host` header. Absolute request targets are rejected and only `/mcp` is routed to the MCP handler.
 
-Esse diretório pode conter cookies, tokens, localStorage e outros dados de sessão. Trate-o como credencial:
+MCP bodies are bounded both by declared `Content-Length` and by bytes actually read. Oversized requests fail before concatenating an unbounded body. Response writes respect Node stream backpressure.
 
-- não coloque dentro do repositório;
-- não faça commit;
-- proteja permissões do diretório; o runtime cria/ajusta o diretório para `0700` em plataformas POSIX quando possível;
-- use um diretório separado por conta/provider quando possível;
-- apague-o quando não precisar mais da sessão persistida.
+## Providers: UI-first
 
-Sem `--user-data-dir`, o browser context é temporário por padrão.
+ChatGPT, Claude, Gemini, Kimi and DeepSeek use UI transport by default. The browser follows the provider's normal authenticated UI instead of the proxy reproducing private mechanisms such as ephemeral signatures, proof-of-work, internal RPC IDs or anti-abuse challenges.
 
-## Código produzido por LLM
+UI automation remains automation and may be subject to provider terms and controls.
 
-Nenhum código produzido pela LLM é executado.
+## CAPTCHA, anti-bot and login
 
-No network transport, Ollama pode gerar somente um profile JSON declarativo. O profile passa por allowlists de operações/sources e validação de JSON paths. Não existe source que invoque código arbitrário.
+`security/challenge.ts` detects common signals for CAPTCHA, Cloudflare/security challenges, human verification and login/authentication requirements.
 
-## JSON Path e prototype pollution
+In headed mode, the proxy can wait for manual intervention and resume only when the normal chat input becomes available. In headless mode, a challenge requiring interaction produces a manual-intervention error. The project does not attempt to solve or bypass it.
 
-O interpretador de paths rejeita segmentos perigosos:
+## Persistent browser sessions
 
-- `__proto__`;
-- `prototype`;
-- `constructor`.
+Persistent browser profiles can contain cookies, tokens, localStorage and other authenticated state. Treat the profile directory as credential material:
 
-A regra também vale para chaves quoted como `$["__proto__"]`.
+- keep it outside the repository;
+- never commit or publish it;
+- restrict filesystem permissions; POSIX profile directories are set to `0700` when possible;
+- prefer separate directories per account/provider;
+- remove profiles that are no longer required.
 
-Targets de escrita não aceitam wildcard.
+A browser supplied through `--cdp-url` is user-owned; shutdown does not intentionally terminate it.
 
-## Material de sessão no network transport
+## Network transport and captured session material
 
-O BrowserContext pode conter cookies, authorization, CSRF/XSRF e outros valores sensíveis.
+A BrowserContext may contain cookies, authorization and CSRF/XSRF state.
 
-- `cookie`, `host`, `content-length` e headers hop-by-hop não são capturados/reproduzidos manualmente;
-- cookies vêm do próprio `BrowserContext.request`;
-- profiles não armazenam headers capturados nem o request-base;
-- exemplos enviados ao Ollama local passam por redaction;
-- upstream error bodies não são encaminhados diretamente ao cliente;
-- profiles salvos usam modo `0600` quando suportado.
+- `cookie`, `host`, `content-length` and hop-by-hop headers are not captured/replayed manually;
+- cookies come from the BrowserContext request layer;
+- profiles do not store captured request headers or the full request base;
+- examples sent to a local Ollama mapping model are redacted;
+- upstream error bodies are not forwarded verbatim to API clients;
+- saved profiles use `0600` where supported.
 
-## Redirects
+Network redirects are disabled by default. `--follow-redirects` is opt-in and follows at most five redirects, only within the original origin. Cross-origin redirects are rejected.
 
-Network redirects são desabilitados por padrão.
+Discovery accepts the page host and its subdomains. Other authorized backend hosts require explicit `--allow-endpoint-host` configuration. The implementation intentionally does not infer eTLD+1 trust without a Public Suffix List.
 
-`--follow-redirects` é opt-in. O runtime mantém `maxRedirects: 0` no Playwright e segue redirects manualmente, no máximo cinco vezes, somente quando o próximo URL possui o **mesmo origin** do endpoint inicial. Redirect cross-origin é sempre bloqueado, independentemente do nome dos headers capturados.
+## Resource exhaustion controls
 
-## Endpoint allowlist
+A single shared resource-budget module defines hard bounds for HTTP/MCP input, discovery input/output and candidate count, upstream responses, gateway JSON, UI prompts/history/deltas, telemetry series and structured-log traversal.
 
-Discovery aceita automaticamente apenas:
+Additional controls include:
 
-- o mesmo host da página; ou
-- subdomínios diretos/descendentes do host alvo.
+- bounded serial queues and session counts;
+- idle session eviction;
+- request, header, keep-alive, discovery, upstream, UI and manual-intervention timeouts;
+- bounded tool protocol/arguments/results;
+- bounded profile/path/frame parsing;
+- response-size verification after read even when `Content-Length` is absent or incorrect;
+- bounded/redacted logging and bounded telemetry label cardinality.
 
-Backends irmãos ou externos exigem `--allow-endpoint-host` explícito. O projeto evita inferir eTLD+1 sem uma Public Suffix List, porque isso poderia confiar indevidamente em tenants de hosts compartilhados.
+These controls are defense-in-depth and do not replace OS/container resource limits for hostile multi-tenant deployment. The intended deployment remains local/single-user.
 
-## Proxy local
+## Tool calling and tool enforcement
 
-O servidor escuta em `127.0.0.1` por padrão.
+UI providers expose tool calling through a protocol bridge rather than a private provider tool API. Tool execution remains client-side.
 
-Bind não-loopback é rejeitado sem `--api-key`/`PROXY_API_KEY`.
+Known `kitt_runtime` operations are explicitly classified as exploration, mutation, neutral or mixed operations. This avoids treating all non-read operations as equivalent and gives read-before-write enforcement deterministic semantics. Mixed shell/process operations are classified from the command payload with conservative write/control detection.
 
-A comparação da chave calcula SHA-256 de ambos os valores e usa `timingSafeEqual` sobre buffers de tamanho constante.
+Unknown operations are not silently treated as trusted exploration. Request and model tool-protocol failures use structured semantic error codes consumed by K.I.T.T. Agent CLI.
 
-CORS, quando habilitado, aceita apenas origens browser loopback (`localhost`, `127.0.0.1`, `::1`). Clientes CLI não dependem de CORS.
+## JSON paths and prototype pollution
 
-## Limites de recursos
+The path interpreter rejects dangerous path segments including `__proto__`, `prototype` and `constructor`, including quoted-key forms. Write targets do not accept wildcard paths.
 
-- body Express limitado;
-- request candidato de discovery limitado antes do parsing e quantidade de candidatos retidos limitada;
-- resposta candidata/upstream limitada antes do parsing;
-- fila serial limitada;
-- timeouts separados para discovery, upstream, UI e intervenção manual;
-- máximo de prompt UI;
-- limites de profundidade/quantidade em profiles e parsing de frames;
-- redaction enviada ao modelo possui orçamento global de nós/chaves/arrays e o envelope do Ollama é limitado;
-- URLs em logs têm query string e fragmento removidos para evitar exposição acidental de assinaturas/tokens em query.
+## Structured output, logging and telemetry
 
-## Function calling
+Structured-output validation is best-effort and explicitly reported when it fails rather than pretending strict provider-native schema enforcement.
 
-O proxy não afirma suporte nativo a function calling quando o chat web não possui uma interface equivalente. No UI transport, `tools`/`tool_choice` não são enviados como APIs de ferramentas; podem ser representados textualmente pelo cliente/histórico quando necessário.
+Structured logs redact sensitive keys/values and cap depth, object keys and array elements. User-provided structured fields cannot replace the sanitized top-level log message. URLs written to logs have query strings/fragments removed where applicable.
 
-## Relato de vulnerabilidades
+Metrics use bounded label values and stable route labels rather than raw high-cardinality request paths, session IDs or arbitrary tool/function names.
 
-Ao relatar um problema, não inclua cookies, tokens, sessões do navegador, dumps completos de requests autenticados ou outras credenciais. Forneça um caso mínimo sanitizado e os passos para reprodução.
+## Dependency and release integrity
+
+CI runs verification on Node 24 across Linux, Windows and macOS, and Node 26 on Linux. GitHub Actions are pinned to immutable commit SHAs.
+
+The supply-chain job audits production dependencies at moderate severity and above, rejects any high/critical dependency vulnerability in the full dependency tree, and checks the npm package payload with `npm pack --dry-run`.
+
+Dependabot tracks npm and GitHub Actions updates. Tagged releases rerun verification and the production audit, verify that the Git tag matches `package.json`, create an npm-compatible archive and publish SHA-256 checksums with the GitHub release.
+
+## Reporting vulnerabilities
+
+Do not include cookies, tokens, browser profiles, complete authenticated request dumps or other credentials in a report. Provide the smallest sanitized reproduction, affected version/commit and steps required to reproduce the issue.
