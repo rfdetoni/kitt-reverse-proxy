@@ -1,6 +1,6 @@
 {
   "name": "kitt-reverse-proxy",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Local OpenAI-compatible adapter for authorized web chat sessions with UI and network transports.",
   "type": "module",
   "license": "MIT",
@@ -27,17 +27,17 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "playwright": "^1.55.0",
-    "@modelcontextprotocol/server": "^2.0.0"
+    "@modelcontextprotocol/server": "2.0.0",
+    "cors": "2.8.6",
+    "express": "5.2.1",
+    "playwright": "1.63.0"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3",
-    "@types/node": "^26.5.0",
-    "tsx": "^4.20.3",
-    "typescript": "^7.0.2"
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "26.5.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
   },
   "files": [
     "dist",

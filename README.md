@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/rfdetoni/kitt-reverse-proxy/main/in
 irm https://raw.githubusercontent.com/rfdetoni/kitt-reverse-proxy/main/install.ps1 | iex
 ```
 
-Requirements: Git, Node.js 24+ and npm. Re-running the installer updates the installation. Use `--browser system`, `--browser bundled` or the default `auto` policy when invoking the downloaded script directly.
+Requirements: Git, Node.js 24+ and npm. The bootstrap installer comes from `main`, but the installed source defaults to the newest immutable `vMAJOR.MINOR.PATCH` release tag. Re-running the command upgrades to the latest stable release. Pass `--ref main` to the downloaded installer, or set `KITT_PROXY_REF=main`, only when you intentionally want unreleased code. Browser policy is `auto` by default; `system` and `bundled` are also available.
 
 ## Start
 
@@ -115,14 +115,14 @@ For minimum RAM, prefer system Chrome/Chromium with the default persistent-profi
 
 The project does not bypass CAPTCHA, authentication, WAF or provider security controls. Manual challenges remain manual. Requests, responses, logs and telemetry are bounded/redacted where appropriate.
 
-CI pins GitHub Actions by commit SHA, runs cross-platform verification, audits production dependencies, rejects high/critical dependency vulnerabilities and validates package contents. Dependency update policy is maintained through Dependabot. Tagged releases rerun verification and production audit, then publish an npm-compatible tarball with SHA-256 checksums to GitHub Releases.
+Direct dependencies are pinned to the exact versions exercised by CI; Dependabot is the explicit update path. CI pins GitHub Actions by commit SHA, runs cross-platform verification, audits dependencies, enforces reviewed install scripts and validates package contents. Tagged releases rerun verification and production audit, publish an npm-compatible tarball plus SHA-256 checksums and a CycloneDX SBOM, and attach GitHub/Sigstore SLSA provenance and SBOM attestations.
 
 See `SECURITY.md` for the detailed security model.
 
 ## Development
 
 ```bash
-npm ci
+npm ci --strict-allow-scripts
 npm run verify
 ```
 

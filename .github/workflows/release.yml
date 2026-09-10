@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,12 +39,23 @@ jobs:
           fi
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=moderate
-      - name: Build release archive and checksum
+      - name: Build release archive, SBOM and checksums
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release
           npm pack --pack-destination release
-          (cd release && sha256sum ./*.tgz > SHA256SUMS)
+          npm sbom --sbom-format=cyclonedx --omit=dev > release/sbom.cdx.json
+          (cd release && sha256sum ./*.tgz sbom.cdx.json > SHA256SUMS)
+      - name: Attest SLSA build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*.tgz
+      - name: Attest CycloneDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*.tgz
+          sbom-path: release/sbom.cdx.json
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

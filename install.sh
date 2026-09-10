@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="${KITT_PROXY_REPO:-https://github.com/rfdetoni/kitt-reverse-proxy.git}"
-REF="${KITT_PROXY_REF:-main}"
+REF="${KITT_PROXY_REF:-stable}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 INSTALL_ROOT="${KITT_PROXY_HOME:-$DATA_HOME/kitt-reverse-proxy}"
 BIN_DIR="${KITT_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
@@ -12,7 +12,10 @@ UNINSTALL=0
 usage() {
   cat <<'EOF'
 K.I.T.T. Reverse Proxy installer/updater
-Usage: install.sh [--ref REF] [--browser auto|bundled|system] [--uninstall]
+Usage: install.sh [--ref stable|REF] [--browser auto|bundled|system] [--uninstall]
+
+The default ref is "stable", resolved to the newest vMAJOR.MINOR.PATCH tag.
+Use --ref main only when you intentionally want unreleased code.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -40,6 +43,24 @@ command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
 command -v node >/dev/null || { echo "Node.js 24+ is required" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
 node -e "const m=Number(process.versions.node.split('.')[0]); if(m<24) process.exit(1)" || { echo "Node.js 24+ is required" >&2; exit 1; }
+
+if [[ "$REF" == "stable" ]]; then
+  if ! REF="$(
+    git ls-remote --refs --tags "$REPO_URL" 'refs/tags/v*' |
+      node -e '
+        const input = require("node:fs").readFileSync(0, "utf8");
+        const versions = [...input.matchAll(/refs\/tags\/v(\d+)\.(\d+)\.(\d+)$/gm)]
+          .map((m) => ({ tag: `v${m[1]}.${m[2]}.${m[3]}`, parts: [Number(m[1]), Number(m[2]), Number(m[3])] }));
+        versions.sort((a, b) => a.parts[0] - b.parts[0] || a.parts[1] - b.parts[1] || a.parts[2] - b.parts[2]);
+        if (!versions.length) process.exit(2);
+        process.stdout.write(versions.at(-1).tag);
+      '
+  )"; then
+    echo "Could not resolve a stable release tag from $REPO_URL" >&2
+    exit 1
+  fi
+  echo "Resolved stable release: $REF"
+fi
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 if [[ ! -d "$SRC/.git" ]]; then
@@ -71,5 +92,5 @@ exec node "$SRC/dist/gateway/cli.js" "\$@"
 EOF
 chmod +x "$BIN_PROXY" "$BIN_GATEWAY"
 "$BIN_PROXY" --help >/dev/null
-echo "K.I.T.T. Reverse Proxy installed/updated at $INSTALL_ROOT."
+echo "K.I.T.T. Reverse Proxy $REF installed/updated at $INSTALL_ROOT."
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "Add $BIN_DIR to PATH." ;; esac
