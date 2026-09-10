@@ -22,6 +22,8 @@ const CODE_NOUN =
   /\b(?:class|classe|method|m[eé]todo|function|fun[cç][aã]o|endpoint|controller|service|repository|component|package|dependency|depend[eê]ncia|test|teste|bug|build|script|migration|migra[cç][aã]o|schema|query)\b/i;
 const CHANGE_INTENT =
   /\b(?:fix|corrig(?:ir|a|e|indo)?|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|review|revis(?:ar|e)|debug|investig(?:ar|ue)|resolve|resolver)\b/i;
+const DIRECT_FILESYSTEM_MUTATION =
+  /^\s*(?:(?:por favor|please)\s+)?(?:(?:crie|criar|create|make)\s+(?:(?:um|uma|a|an)\s+)?(?:pasta|diret[oó]rio|folder|directory)\b|(?:execute|executar|rode|run)\s*:?\s*(?:mkdir|touch)\b)/i;
 const PATH_LIKE =
   /(?:^|[\s"'`])(?:\.{0,2}\/|src\/|test\/|tests\/|lib\/|app\/|packages\/|[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|java|kt|kts|py|rs|go|cs|cpp|c|h|hpp|json|ya?ml|toml|xml|gradle|md|sql))(?:$|[\s"'`,:;])/i;
 
@@ -159,18 +161,19 @@ export function buildToolEnforcementPlan(
     };
   }
 
-  const workspaceDependent = isWorkspaceDependentRequest(latestUserText);
+  const directFilesystemMutation = DIRECT_FILESYSTEM_MUTATION.test(latestUserText);
+  const workspaceDependent = !directFilesystemMutation && isWorkspaceDependentRequest(latestUserText);
   const explorationTools = plan.tools.filter((tool) =>
     isDedicatedExplorationTool(tool) || isMixedShellTool(tool) || tool.name === 'kitt_runtime'
   );
   const requireExploration = explorationTools.length > 0 && workspaceDependent;
 
   return {
-    enabled: mode === 'required' || workspaceDependent,
+    enabled: mode === 'required' || workspaceDependent || directFilesystemMutation,
     mode,
     workspaceDependent,
     requireExploration,
-    requireAnyTool: mode === 'required',
+    requireAnyTool: mode === 'required' || directFilesystemMutation,
     explorationToolNames: explorationTools.map((tool) => tool.name)
   };
 }
