@@ -15,6 +15,8 @@ import { deltaFromCumulative } from './ui-history.js';
 export interface UiResponseResult {
   text: string;
   deltas: string[];
+  firstDeltaMs: number | undefined;
+  durationMs: number;
 }
 
 function isThinkingIndicator(text: string): boolean {
@@ -39,8 +41,10 @@ export async function awaitUiResponse(
   onDelta?: ChatExecutionOptions['onDelta'],
   signal?: AbortSignal
 ): Promise<UiResponseResult> {
-  const deadline = Date.now() + config.uiResponseTimeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + config.uiResponseTimeoutMs;
   const deltas: string[] = [];
+  let firstDeltaMs: number | undefined;
   let retainedDeltaChars = 0;
   let lastText = '';
   let streamedText = '';
@@ -68,6 +72,7 @@ export async function awaitUiResponse(
       if (!isThinkingIndicator(active.text)) {
         const delta = deltaFromCumulative(streamedText, active.text);
         if (delta) {
+          if (firstDeltaMs === undefined) firstDeltaMs = Math.max(0, Date.now() - startedAt);
           streamedText = active.text.trim();
           if (onDelta) {
             await onDelta(delta);
@@ -84,12 +89,12 @@ export async function awaitUiResponse(
       const settleMs = observedStreaming
         ? Math.max(750, config.uiSettleMs)
         : Math.max(1_250, config.uiSettleMs);
-      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas };
+      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
     }
 
     await abortableSleep(streaming ? 140 : 280, signal);
   }
 
-  if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, deltas };
+  if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
   throw new UiTimeoutError(`Nenhuma resposta do chat foi detectada em ${Math.round(config.uiResponseTimeoutMs / 1000)}s.`);
 }

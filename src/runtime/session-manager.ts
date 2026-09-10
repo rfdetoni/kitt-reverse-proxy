@@ -7,6 +7,7 @@ import type {
   LiveBrowserSession
 } from '../types.js';
 import { SerialQueue } from './serial-queue.js';
+import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
 import { updateRequestContext } from '../util/request-context.js';
 
@@ -126,16 +127,43 @@ export class SessionManager {
   }
 
   async execute(requestedId: string | undefined, body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
+    const requestStartedAt = Date.now();
     const session = await this.resolve(requestedId);
+    const resolvedAt = Date.now();
     updateRequestContext({ sessionId: session.id, provider: session.provider });
     session.lastActivity = Date.now();
     const queuedAt = Date.now();
     return session.queue.run(async () => {
-      telemetry.recordQueueWait(session.provider, Date.now() - queuedAt);
+      const dequeuedAt = Date.now();
+      const queueWaitMs = Math.max(0, dequeuedAt - queuedAt);
+      telemetry.recordQueueWait(session.provider, queueWaitMs);
       session.status = 'busy';
       session.lastActivity = Date.now();
+      const executorStartedAt = Date.now();
       try {
-        return await session.executor.execute(body, options);
+        const result = await session.executor.execute(body, options);
+        const completedAt = Date.now();
+        const timing: JsonObject = {
+          session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
+          queue_wait_ms: queueWaitMs,
+          executor_ms: Math.max(0, completedAt - executorStartedAt),
+          total_ms: Math.max(0, completedAt - requestStartedAt),
+          transport: session.executor.transport,
+          ...(result.metadata?.timing !== undefined ? { executor_timing: result.metadata.timing } : {})
+        };
+        logger.event('info', 'chat.timing', timing);
+        return { ...result, metadata: { ...(result.metadata ?? {}), timing } };
+      } catch (error) {
+        const failedAt = Date.now();
+        logger.event('warn', 'chat.timing', {
+          session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
+          queue_wait_ms: queueWaitMs,
+          executor_ms: Math.max(0, failedAt - executorStartedAt),
+          total_ms: Math.max(0, failedAt - requestStartedAt),
+          transport: session.executor.transport,
+          outcome: 'error'
+        });
+        throw error;
       } finally {
         session.lastActivity = Date.now();
         session.status = 'idle';
