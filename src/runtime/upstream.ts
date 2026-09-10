@@ -1,8 +1,10 @@
 import type { APIResponse, BrowserContext } from 'playwright';
+import { RESOURCE_LIMITS, utf8Bytes } from '../core/resource-limits.js';
 import { decodeRequestBody, encodeRequestBody } from '../discovery/body-codec.js';
 import { decodeTextBody } from '../discovery/decoder.js';
 import { mergeRotatingHeaders } from '../security/headers.js';
 import type { JsonObject, JsonValue, RequestBodyCodecDescriptor, UpstreamResult } from '../types.js';
+import { RequestAbortedError } from './serial-queue.js';
 
 const MAX_REDIRECTS = 5;
 
@@ -20,6 +22,13 @@ export class UpstreamRedirectError extends Error {
   }
 }
 
+export class UpstreamResponseTooLargeError extends Error {
+  constructor(public readonly maxBytes = RESOURCE_LIMITS.upstreamResponseBytes) {
+    super(`Resposta upstream excede o limite de ${maxBytes} bytes.`);
+    this.name = 'UpstreamResponseTooLargeError';
+  }
+}
+
 function redirectMethod(status: number, method: string): { method: string; keepBody: boolean } {
   if (status === 303 || ((status === 301 || status === 302) && method.toUpperCase() === 'POST')) {
     return { method: 'GET', keepBody: false };
@@ -32,6 +41,20 @@ function withoutBodyHeaders(headers: Record<string, string>): Record<string, str
   delete next['content-type'];
   delete next['content-length'];
   return next;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new RequestAbortedError();
+}
+
+async function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await promise;
+  throwIfAborted(signal);
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new RequestAbortedError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 export class BrowserUpstreamClient {
@@ -53,8 +76,15 @@ export class BrowserUpstreamClient {
     }
   }
 
-  private async fetchOnce(url: string, method: string, data: JsonObject | string | undefined, headers: Record<string, string>): Promise<APIResponse> {
-    return this.context.request.fetch(url, {
+  private async fetchOnce(
+    url: string,
+    method: string,
+    data: JsonObject | string | undefined,
+    headers: Record<string, string>,
+    signal?: AbortSignal
+  ): Promise<APIResponse> {
+    throwIfAborted(signal);
+    const request = this.context.request.fetch(url, {
       method,
       headers,
       ...(data === undefined ? {} : { data }),
@@ -63,16 +93,23 @@ export class BrowserUpstreamClient {
       maxRedirects: 0,
       maxRetries: 0
     });
+    if (signal) {
+      void request.then((response) => {
+        if (signal.aborted) void response.dispose().catch(() => undefined);
+      }, () => undefined);
+    }
+    return await withAbort(request, signal);
   }
 
-  async post(body: JsonObject): Promise<UpstreamResult> {
+  async post(body: JsonObject, signal?: AbortSignal): Promise<UpstreamResult> {
     let url = this.endpointUrl;
     let method = 'POST';
     let data: JsonObject | string | undefined = encodeRequestBody(body, this.codec);
     let requestHeaders = { ...this.headers };
 
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-      const response = await this.fetchOnce(url, method, data, requestHeaders);
+      throwIfAborted(signal);
+      const response = await this.fetchOnce(url, method, data, requestHeaders, signal);
       try {
         const status = response.status();
         const headers = response.headers();
@@ -101,7 +138,13 @@ export class BrowserUpstreamClient {
         }
 
         const contentType = headers['content-type'] || '';
-        const text = await response.text();
+        const declaredLength = Number(headers['content-length'] || 0);
+        if (Number.isFinite(declaredLength) && declaredLength > RESOURCE_LIMITS.upstreamResponseBytes) {
+          throw new UpstreamResponseTooLargeError();
+        }
+        throwIfAborted(signal);
+        const text = await withAbort(response.text(), signal);
+        if (utf8Bytes(text) > RESOURCE_LIMITS.upstreamResponseBytes) throw new UpstreamResponseTooLargeError();
         const decoded = decodeTextBody(text, contentType);
         if (status < 200 || status >= 300) throw new UpstreamHttpError(status);
         return { status, headers, contentType, body: decoded };
