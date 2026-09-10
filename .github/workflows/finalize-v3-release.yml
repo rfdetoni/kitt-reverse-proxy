@@ -1,0 +1,64 @@
+name: Finalize v3 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-v3-release.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-v3-release
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci --no-audit --no-fund --strict-allow-scripts
+      - run: npm run verify
+      - run: npm audit --omit=dev --audit-level=moderate
+      - name: Build release archive and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          npm pack --pack-destination release
+          (cd release && sha256sum ./*.tgz > SHA256SUMS)
+      - name: Remove bootstrap, clean legacy branch and publish v3.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/finalize-v3-release.yml
+          git commit -m 'chore: remove release bootstrap'
+          git push origin HEAD:main
+          clean_sha="$(git rev-parse HEAD)"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/refactor/state-of-the-art-core" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/refactor/state-of-the-art-core"
+          fi
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v3.0.0" >/dev/null 2>&1; then
+            echo 'Tag v3.0.0 already exists; refusing to retarget it.' >&2
+            exit 1
+          fi
+
+          gh release create v3.0.0 release/* \
+            --target "$clean_sha" \
+            --generate-notes \
+            --title v3.0.0
