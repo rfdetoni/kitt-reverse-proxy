@@ -51,7 +51,7 @@ git -C "$SRC" fetch --force --depth 1 origin "$REF"
 git -C "$SRC" checkout --detach --force FETCH_HEAD
 git -C "$SRC" clean -ffd
 
-(cd "$SRC" && npm ci --no-audit --no-fund && npm run build && npm prune --omit=dev --no-audit --no-fund)
+(cd "$SRC" && npm ci --no-audit --no-fund --strict-allow-scripts && npm run build && npm prune --omit=dev --no-audit --no-fund)
 
 has_system_browser=0
 for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
