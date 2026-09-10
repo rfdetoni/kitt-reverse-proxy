@@ -113,21 +113,11 @@ export class SessionManager {
     this.timer.unref();
   }
 
-  get modelId(): string {
-    return this.defaultSession.executor.modelId;
-  }
+  get modelId(): string { return this.defaultSession.executor.modelId; }
+  get transport(): ChatExecutor['transport'] { return this.defaultSession.executor.transport; }
+  get providerId(): string { return this.options.provider; }
 
-  get transport(): ChatExecutor['transport'] {
-    return this.defaultSession.executor.transport;
-  }
-
-  get providerId(): string {
-    return this.options.provider;
-  }
-
-  describe(): JsonObject {
-    return this.defaultSession.executor.describe();
-  }
+  describe(): JsonObject { return this.defaultSession.executor.describe(); }
 
   normalizeSessionId(value: string | undefined): string {
     if (value === undefined || value === '' || value === 'default') return 'default';
@@ -135,11 +125,7 @@ export class SessionManager {
     return value;
   }
 
-  async execute(
-    requestedId: string | undefined,
-    body: JsonObject,
-    options?: ChatExecutionOptions
-  ): Promise<ChatExecutionResult> {
+  async execute(requestedId: string | undefined, body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
     const session = await this.resolve(requestedId);
     updateRequestContext({ sessionId: session.id, provider: session.provider });
     session.lastActivity = Date.now();
@@ -152,7 +138,7 @@ export class SessionManager {
         return await session.executor.execute(body, options);
       } finally {
         session.lastActivity = Date.now();
-        if (session.status !== 'closing') session.status = 'idle';
+        session.status = 'idle';
       }
     }, options?.signal);
   }
@@ -166,7 +152,7 @@ export class SessionManager {
         await session.executor.reset!();
       } finally {
         session.lastActivity = Date.now();
-        if (session.status !== 'closing') session.status = 'idle';
+        session.status = 'idle';
       }
     }, signal);
   }
@@ -197,9 +183,7 @@ export class SessionManager {
     const values = [...this.sessions.values()];
     const busy = values.filter((session) => session.status === 'busy' || session.queue.depth > 0).length;
     const idle = values.filter((session) => session.status === 'idle' && session.queue.depth === 0).length;
-    const recyclable = values.filter((session) =>
-      !session.isDefault && session.status === 'idle' && session.queue.depth === 0
-    ).length;
+    const recyclable = values.filter((session) => !session.isDefault && session.status === 'idle' && session.queue.depth === 0).length;
     return {
       provider: this.options.provider,
       active: values.length,
@@ -225,10 +209,7 @@ export class SessionManager {
     if (this.closed) return;
     const timeout = this.options.config.sessionIdleTimeoutMs;
     const stale = [...this.sessions.values()].filter((session) =>
-      !session.isDefault
-      && session.status === 'idle'
-      && session.queue.depth === 0
-      && now - session.lastActivity >= timeout
+      !session.isDefault && session.status === 'idle' && session.queue.depth === 0 && now - session.lastActivity >= timeout
     );
     for (const session of stale) await this.removeSession(session);
   }
@@ -237,12 +218,10 @@ export class SessionManager {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
-
     for (const session of this.sessions.values()) session.queue.close();
     await Promise.allSettled([...this.creating.values()]);
     const snapshot = [...this.sessions.values()];
     await Promise.all(snapshot.map((session) => session.queue.drain()));
-
     for (const session of snapshot) {
       if (!session.isDefault && this.sessions.get(session.id) === session) await this.removeSession(session);
     }
@@ -260,17 +239,12 @@ export class SessionManager {
     const current = this.sessions.get(id);
     if (current) return current;
     if (!this.options.factory) throw new SessionNotSupportedError();
-
     const pending = this.creating.get(id);
     if (pending) return pending;
-
     const creation = this.create(id);
     this.creating.set(id, creation);
-    try {
-      return await creation;
-    } finally {
-      this.creating.delete(id);
-    }
+    try { return await creation; }
+    finally { this.creating.delete(id); }
   }
 
   private async create(id: string): Promise<ManagedSession> {
@@ -300,11 +274,9 @@ export class SessionManager {
 
   private async ensureCapacity(): Promise<void> {
     if (this.sessions.size + this.creating.size < this.options.config.maxSessions) return;
-
     const candidate = [...this.sessions.values()]
       .filter((session) => !session.isDefault && session.status === 'idle' && session.queue.depth === 0)
       .sort((left, right) => left.lastActivity - right.lastActivity || left.createdAt - right.createdAt)[0];
-
     if (!candidate) throw new SessionLimitExceededError();
     await this.removeSession(candidate);
   }
