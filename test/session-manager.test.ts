@@ -86,3 +86,24 @@ test('concurrent creation reserves capacity before awaiting browser startup', as
     await manager.close();
   }
 });
+
+
+test('session manager attaches per-request timing metadata', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config
+  });
+  try {
+    const result = await manager.execute(undefined, { messages: [{ role: 'user', content: 'timing' }] });
+    const timing = result.metadata?.timing as JsonObject | undefined;
+    assert.ok(timing);
+    assert.equal(timing.transport, 'ui');
+    for (const key of ['session_resolve_ms', 'queue_wait_ms', 'executor_ms', 'total_ms']) {
+      assert.equal(typeof timing[key], 'number');
+      assert.ok((timing[key] as number) >= 0);
+    }
+  } finally {
+    await manager.close();
+  }
+});

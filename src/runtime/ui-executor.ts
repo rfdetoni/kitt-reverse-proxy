@@ -154,7 +154,7 @@ export class UiChatExecutor implements ChatExecutor {
     sentPrompt: string,
     onDelta?: ChatExecutionOptions['onDelta'],
     signal?: AbortSignal
-  ): Promise<{ text: string; deltas?: string[]; snapshots?: string[] }> {
+  ): Promise<{ text: string; deltas?: string[]; snapshots?: string[]; firstDeltaMs: number | undefined; durationMs: number }> {
     return await awaitUiResponse(this.session, this.provider, this.config, baseline, sentPrompt, onDelta, signal);
   }
 
@@ -212,6 +212,7 @@ export class UiChatExecutor implements ChatExecutor {
   }
 
   async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
+    const executionStartedAt = Date.now();
     throwIfAborted(options?.signal);
     const incoming = canonicalMessages(body);
     if (!incoming.length) throw new UiAutomationError('Nenhuma mensagem textual utilizável foi recebida.');
@@ -335,7 +336,9 @@ export class UiChatExecutor implements ChatExecutor {
 
     const artifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+    const promptSendStartedAt = Date.now();
     await this.sendPrompt(prompt, options?.signal);
+    const promptSentAt = Date.now();
 
     const bufferResponse = requestMayReturnToolCalls(body) || Boolean(structured);
     const result = await this.awaitResponse(
@@ -424,10 +427,21 @@ export class UiChatExecutor implements ChatExecutor {
       ? []
       : result.deltas
         ?? (result.snapshots ? computeDeltas(result.snapshots, responseContent || '') : (responseContent ? [responseContent] : []));
+    const timing: JsonObject = {
+      transport: 'ui',
+      ui_prepare_ms: Math.max(0, promptSendStartedAt - executionStartedAt),
+      ui_prompt_send_ms: Math.max(0, promptSentAt - promptSendStartedAt),
+      ui_response_ttft_ms: result.firstDeltaMs ?? result.durationMs,
+      ui_response_wait_ms: result.durationMs,
+      ui_executor_total_ms: Math.max(0, Date.now() - executionStartedAt)
+    };
     const execution: ChatExecutionResult = {
       completion: output,
       deltas,
-      ...(structuredOutputFailed ? { metadata: { structured_output: 'failed' } } : {})
+      metadata: {
+        ...(structuredOutputFailed ? { structured_output: 'failed' } : {}),
+        timing
+      }
     };
 
     if (incoming.length > 1) {
