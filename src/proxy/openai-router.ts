@@ -10,7 +10,7 @@ import {
   ResponsesStreamWriter,
   responsesBodyToChat
 } from './openai.js';
-import { sendProxyError } from './http-errors.js';
+import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
 
@@ -60,7 +60,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
-        const body = responsesBodyToChat(source);
+        const body = parseRequestBody(responsesBodyToChat, source);
         const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
 
         if (source.stream === true) {
