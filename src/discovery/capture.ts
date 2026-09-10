@@ -1,4 +1,5 @@
 import type { Request, Response } from 'playwright';
+import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { logger } from '../logger.js';
 import { openBrowserSession, navigateSession } from '../runtime/browser-session.js';
 import { sanitizeCapturedHeaders } from '../security/headers.js';
@@ -7,10 +8,6 @@ import type { AppConfig, CapturedExchange, JsonValue, LiveBrowserSession, Provid
 import { decodeRequestBody } from './body-codec.js';
 import { decodeTextBody } from './decoder.js';
 import { scoreRequestCandidate, scoreResponseCandidate } from './scoring.js';
-
-const MAX_CAPTURE_REQUEST_BYTES = 2 * 1024 * 1024;
-const MAX_CAPTURE_RESPONSE_BYTES = 5 * 1024 * 1024;
-const MAX_CANDIDATES = 128;
 
 interface Candidate {
   request: Request;
@@ -30,8 +27,13 @@ async function readResponse(response: Response): Promise<{ body: JsonValue; head
   const headers = await response.allHeaders();
   const contentType = headers['content-type'] || '';
   const contentLength = Number(headers['content-length'] || 0);
-  if (Number.isFinite(contentLength) && contentLength > MAX_CAPTURE_RESPONSE_BYTES) throw new Error(`Resposta candidata excede ${MAX_CAPTURE_RESPONSE_BYTES} bytes.`);
+  if (Number.isFinite(contentLength) && contentLength > RESOURCE_LIMITS.discoveryResponseBytes) {
+    throw new Error(`Resposta candidata excede ${RESOURCE_LIMITS.discoveryResponseBytes} bytes.`);
+  }
   const text = await response.text();
+  if (Buffer.byteLength(text, 'utf8') > RESOURCE_LIMITS.discoveryResponseBytes) {
+    throw new Error(`Resposta candidata excede ${RESOURCE_LIMITS.discoveryResponseBytes} bytes.`);
+  }
   return { body: decodeTextBody(text, contentType), headers, contentType, status: response.status() };
 }
 
@@ -71,7 +73,7 @@ export async function captureChatExchange(
     if (selected || request.method() !== 'POST') return;
     void (async () => {
       const postData = request.postData();
-      if (!postData || Buffer.byteLength(postData, 'utf8') > MAX_CAPTURE_REQUEST_BYTES) return;
+      if (!postData || Buffer.byteLength(postData, 'utf8') > RESOURCE_LIMITS.discoveryRequestBytes) return;
       const allHeaders = await request.allHeaders();
       const contentType = allHeaders['content-type'] || '';
       const decoded = decodeRequestBody(postData, contentType);
@@ -107,7 +109,7 @@ export async function captureChatExchange(
         score: preliminaryScore
       };
       candidates.set(request, candidate);
-      while (candidates.size > MAX_CANDIDATES) {
+      while (candidates.size > RESOURCE_LIMITS.discoveryCandidates) {
         const oldest = candidates.keys().next().value as Request | undefined;
         if (!oldest) break;
         candidates.delete(oldest);
