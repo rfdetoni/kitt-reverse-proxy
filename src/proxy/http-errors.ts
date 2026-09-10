@@ -27,3 +27,14 @@ export function invalidJsonError(error: unknown): InvalidRequestError | undefine
   if (error instanceof SyntaxError) return new InvalidRequestError('JSON inválido.');
   return undefined;
 }
+
+export function parseRequestBody<T>(parser: (value: unknown) => T, value: unknown): T {
+  try {
+    return parser(value);
+  } catch (error) {
+    if (error instanceof InvalidRequestError) throw error;
+    const descriptor = describeProxyError(error);
+    if (descriptor.code !== 'proxy_error') throw error;
+    throw new InvalidRequestError(error instanceof Error ? error.message : 'Request inválido.');
+  }
+}
