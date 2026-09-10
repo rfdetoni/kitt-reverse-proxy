@@ -8,7 +8,9 @@
     "node": ">=24.0.0"
   },
   "allowScripts": {
-    "esbuild@0.28.2": true
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.2": true,
+    "fsevents@2.3.3": true
   },
   "bin": {
     "kitt-reverse-proxy": "./dist/cli.js",
