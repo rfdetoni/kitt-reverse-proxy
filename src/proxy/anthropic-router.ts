@@ -7,7 +7,7 @@ import {
   anthropicBodyToChat,
   completionToAnthropic
 } from './anthropic.js';
-import { sendProxyError } from './http-errors.js';
+import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 
 export function createAnthropicRouter(manager: SessionManager): Router {
@@ -17,7 +17,7 @@ export function createAnthropicRouter(manager: SessionManager): Router {
     try {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
-        const body = anthropicBodyToChat(req.body);
+        const body = parseRequestBody(anthropicBodyToChat, req.body);
         const bufferTools = requestMayReturnToolCalls(body);
         const requestedModel = typeof req.body?.model === 'string' && req.body.model.trim()
           ? req.body.model.trim()
