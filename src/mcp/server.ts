@@ -2,23 +2,30 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { McpServer, createMcpHandler, fromJsonSchema } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { parseCliArgs } from '../config.js';
+import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { configureLogger } from '../logger.js';
 import { providerIds } from '../providers/catalog.js';
 import { createRuntime } from '../runtime/runtime-factory.js';
 import { createIsolatedUiSession } from '../runtime/isolated-ui-session.js';
 import { SessionManager } from '../runtime/session-manager.js';
-
-const MAX_HTTP_BODY = 2 * 1024 * 1024;
+import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
 
 interface AskArgs {
   message: string;
   session_id?: string;
 }
 
+class McpHttpError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'McpHttpError';
+  }
+}
+
 const askSchema = fromJsonSchema<AskArgs>({
   type: 'object',
   properties: {
-    message: { type: 'string', minLength: 1, maxLength: 500000 },
+    message: { type: 'string', minLength: 1, maxLength: RESOURCE_LIMITS.uiPromptChars },
     session_id: { type: 'string', pattern: '^[A-Za-z0-9]{1,64}$' }
   },
   required: ['message'],
@@ -27,8 +34,8 @@ const askSchema = fromJsonSchema<AskArgs>({
 
 function createKittMcpServer(manager: SessionManager, provider: string): McpServer {
   const server = new McpServer({
-    name: 'kitt-reverse-proxy',
-    version: '3.0.0',
+    name: SERVICE_NAME,
+    version: SERVICE_VERSION,
     description: `MCP facade for the active KITT ${provider} web-chat provider.`
   }, { capabilities: { tools: {}, resources: {} } });
 
@@ -75,17 +82,33 @@ function createKittMcpServer(manager: SessionManager, provider: string): McpServ
   return server;
 }
 
+function declaredBodySize(req: IncomingMessage): number | undefined {
+  const raw = req.headers['content-length'];
+  if (raw === undefined) return undefined;
+  const text = Array.isArray(raw) ? raw[0] : raw;
+  const size = Number(text);
+  if (!Number.isSafeInteger(size) || size < 0) throw new McpHttpError(400, 'Invalid Content-Length.');
+  return size;
+}
+
 async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+  const declared = declaredBodySize(req);
+  if (declared !== undefined && declared > RESOURCE_LIMITS.mcpRequestBytes) {
+    throw new McpHttpError(413, 'MCP request body too large.');
+  }
+
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const raw of req) {
     const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
     size += chunk.length;
-    if (size > MAX_HTTP_BODY) throw new Error('MCP request body too large.');
+    if (size > RESOURCE_LIMITS.mcpRequestBytes) {
+      throw new McpHttpError(413, 'MCP request body too large.');
+    }
     chunks.push(chunk);
   }
-  return chunks.length ? Buffer.concat(chunks) : undefined;
+  return chunks.length ? Buffer.concat(chunks, size) : undefined;
 }
 
 async function serveWebResponse(response: Response, res: ServerResponse): Promise<void> {
@@ -100,7 +123,9 @@ async function serveWebResponse(response: Response, res: ServerResponse): Promis
     while (true) {
       const item = await reader.read();
       if (item.done) break;
-      res.write(Buffer.from(item.value));
+      if (!res.write(Buffer.from(item.value))) {
+        await new Promise<void>((resolve) => res.once('drain', resolve));
+      }
     }
     res.end();
   } catch (error) {
@@ -110,13 +135,27 @@ async function serveWebResponse(response: Response, res: ServerResponse): Promis
   }
 }
 
+function sendMcpBoundaryError(res: ServerResponse, error: unknown): void {
+  if (res.headersSent) {
+    res.destroy(error instanceof Error ? error : undefined);
+    return;
+  }
+  const status = error instanceof McpHttpError ? error.status : 500;
+  const message = error instanceof McpHttpError ? error.message : 'Internal MCP gateway error.';
+  res.statusCode = status;
+  res.setHeader('content-type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify({ error: { message, code: status === 413 ? 'request_too_large' : 'mcp_gateway_error' } }));
+}
+
 async function serveHttpMcp(manager: SessionManager, provider: string, port: number): Promise<void> {
   const handler = createMcpHandler(() => createKittMcpServer(manager, provider));
+  const origin = `http://127.0.0.1:${port}`;
   const http = createHttpServer(async (req, res) => {
     try {
-      const host = req.headers.host || `127.0.0.1:${port}`;
-      const url = new URL(req.url || '/mcp', `http://${host}`);
-      if (url.pathname !== '/mcp') {
+      const requestTarget = req.url || '/mcp';
+      if (/^https?:\/\//i.test(requestTarget)) throw new McpHttpError(400, 'Absolute request targets are not accepted.');
+      const url = new URL(requestTarget, origin);
+      if (url.origin !== origin || url.pathname !== '/mcp') {
         res.statusCode = 404;
         res.end('Not found');
         return;
@@ -124,7 +163,7 @@ async function serveHttpMcp(manager: SessionManager, provider: string, port: num
       const body = await readBody(req);
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
-        if (value === undefined) continue;
+        if (value === undefined || key.toLowerCase() === 'host') continue;
         if (Array.isArray(value)) {
           for (const item of value) headers.append(key, item);
         } else {
@@ -139,17 +178,20 @@ async function serveHttpMcp(manager: SessionManager, provider: string, port: num
       const response = await handler.fetch(request);
       await serveWebResponse(response, res);
     } catch (error) {
-      res.statusCode = 500;
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      sendMcpBoundaryError(res, error);
     }
   });
+
+  http.requestTimeout = 30_000;
+  http.headersTimeout = 10_000;
+  http.keepAliveTimeout = 5_000;
+  http.maxHeadersCount = 100;
 
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject);
     http.listen(port, '127.0.0.1', () => resolve());
   });
-  console.error(`KITT MCP Streamable HTTP listening on http://127.0.0.1:${port}/mcp`);
+  console.error(`KITT MCP Streamable HTTP listening on ${origin}/mcp`);
 
   await new Promise<void>((resolve) => {
     let closed = false;
