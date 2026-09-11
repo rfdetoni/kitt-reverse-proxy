@@ -48,6 +48,63 @@ function toolish(text: string): boolean {
   return /<tool_call\b|<\/tool_call>|```(?:tool[_-]?call|function[_-]?call)|\b(?:tool|function)[ _-]?call\s*[:=]/i.test(text);
 }
 
+function repairJsonStringEscapes(input: string): string {
+  let output = '';
+  let inString = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index]!;
+    if (!inString) {
+      output += current;
+      if (current === '"') inString = true;
+      continue;
+    }
+
+    if (current === '"') {
+      output += current;
+      inString = false;
+      continue;
+    }
+
+    if (current === '\\') {
+      const next = input[index + 1];
+      if (next === undefined) {
+        output += '\\\\';
+        continue;
+      }
+      if ('"\\/bfnrt'.includes(next)) {
+        output += current + next;
+        index += 1;
+        continue;
+      }
+      if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(input.slice(index + 2, index + 6))) {
+        output += input.slice(index, index + 6);
+        index += 5;
+        continue;
+      }
+
+      // Preserve source-code escapes such as Python's \x00 or regex \d by
+      // escaping only the JSON transport backslash. JSON.parse then yields
+      // the exact original source text instead of rejecting the whole call.
+      output += '\\\\';
+      continue;
+    }
+
+    const code = current.charCodeAt(0);
+    if (code < 0x20) {
+      if (current === '\n') output += '\\n';
+      else if (current === '\r') output += '\\r';
+      else if (current === '\t') output += '\\t';
+      else output += `\\u${code.toString(16).padStart(4, '0')}`;
+      continue;
+    }
+
+    output += current;
+  }
+
+  return output;
+}
+
 function normalizeProviderPatterns(text: string): string {
   let normalized = text.replace(/```(?:tool[_-]?call|function[_-]?call)\s*/gi, '```json\n');
 
@@ -57,7 +114,7 @@ function normalizeProviderPatterns(text: string): string {
       const body = rawBody.trim();
       let args: unknown = {};
       try {
-        args = body ? JSON.parse(body) : {};
+        args = body ? JSON.parse(repairJsonStringEscapes(body)) : {};
       } catch {
         args = { value: body };
       }
@@ -72,6 +129,15 @@ function normalizeProviderPatterns(text: string): string {
     /\b(?:tool|function)[ _-]?call\s*[:=]\s*(\{[\s\S]*?\})(?=\s*(?:$|\n))/gi,
     (_whole, payload: string) => `<tool_call>${payload}</tool_call>`
   );
+
+  // Browser models often embed source code directly in textual JSON tool
+  // envelopes. Repair only invalid JSON string escapes/control characters;
+  // structural JSON errors still fail closed in extractToolCalls().
+  normalized = normalized.replace(
+    /<tool_call>([\s\S]*?)<\/tool_call>/gi,
+    (_whole, body: string) => `<tool_call>${repairJsonStringEscapes(body)}</tool_call>`
+  );
+
   return normalized;
 }
 
