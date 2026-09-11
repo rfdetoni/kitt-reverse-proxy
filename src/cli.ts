@@ -5,8 +5,10 @@ import { startProxyServer } from './proxy/server.js';
 import { createRuntime } from './runtime/runtime-factory.js';
 import { createIsolatedUiSession } from './runtime/isolated-ui-session.js';
 import { SessionManager } from './runtime/session-manager.js';
+import { notifyIfUpdateAvailable } from './update-check.js';
 
 async function main(): Promise<void> {
+  await notifyIfUpdateAvailable(import.meta.url);
   const rawArgs = process.argv.slice(2);
   if (rawArgs[0] === 'mcp') {
     const { runMcpCli } = await import('./mcp/server.js');
