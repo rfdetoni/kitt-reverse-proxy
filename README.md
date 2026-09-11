@@ -77,6 +77,44 @@ Use `--ref main` or `KITT_PROXY_REF=main` only when you intentionally want unrel
 
 ---
 
+## Docker
+
+Docker support is optional. The repository provides two reverse-proxy image targets plus a dedicated Chromium sidecar:
+
+- `runtime`: Node/Playwright client runtime without a bundled browser, intended to connect to a browser sidecar over CDP;
+- `standalone` (the default final target): includes Playwright Chromium for a self-contained headless container;
+- `docker/browser.Dockerfile`: isolated Chromium sidecar with a persistent profile, headless normal mode and optional noVNC UI for manual authentication.
+
+### Standalone headless container
+
+```bash
+docker build -t kitt-reverse-proxy .
+docker run --rm \
+  --shm-size=1g \
+  -p 127.0.0.1:3000:3000 \
+  -e PROXY_API_KEY="$(openssl rand -hex 32)" \
+  -v kitt-browser-profile:/data/browser \
+  kitt-reverse-proxy
+```
+
+The container listens on `0.0.0.0` internally so other containers can reach it, therefore `PROXY_API_KEY` is mandatory. Publishing the port on host loopback keeps the API local to the machine.
+
+### Browser sidecar
+
+The ecosystem Compose file in [`rfdetoni/kitt`](https://github.com/rfdetoni/kitt) uses the lighter `runtime` target and connects it to the dedicated browser container through `CDP_URL=http://browser:9222`. The CDP port is deliberately **not** published to the host.
+
+For normal operation the sidecar runs Chromium headlessly. If the provider requires login, CAPTCHA or another manual challenge, switch the browser to headed mode and use the noVNC UI on host loopback:
+
+```bash
+KITT_BROWSER_MODE=headed docker compose up -d browser reverse-proxy
+```
+
+Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=remote`, complete the authentication manually, set `KITT_BROWSER_MODE=headless` again and restart the browser service. The same `/data/browser` volume is reused, so the authenticated profile survives container restarts.
+
+Treat that browser-profile volume as credential material. Do not publish port `9222`, and do not expose the noVNC port beyond trusted host loopback.
+
+---
+
 ## Running the proxy
 
 Start one of the built-in web providers:
