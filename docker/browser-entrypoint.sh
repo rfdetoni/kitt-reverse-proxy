@@ -45,11 +45,14 @@ case "$MODE" in
     ;;
 esac
 
-# CDP stays inside the Docker network. The Compose file exposes only noVNC on
-# host loopback for manual authentication.
+# Chromium's setuid/user-namespace sandbox is incompatible with the default
+# Docker namespace/seccomp boundary on common Linux hosts. This dedicated
+# browser container stays non-root and relies on the container boundary;
+# CDP remains private to the Compose network.
 # shellcheck disable=SC2086
 exec chromium \
   $BROWSER_MODE_ARGS \
+  --no-sandbox \
   --user-data-dir="$PROFILE_DIR" \
   --remote-debugging-address=0.0.0.0 \
   --remote-debugging-port=9222 \
