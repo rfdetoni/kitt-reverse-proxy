@@ -10,6 +10,7 @@ on:
       - package.json
       - package-lock.json
       - tsconfig.json
+      - tsconfig.build.json
       - src/**
       - .github/workflows/docker.yml
   pull_request:
@@ -20,6 +21,7 @@ on:
       - package.json
       - package-lock.json
       - tsconfig.json
+      - tsconfig.build.json
       - src/**
       - .github/workflows/docker.yml
 
@@ -38,3 +40,25 @@ jobs:
         run: docker build --target standalone -t kitt-reverse-proxy:standalone .
       - name: Build browser sidecar
         run: docker build -f docker/browser.Dockerfile -t kitt-browser:test .
+      - name: Smoke test browser sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name kitt-browser-smoke --shm-size=1g kitt-browser:test
+          cleanup() {
+            docker logs kitt-browser-smoke || true
+            docker rm -f kitt-browser-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 30); do
+            if docker exec kitt-browser-smoke \
+              curl --fail --silent --show-error http://127.0.0.1:9222/json/version \
+              >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Chromium CDP did not become ready" >&2
+          exit 1
