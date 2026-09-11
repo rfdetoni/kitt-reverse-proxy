@@ -17,7 +17,8 @@ test('provider presets resolve target URL, UI transport and persistent profile',
   assert.equal(config.provider, 'chatgpt');
   assert.equal(config.transport, 'ui');
   assert.equal(config.apiModel, 'chatgpt-web');
-  assert.equal(config.browserMode, 'auto');
+  assert.equal(config.browserMode, 'headed');
+  assert.equal(config.headed, true);
   assert.match(config.userDataDir || '', /\.kitt-reverse-proxy[\\/]chatgpt$/);
 });
 
@@ -49,4 +50,3 @@ test('cdp-url flag configures remote debugging endpoint', () => {
   if ('help' in config) throw new Error('unexpected help');
   assert.equal(config.cdpUrl, 'http://127.0.0.1:9222/');
 });
-

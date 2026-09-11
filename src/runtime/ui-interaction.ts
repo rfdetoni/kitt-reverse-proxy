@@ -87,51 +87,20 @@ export async function sendUiPrompt(
 
   await abortableSleep(150, signal);
   const sendButtonDeadline = Date.now() + 2_500;
-  let submitted = false;
-
   while (Date.now() < sendButtonDeadline) {
     throwIfAborted(signal);
-    const send = await firstVisibleLocator(session.page, provider.ui.sendSelectors);
+    if (await anyVisible(session.page, provider.ui.streamingSelectors)) return;
+    const send = await firstVisibleLocator(session.page, provider.ui.sendSelectors.map((selector) =>
+      `${selector}:not([aria-label*="stop" i]):not([aria-label*="parar" i]):not([aria-label*="interromper" i]):not([data-testid="stop-button"])`
+    ));
     if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ force: true, timeout: 2_000 }).catch(() => undefined);
-      submitted = true;
-      break;
-    }
-    if (await anyVisible(session.page, provider.ui.streamingSelectors)) {
-      submitted = true;
-      break;
+      await send.click({ timeout: 2_000 });
+      return;
     }
     await abortableSleep(100, signal);
   }
 
-  if (!submitted) {
-    await input.focus().catch(() => undefined);
-    await input.press('Enter', { timeout: 2_000 }).catch(() => undefined);
-    await session.page.keyboard.press('Enter').catch(() => undefined);
-  }
-
-  const verifyDeadline = Date.now() + 1_500;
-  while (Date.now() < verifyDeadline) {
-    throwIfAborted(signal);
-    if (await anyVisible(session.page, provider.ui.streamingSelectors)) return;
-
-    const remainingText = await input.evaluate((element: Element) => {
-      if ('value' in element && typeof (element as HTMLInputElement).value === 'string') {
-        return (element as HTMLInputElement).value.trim();
-      }
-      return (element.textContent || '').trim();
-    }).catch(() => '');
-    if (!remainingText) return;
-
-    const send = await firstVisibleLocator(session.page, provider.ui.sendSelectors);
-    if (send && await send.isEnabled().catch(() => false)) {
-      await send.click({ force: true, timeout: 1_000 }).catch(() => undefined);
-    } else {
-      await input.focus().catch(() => undefined);
-      await session.page.keyboard.press('Enter').catch(() => undefined);
-    }
-    await abortableSleep(200, signal);
-  }
-
   throwIfAborted(signal);
+  // Submit once: the same button can become Stop before the input clears.
+  await input.press('Enter', { timeout: 2_000 });
 }

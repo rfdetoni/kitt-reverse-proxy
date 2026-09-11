@@ -213,7 +213,9 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
         '[data-is-streaming="true"]',
         '.streaming',
         'button[aria-label="Stop response"]',
-        'button[aria-label="Stop generation"]'
+        'button[aria-label="Stop generation"]',
+        'button[aria-label*="parar" i]',
+        'button[aria-label*="interromper" i]'
       ],
       newChatUrl: 'https://gemini.google.com/app',
       uploadSelector: 'input[type="file"]',

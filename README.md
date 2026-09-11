@@ -166,7 +166,7 @@ kitt-reverse-proxy start chatgpt --cdp-url http://127.0.0.1:9222
 kitt-reverse-proxy presets
 ```
 
-`auto` browser mode probes the stored profile headlessly first. If login or manual intervention is required, K.I.T.T. opens a visible browser, persists the authenticated profile, closes it and retries headless.
+The browser stays visible by default, including after login. Pass `--headless` to run without a window. The optional `--auto-browser` mode probes the stored profile headlessly first; if login is required, it opens a temporary window and then retries headless.
 
 For a custom web chat:
 
