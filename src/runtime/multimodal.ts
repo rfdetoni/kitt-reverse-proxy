@@ -32,8 +32,8 @@ const ALLOWED_MIME = new Set([...IMAGE_MIME, ...DOCUMENT_MIME]);
 interface AttachmentInput {
   source: 'url' | 'data';
   value: string;
-  mimeType?: string;
-  filename?: string;
+  mimeType?: string | undefined;
+  filename?: string | undefined;
   kind: 'image' | 'file';
 }
 
@@ -45,8 +45,8 @@ interface UploadFile {
 
 export interface AttachmentDescriptor {
   source: 'url' | 'data';
-  mimeType?: string;
-  filename?: string;
+  mimeType?: string | undefined;
+  filename?: string | undefined;
   kind: 'image' | 'file';
 }
 
@@ -301,6 +301,23 @@ function providerCanUpload(provider: ProviderPreset, attachments: AttachmentInpu
   return true;
 }
 
+async function selectUploadInput(page: Page, selector: string, attachments: AttachmentInput[]) {
+  const candidates = page.locator(selector);
+  const count = await candidates.count().catch(() => 0);
+  if (count === 0) return candidates.first();
+  if (attachments.every((attachment) => attachment.kind === 'image')) return candidates.first();
+
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    const accept = String(await candidate.getAttribute('accept').catch(() => '') || '').trim().toLowerCase();
+    if (!accept) return candidate;
+    const values = accept.split(',').map((value) => value.trim()).filter(Boolean);
+    const imageOnly = values.length > 0 && values.every((value) => value.startsWith('image/') || value === 'image/*');
+    if (!imageOnly) return candidate;
+  }
+  return candidates.first();
+}
+
 export async function uploadAttachmentsFromBody(
   page: Page,
   provider: ProviderPreset,
@@ -314,7 +331,7 @@ export async function uploadAttachmentsFromBody(
   }
 
   const selector = provider.ui.uploadSelector!;
-  const locator = page.locator(selector).first();
+  const locator = await selectUploadInput(page, selector, attachments);
   const hasInput = await locator.count().then((count) => count > 0).catch(() => false);
 
   if (!hasInput) {
