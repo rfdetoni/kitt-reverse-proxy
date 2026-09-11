@@ -1,4 +1,4 @@
-import { PROVIDERS } from '../providers/catalog.js';
+import { PROVIDERS, type ProviderPreset } from '../providers/catalog.js';
 import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
@@ -35,6 +35,32 @@ function reasoningContract(manager: SessionManager): JsonObject {
   };
 }
 
+export function providerRecord(provider: ProviderPreset, manager?: SessionManager): JsonObject {
+  const active = manager?.providerId === provider.id;
+  const description = active ? manager.describe() : undefined;
+  const resilience = description ? asObject(description.resilience) : undefined;
+  return {
+    id: provider.id,
+    object: 'provider',
+    name: provider.name,
+    active,
+    preferred_transport: provider.preferredTransport,
+    transports: [...provider.transports],
+    auth: provider.auth,
+    hosts: [...provider.hosts],
+    models: provider.models.map((item) => ({ id: item.id, aliases: [...item.aliases] })),
+    capabilities: {
+      streaming: provider.capabilities.streaming,
+      tools: provider.capabilities.tools,
+      structured_output: provider.capabilities.structuredOutput,
+      system_messages: provider.capabilities.systemMessages,
+      reasoning: provider.capabilities.reasoning,
+      image_input: provider.ui.supportsImageUpload
+    },
+    health: active ? (resilience ?? { circuit: 'closed' }) : { circuit: 'unknown' }
+  };
+}
+
 export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
   const sessions = sessionManagementContract(manager);
   const reasoning = reasoningContract(manager);
@@ -59,6 +85,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
   const imageInput = manager.transport === 'ui' && Boolean(provider?.ui.supportsImageUpload);
   const reasoning = reasoningContract(manager);
   const toolCalling = typeof description.toolCalling === 'string' ? description.toolCalling : 'protocol-emulated';
+  const resilience = asObject(description.resilience);
 
   return {
     status: 'ok',
@@ -76,6 +103,12 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       provider: manager.providerId
     },
     reasoning,
+    resilience: resilience ?? { circuit: 'closed' },
+    provider_discovery: {
+      list_endpoint: '/v1/providers',
+      detail_endpoint_template: '/v1/providers/:provider',
+      models_endpoint_template: '/v1/providers/:provider/models'
+    },
     protocols: {
       openai: {
         chat_completions: true,

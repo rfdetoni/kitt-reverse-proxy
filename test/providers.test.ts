@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectProvider, resolveTransport } from '../src/providers/catalog.js';
+import {
+  detectProvider,
+  providerById,
+  providerModelAliases,
+  providerModelIds,
+  resolveTransport,
+  transportCandidates
+} from '../src/providers/catalog.js';
 
 test('known AI web apps default to UI transport', () => {
   for (const [url, id] of [
@@ -13,13 +20,24 @@ test('known AI web apps default to UI transport', () => {
     const provider = detectProvider(url);
     assert.equal(provider.id, id);
     assert.equal(resolveTransport('auto', provider), 'ui');
+    assert.deepEqual(transportCandidates('auto', provider), ['ui']);
   }
 });
 
-test('unknown chat defaults to generic network discovery', () => {
+test('unknown chat uses network first with safe UI bootstrap fallback', () => {
   const provider = detectProvider('https://example.com/support/chat');
   assert.equal(provider.id, 'generic');
   assert.equal(resolveTransport('auto', provider), 'network');
+  assert.deepEqual(transportCandidates('auto', provider), ['network', 'ui']);
+});
+
+test('provider registry exposes canonical route models and aliases', () => {
+  const provider = providerById('chatgpt');
+  assert(provider);
+  assert.deepEqual(providerModelIds(provider), ['chatgpt-web']);
+  assert.equal(providerModelAliases(provider).chatgpt, 'chatgpt-web');
+  assert.equal(provider.capabilities.reasoning, true);
+  assert.equal(provider.ui.supportsImageUpload, true);
 });
 
 test('explicit known provider cannot be bound to an unrelated host', () => {
