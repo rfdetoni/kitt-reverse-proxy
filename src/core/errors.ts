@@ -13,7 +13,12 @@ import {
   SessionNotSupportedError
 } from '../runtime/session-manager.js';
 import { ProviderCircuitOpenError } from '../runtime/resilient-executor.js';
-import { ProviderNoImageSupportError, ImageInputError } from '../runtime/multimodal.js';
+import {
+  AttachmentInputError,
+  ImageInputError,
+  ProviderNoAttachmentSupportError,
+  ProviderNoImageSupportError
+} from '../runtime/multimodal.js';
 import { ToolParseFailedError } from '../runtime/tool-response.js';
 import { ToolEnforcementError } from '../runtime/tool-enforcement.js';
 import { ToolProtocolError } from '../mapping/tool-calling.js';
@@ -50,7 +55,9 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof SessionNotSupportedError) return { status: 400, code: 'session_not_supported', message };
   if (error instanceof ProviderCircuitOpenError) return { status: 503, code: 'provider_circuit_open', message };
   if (error instanceof ProviderNoImageSupportError) return { status: 400, code: 'provider_no_image_support', message };
+  if (error instanceof ProviderNoAttachmentSupportError) return { status: 400, code: 'provider_no_attachment_support', message };
   if (error instanceof ImageInputError) return { status: 400, code: 'image_input_error', message };
+  if (error instanceof AttachmentInputError) return { status: 400, code: 'attachment_input_error', message };
   if (error instanceof InvalidReasoningEffortError) return { status: 400, code: 'invalid_reasoning_effort', message };
   if (error instanceof ReasoningNotSupportedError) return { status: 400, code: 'reasoning_not_supported', message };
   if (error instanceof ReasoningLevelUnavailableError) return { status: 400, code: 'reasoning_level_unavailable', message };
