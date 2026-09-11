@@ -50,7 +50,7 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test('publishes live session capacity through discovery, capabilities and status', async () => {
+test('publishes live session capacity, provider discovery and resilience state', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor(),
     provider: 'chatgpt',
@@ -77,15 +77,30 @@ test('publishes live session capacity through discovery, capabilities and status
     assert.equal(sessionContract.eviction, 'lru_idle');
     assert.equal(sessionContract.accepts_named_sessions, true);
     assert.equal(sessionContract.recyclable_idle_named, 1);
+    assert.equal(capabilities.resilience.circuit, 'closed');
+    assert.equal(capabilities.provider_discovery.list_endpoint, '/v1/providers');
 
     const discovery = await (await fetch(`${baseUrl}/v1`)).json() as any;
-    assert.deepEqual(
-      discovery.capabilities.kitt_agent_cli.session_management,
-      sessionContract
-    );
+    assert.deepEqual(discovery.capabilities.kitt_agent_cli.session_management, sessionContract);
+    assert.equal(discovery.endpoints.providers, '/v1/providers');
+
+    const providers = await (await fetch(`${baseUrl}/v1/providers`)).json() as any;
+    const chatgpt = providers.data.find((item: any) => item.id === 'chatgpt');
+    const generic = providers.data.find((item: any) => item.id === 'generic');
+    assert.equal(chatgpt.active, true);
+    assert.equal(chatgpt.health.circuit, 'closed');
+    assert.equal(chatgpt.models[0].id, 'chatgpt-web');
+    assert.equal(generic.active, false);
+    assert.equal(generic.health.circuit, 'unknown');
+
+    const providerModels = await (await fetch(`${baseUrl}/v1/providers/chatgpt/models`)).json() as any;
+    assert.equal(providerModels.provider, 'chatgpt');
+    assert.equal(providerModels.data[0].id, 'chatgpt-web');
+    assert(providerModels.data[0].aliases.includes('chatgpt'));
 
     const status = await (await fetch(`${baseUrl}/v1/kitt/status`)).json() as any;
     assert.deepEqual(status.session_capacity, manager.capacity());
+    assert.equal(status.resilience.circuit, 'closed');
 
     const sessions = await (await fetch(`${baseUrl}/v1/kitt/sessions`)).json() as any;
     assert.equal(sessions.sessions.length, 2);
