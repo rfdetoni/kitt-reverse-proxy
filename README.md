@@ -39,9 +39,7 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 - **K.I.T.T. ecosystem:** https://github.com/rfdetoni/kitt
 - **Agent CLI:** https://github.com/rfdetoni/kitt-agent-cli
-- **Runtime image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy
-- **Standalone image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-standalone
-- **Browser image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-browser
+- **GHCR packages:** https://github.com/rfdetoni?tab=packages
 - **Security model:** [SECURITY.md](SECURITY.md)
 - **Provider discovery:** `GET /v1/providers`
 - **Runtime capabilities:** `GET /v1/capabilities`
@@ -92,11 +90,15 @@ Docker support is optional. Every semantic release publishes three Linux contain
 
 Each release publishes `vMAJOR.MINOR.PATCH`, `MAJOR.MINOR.PATCH`, `MAJOR.MINOR`, `MAJOR` and `latest` aliases. `latest` tracks the newest stable release; pin the complete release tag or an immutable digest for reproducible deployments. Published images include OCI provenance and SBOM attestations and currently target `linux/amd64`.
 
-Package pages:
+GHCR packages index: https://github.com/rfdetoni?tab=packages
 
-- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy
-- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-standalone
-- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-browser
+GitHub creates the direct page for each container package only after that image is published for the first time. Until then, use the packages index above and these canonical image names:
+
+```text
+ghcr.io/rfdetoni/kitt-reverse-proxy
+ghcr.io/rfdetoni/kitt-reverse-proxy-standalone
+ghcr.io/rfdetoni/kitt-reverse-proxy-browser
+```
 
 ### Standalone headless container
 
