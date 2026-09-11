@@ -113,7 +113,14 @@ def main() -> int:
 
     tag, released = latest
     if current < released:
-        raise SystemExit(f"declared version {current} is older than latest tag {tag}")
+        print(
+            f"warning: declared version {current} trails latest tag {tag}; "
+            f"using {released} as the release baseline",
+            file=sys.stderr,
+        )
+        baseline = released
+    else:
+        baseline = current
 
     if current > released:
         print(current)
@@ -123,7 +130,7 @@ def main() -> int:
     if level == 0:
         return 0
 
-    print(current.bump(level))
+    print(baseline.bump(level))
     return 0
 
 
