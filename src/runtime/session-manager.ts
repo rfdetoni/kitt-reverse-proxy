@@ -7,6 +7,7 @@ import type {
   LiveBrowserSession
 } from '../types.js';
 import { SerialQueue } from './serial-queue.js';
+import { ResilientChatExecutor } from './resilient-executor.js';
 import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
 import { updateRequestContext } from '../util/request-context.js';
@@ -83,6 +84,10 @@ interface ManagedSession {
   isDefault: boolean;
 }
 
+function resilient(executor: ChatExecutor, provider: string): ChatExecutor {
+  return executor instanceof ResilientChatExecutor ? executor : new ResilientChatExecutor(executor, provider);
+}
+
 export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
@@ -100,7 +105,7 @@ export class SessionManager {
     this.sessions.set('default', {
       id: 'default',
       provider: options.provider,
-      executor: options.defaultExecutor,
+      executor: resilient(options.defaultExecutor, options.provider),
       ...(options.defaultBrowserSession ? { browserSession: options.defaultBrowserSession } : {}),
       queue: new SerialQueue(options.config.maxQueue, options.config.minIntervalMs),
       createdAt: now,
@@ -286,7 +291,7 @@ export class SessionManager {
     const session: ManagedSession = {
       id,
       provider: this.options.provider,
-      executor: result.executor,
+      executor: resilient(result.executor, this.options.provider),
       ...(result.browserSession ? { browserSession: result.browserSession } : {}),
       queue: new SerialQueue(this.options.config.maxQueue, this.options.config.minIntervalMs),
       createdAt: now,
