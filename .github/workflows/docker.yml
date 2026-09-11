@@ -1,0 +1,40 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - src/**
+      - .github/workflows/docker.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - src/**
+      - .github/workflows/docker.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build proxy runtime target
+        run: docker build --target runtime -t kitt-reverse-proxy:runtime .
+      - name: Build standalone proxy with Chromium
+        run: docker build --target standalone -t kitt-reverse-proxy:standalone .
+      - name: Build browser sidecar
+        run: docker build -f docker/browser.Dockerfile -t kitt-browser:test .
