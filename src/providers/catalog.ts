@@ -10,12 +10,29 @@ export interface UiProviderConfig {
   supportsImageUpload: boolean;
 }
 
+export interface ProviderCapabilities {
+  streaming: boolean;
+  tools: 'protocol' | 'native-or-protocol';
+  structuredOutput: 'best_effort' | 'native';
+  systemMessages: 'native-or-emulated' | 'native';
+  reasoning: boolean;
+}
+
+export interface ProviderModelDescriptor {
+  id: string;
+  aliases: readonly string[];
+}
+
 export interface ProviderPreset {
   id: Exclude<ProviderId, 'auto'>;
   name: string;
   hosts: string[];
   defaultApiModel: string;
   preferredTransport: Exclude<TransportMode, 'auto'>;
+  transports: readonly Exclude<TransportMode, 'auto'>[];
+  auth: 'browser-profile';
+  capabilities: ProviderCapabilities;
+  models: readonly ProviderModelDescriptor[];
   ui: UiProviderConfig;
 }
 
@@ -47,6 +64,18 @@ const GENERIC_UI: UiProviderConfig = {
   supportsImageUpload: false
 };
 
+const BASE_CAPABILITIES: ProviderCapabilities = Object.freeze({
+  streaming: true,
+  tools: 'native-or-protocol',
+  structuredOutput: 'best_effort',
+  systemMessages: 'native-or-emulated',
+  reasoning: false
+});
+
+function model(id: string, aliases: readonly string[] = []): ProviderModelDescriptor {
+  return Object.freeze({ id, aliases: Object.freeze([...aliases]) });
+}
+
 export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
   {
     id: 'chatgpt',
@@ -54,6 +83,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: ['chatgpt.com', 'chat.openai.com'],
     defaultApiModel: 'chatgpt-web',
     preferredTransport: 'ui',
+    transports: ['ui', 'network'],
+    auth: 'browser-profile',
+    capabilities: { ...BASE_CAPABILITIES, reasoning: true },
+    models: [model('chatgpt-web', ['chatgpt', 'openai-web'])],
     ui: {
       inputSelectors: [
         '#prompt-textarea',
@@ -104,6 +137,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: ['claude.ai'],
     defaultApiModel: 'claude-web',
     preferredTransport: 'ui',
+    transports: ['ui', 'network'],
+    auth: 'browser-profile',
+    capabilities: BASE_CAPABILITIES,
+    models: [model('claude-web', ['claude', 'anthropic-web'])],
     ui: {
       inputSelectors: [
         '.ProseMirror[contenteditable="true"]',
@@ -144,6 +181,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: ['gemini.google.com'],
     defaultApiModel: 'gemini-web',
     preferredTransport: 'ui',
+    transports: ['ui', 'network'],
+    auth: 'browser-profile',
+    capabilities: BASE_CAPABILITIES,
+    models: [model('gemini-web', ['gemini', 'google-web'])],
     ui: {
       inputSelectors: [
         'rich-textarea .ql-editor[contenteditable="true"]',
@@ -185,6 +226,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: ['kimi.com', 'www.kimi.com', 'kimi.moonshot.cn'],
     defaultApiModel: 'kimi-web',
     preferredTransport: 'ui',
+    transports: ['ui', 'network'],
+    auth: 'browser-profile',
+    capabilities: BASE_CAPABILITIES,
+    models: [model('kimi-web', ['kimi'])],
     ui: {
       inputSelectors: [
         '[contenteditable="true"][role="textbox"]',
@@ -219,6 +264,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: ['chat.deepseek.com', 'deepseek.com'],
     defaultApiModel: 'deepseek-web',
     preferredTransport: 'ui',
+    transports: ['ui', 'network'],
+    auth: 'browser-profile',
+    capabilities: BASE_CAPABILITIES,
+    models: [model('deepseek-web', ['deepseek'])],
     ui: {
       inputSelectors: [
         'textarea[placeholder*="message" i]',
@@ -256,6 +305,10 @@ export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
     hosts: [],
     defaultApiModel: 'adaptive-web-chat',
     preferredTransport: 'network',
+    transports: ['network', 'ui'],
+    auth: 'browser-profile',
+    capabilities: BASE_CAPABILITIES,
+    models: [model('adaptive-web-chat', ['generic-web-chat'])],
     ui: GENERIC_UI
   }
 ] satisfies ProviderPreset[]);
@@ -266,10 +319,26 @@ function hostMatches(hostname: string, candidate: string): boolean {
   return host === expected || host.endsWith(`.${expected}`);
 }
 
+export function providerById(id: string): ProviderPreset | undefined {
+  return PROVIDERS.find((provider) => provider.id === id);
+}
+
+export function providerModelIds(provider: ProviderPreset): string[] {
+  return provider.models.map((item) => item.id);
+}
+
+export function providerModelAliases(provider: ProviderPreset): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  for (const item of provider.models) {
+    for (const alias of item.aliases) aliases[alias] = item.id;
+  }
+  return aliases;
+}
+
 export function detectProvider(targetUrl: string, requested: ProviderId = 'auto'): ProviderPreset {
   const hostname = new URL(targetUrl).hostname;
   if (requested !== 'auto') {
-    const explicit = PROVIDERS.find((provider) => provider.id === requested);
+    const explicit = providerById(requested);
     if (!explicit) throw new Error(`Provider não suportado: ${requested}`);
     if (explicit.id !== 'generic' && !explicit.hosts.some((host) => hostMatches(hostname, host))) {
       throw new Error(`Provider ${explicit.id} não corresponde ao host ${hostname}. Para UIs customizadas/mirrors use --provider generic --transport ui.`);
@@ -277,11 +346,22 @@ export function detectProvider(targetUrl: string, requested: ProviderId = 'auto'
     return explicit;
   }
   return PROVIDERS.find((provider) => provider.id !== 'generic' && provider.hosts.some((host) => hostMatches(hostname, host)))
-    ?? PROVIDERS.find((provider) => provider.id === 'generic')!;
+    ?? providerById('generic')!;
 }
 
 export function resolveTransport(requested: TransportMode, provider: ProviderPreset): 'network' | 'ui' {
-  return requested === 'auto' ? provider.preferredTransport : requested;
+  if (requested === 'auto') return provider.preferredTransport;
+  if (!provider.transports.includes(requested)) {
+    throw new Error(`Transport ${requested} não é suportado por ${provider.id}.`);
+  }
+  return requested;
+}
+
+export function transportCandidates(requested: TransportMode, provider: ProviderPreset): readonly ('network' | 'ui')[] {
+  if (requested !== 'auto') return [resolveTransport(requested, provider)];
+  const preferred = provider.preferredTransport;
+  if (preferred === 'network' && provider.transports.includes('ui')) return ['network', 'ui'];
+  return [preferred];
 }
 
 export function providerIds(): Exclude<ProviderId, 'auto'>[] {
