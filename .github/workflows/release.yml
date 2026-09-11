@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
   id-token: write
   attestations: write
 
@@ -26,7 +27,7 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,6 +71,103 @@ jobs:
         with:
           subject-path: release/*.tgz
           sbom-path: release/sbom.cdx.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Generate runtime image metadata
+        id: runtime-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy
+          flavor: latest=auto
+          tags: |
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=K.I.T.T. reverse-proxy runtime for the browser-sidecar architecture
+            org.opencontainers.image.licenses=MIT
+      - name: Publish reverse-proxy runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.runtime-meta.outputs.tags }}
+          labels: ${{ steps.runtime-meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=proxy-runtime
+          cache-to: type=gha,mode=max,scope=proxy-runtime
+
+      - name: Generate standalone image metadata
+        id: standalone-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy-standalone
+          flavor: latest=auto
+          tags: |
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=K.I.T.T. reverse proxy with bundled Playwright Chromium
+            org.opencontainers.image.licenses=MIT
+      - name: Publish standalone reverse-proxy image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: standalone
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.standalone-meta.outputs.tags }}
+          labels: ${{ steps.standalone-meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=proxy-standalone
+          cache-to: type=gha,mode=max,scope=proxy-standalone
+
+      - name: Generate browser image metadata
+        id: browser-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy-browser
+          flavor: latest=auto
+          tags: |
+            type=raw,value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=K.I.T.T. isolated Chromium sidecar with optional noVNC authentication UI
+            org.opencontainers.image.licenses=MIT
+      - name: Publish browser sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/browser.Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.browser-meta.outputs.tags }}
+          labels: ${{ steps.browser-meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=proxy-browser
+          cache-to: type=gha,mode=max,scope=proxy-browser
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
