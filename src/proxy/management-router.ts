@@ -1,12 +1,18 @@
 import { Router, type Request, type Response } from 'express';
-import type { AppConfig } from '../types.js';
+import type { AppConfig, JsonObject } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
-import { modelRecord, runtimeCapabilities, serviceVersion } from './capabilities.js';
+import { PROVIDERS, providerById } from '../providers/catalog.js';
+import { modelRecord, providerRecord, runtimeCapabilities, serviceVersion } from './capabilities.js';
 import { sendOpenAiError } from './openai.js';
 import { sendProxyError } from './http-errors.js';
 import { telemetry } from '../util/telemetry.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { logger } from '../logger.js';
+
+function resilience(manager: SessionManager): JsonObject | undefined {
+  const value = manager.describe().resilience;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
+}
 
 export function createManagementRouter(manager: SessionManager, config: AppConfig): Router {
   const router = Router();
@@ -31,6 +37,7 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
         openai: { chat: '/v1/chat/completions', models: '/v1/models', responses: '/v1/responses' },
         anthropic: { messages: '/v1/messages' },
         ollama: { chat: '/api/chat', generate: '/api/generate', tags: '/api/tags', version: '/api/version', show: '/api/show' },
+        providers: '/v1/providers',
         status: '/v1/kitt/status',
         capabilities: '/v1/capabilities',
         health: '/healthz',
@@ -45,7 +52,18 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
   router.get('/readyz', (_req, res) => {
     const capacity = manager.capacity();
     if (capacity.shutting_down) {
-      res.status(503).json({ status: 'not_ready' });
+      res.status(503).json({ status: 'not_ready', reason: 'shutting_down' });
+      return;
+    }
+    const health = resilience(manager);
+    if (health?.circuit === 'open') {
+      res.status(503).json({
+        status: 'not_ready',
+        reason: 'provider_circuit_open',
+        provider: manager.providerId,
+        transport: manager.transport,
+        retry_after_ms: health.retry_after_ms ?? 0
+      });
       return;
     }
     res.json({
@@ -54,7 +72,8 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       transport: manager.transport,
       model: manager.modelId,
       queue_depth: manager.queueDepth(),
-      sessions: capacity.active
+      sessions: capacity.active,
+      resilience: health ?? { circuit: 'closed' }
     });
   });
 
@@ -69,6 +88,39 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       return;
     }
     res.json(modelRecord(manager));
+  });
+
+  router.get('/v1/providers', (_req, res) => {
+    res.json({ object: 'list', data: PROVIDERS.map((provider) => providerRecord(provider, manager)) });
+  });
+
+  router.get('/v1/providers/:provider/models', (req, res) => {
+    const id = Array.isArray(req.params.provider) ? req.params.provider[0] : req.params.provider;
+    const provider = id ? providerById(id) : undefined;
+    if (!provider) {
+      sendOpenAiError(res, 404, `Provider não encontrado: ${id || ''}`, 'provider_not_found');
+      return;
+    }
+    res.json({
+      object: 'list',
+      provider: provider.id,
+      data: provider.models.map((item) => ({
+        id: item.id,
+        object: 'model',
+        owned_by: `kitt:${provider.id}`,
+        aliases: [...item.aliases]
+      }))
+    });
+  });
+
+  router.get('/v1/providers/:provider', (req, res) => {
+    const id = Array.isArray(req.params.provider) ? req.params.provider[0] : req.params.provider;
+    const provider = id ? providerById(id) : undefined;
+    if (!provider) {
+      sendOpenAiError(res, 404, `Provider não encontrado: ${id || ''}`, 'provider_not_found');
+      return;
+    }
+    res.json(providerRecord(provider, manager));
   });
 
   router.get(['/v1/capabilities', '/v1/kitt/capabilities'], (_req, res) => {
@@ -125,6 +177,7 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       model: manager.modelId,
       provider: manager.providerId,
       transport: manager.transport,
+      resilience: resilience(manager) ?? { circuit: 'closed' },
       sessions: manager.list().length,
       session_capacity: manager.capacity(),
       queue_depth: manager.queueDepth()
