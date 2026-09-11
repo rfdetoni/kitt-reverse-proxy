@@ -45,7 +45,7 @@ import {
   validateStructuredOutput,
   buildStructuredRetryPrompt
 } from './structured-output.js';
-import { uploadAttachmentsFromBody } from './multimodal.js';
+import { uploadImagesFromBody } from './multimodal.js';
 import { telemetry } from '../util/telemetry.js';
 import {
   applyReasoningEffort,
@@ -207,6 +207,7 @@ export class UiChatExecutor implements ChatExecutor {
     else if (incoming.length === 1 && this.history.length) next = [...this.history, ...incoming, { role: 'assistant', text: assistantText }];
     else next = [...incoming, { role: 'assistant', text: assistantText }];
 
+    // Keep the client-provided prefix if caching the assistant answer would cross the memory budget.
     this.history = historyChars(next) <= RESOURCE_LIMITS.uiHistoryChars ? next : [...incoming];
   }
 
@@ -322,7 +323,7 @@ export class UiChatExecutor implements ChatExecutor {
     prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence)}`;
 
     throwIfAborted(options?.signal);
-    const fallbackPublicImageUrls = await uploadAttachmentsFromBody(this.session.page, this.provider, body);
+    const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
     throwIfAborted(options?.signal);
     if (fallbackPublicImageUrls.length > 0) {
       actionablePrompt = `${actionablePrompt}\n\n${fallbackPublicImageUrls.map((url) => `Image: ${url}`).join('\n')}`;
@@ -357,80 +358,125 @@ export class UiChatExecutor implements ChatExecutor {
         .filter((artifact) => !textToParse.includes(artifact.code))
         .map((artifact) => {
           const language = artifact.language || artifact.filename?.split('.').pop() || '';
-          const label = artifact.filename ? `File: ${artifact.filename}\n` : '';
-          return `${label}\`\`\`${language}\n${artifact.code}\n\`\`\``;
+          const header = artifact.filename ? `File: ${artifact.filename}\n` : '';
+          return `${header}\`\`\`${language}\n${artifact.code}\n\`\`\``;
         });
-      if (artifactBlocks.length) textToParse = `${textToParse}\n\n${artifactBlocks.join('\n\n')}`.trim();
+      if (artifactBlocks.length > 0) textToParse = `${textToParse}\n\n${artifactBlocks.join('\n\n')}`;
+    }
+    if (textToParse.length > RESOURCE_LIMITS.uiDeltaChars) {
+      throw new UiAutomationError(`Resposta UI excede ${RESOURCE_LIMITS.uiDeltaChars} caracteres.`);
     }
 
-    let toolCalls: OpenAiToolCall[] = [];
-    let assistantText = textToParse;
-    if (protocolEnabled) {
-      const parsed = parseUiToolResponse(textToParse, plan);
-      toolCalls = parsed.toolCalls;
-      assistantText = parsed.content;
-      for (const call of toolCalls) this.rememberToolCall(call, isExplorationToolCall(call));
-      if (toolCalls.length) this.toolEvidence = true;
-    }
-
-    if (structured && !toolCalls.length) {
+    let parsed;
+    for (let attempt = 0; ; attempt += 1) {
+      throwIfAborted(options?.signal);
       try {
-        assistantText = validateStructuredOutput(assistantText, structured);
+        parsed = parseUiToolResponse(textToParse, plan, artifacts, this.provider.id);
+        enforceToolResponse({
+          enforcement,
+          protocol: plan,
+          calls: parsed.tool_calls,
+          explorationEvidence: this.explorationEvidence,
+          toolEvidence: this.toolEvidence
+        });
+        break;
       } catch (error) {
-        if (!(error instanceof ToolParseFailedError)) {
-          const retry = buildStructuredRetryPrompt(structured, error instanceof Error ? error.message : String(error));
-          const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-          await this.sendPrompt(retry, options?.signal);
-          const retryResult = await this.awaitResponse(retryBaseline, retry, undefined, options?.signal);
-          assistantText = validateStructuredOutput(retryResult.text, structured);
-        } else {
-          throw error;
+        const retryable = error instanceof ToolProtocolError && error.source === 'model';
+        if (!protocolEnabled || !retryable || attempt >= 2) {
+          if (error instanceof ToolEnforcementError || error instanceof ToolParseFailedError) throw error;
+          throw retryable
+            ? new ToolParseFailedError(error instanceof Error ? error.message : String(error))
+            : error;
         }
-      }
-    }
-
-    if (protocolEnabled) {
-      try {
-        enforceToolResponse(enforcement, toolCalls, assistantText, this.explorationEvidence, this.toolEvidence);
-      } catch (error) {
-        if (!(error instanceof ToolEnforcementError)) throw error;
-        const retry = buildToolEnforcementRetryPrompt(error, enforcement, this.explorationEvidence, this.toolEvidence);
+        telemetry.recordToolCall(this.provider.id, 'unknown', 'retry');
+        const retryPrompt = error instanceof ToolEnforcementError
+          ? buildToolEnforcementRetryPrompt(enforcement, error)
+          : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-        await this.sendPrompt(retry, options?.signal);
-        const retryResult = await this.awaitResponse(retryBaseline, retry, undefined, options?.signal);
-        const parsedRetry = parseUiToolResponse(retryResult.text, plan);
-        toolCalls = parsedRetry.toolCalls;
-        assistantText = parsedRetry.content;
-        for (const call of toolCalls) this.rememberToolCall(call, isExplorationToolCall(call));
-        if (toolCalls.length) this.toolEvidence = true;
-        enforceToolResponse(enforcement, toolCalls, assistantText, this.explorationEvidence, this.toolEvidence);
+        await this.sendPrompt(retryPrompt, options?.signal);
+        textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
       }
     }
 
+    let structuredOutputFailed = false;
+    if (!parsed.tool_calls?.length && structured) {
+      let checked = validateStructuredOutput(textToParse, structured);
+      if (!checked.ok) {
+        const retryPrompt = buildStructuredRetryPrompt(structured, checked.error);
+        const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        await this.sendPrompt(retryPrompt, options?.signal);
+        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal);
+        checked = validateStructuredOutput(retryResult.text, structured);
+      }
+      if (checked.ok) textToParse = checked.text;
+      else structuredOutputFailed = true;
+    }
+
+    for (const call of parsed.tool_calls || []) {
+      this.rememberToolCall(call, isExplorationToolCall(call, plan));
+    }
+
+    const responseContent = parsed.tool_calls?.length ? parsed.content : textToParse;
+    const output = completion(model, responseContent, parsed.tool_calls);
     this.protocolFingerprint = protocolFingerprint;
     this.toolProtocolWasEnabled = protocolEnabled;
     this.systemContextWasEnabled = Boolean(plan.systemPrompt);
-    this.storeHistory(incoming, assistantText);
+    this.storeHistory(incoming, textToParse);
 
-    const response = completion(model, assistantText || null, toolCalls);
-    const executionEndedAt = Date.now();
-    telemetry.record({
-      provider: this.provider.id,
-      transport: this.transport,
-      request_started_at: executionStartedAt,
-      prompt_send_started_at: promptSendStartedAt,
-      prompt_sent_at: promptSentAt,
-      first_delta_at: result.firstDeltaMs === undefined ? undefined : promptSentAt + result.firstDeltaMs,
-      response_completed_at: executionEndedAt,
-      duration_ms: executionEndedAt - executionStartedAt
-    });
-    const executionResult: ChatExecutionResult = {
-      completion: response,
-      deltas: result.deltas,
-      snapshots: result.snapshots
+    const deltas = parsed.tool_calls?.length
+      ? []
+      : result.deltas
+        ?? (result.snapshots ? computeDeltas(result.snapshots, responseContent || '') : (responseContent ? [responseContent] : []));
+    const timing: JsonObject = {
+      transport: 'ui',
+      ui_prepare_ms: Math.max(0, promptSendStartedAt - executionStartedAt),
+      ui_prompt_send_ms: Math.max(0, promptSentAt - promptSendStartedAt),
+      ui_response_ttft_ms: result.firstDeltaMs ?? result.durationMs,
+      ui_response_wait_ms: result.durationMs,
+      ui_executor_total_ms: Math.max(0, Date.now() - executionStartedAt)
     };
-    this.lastRequestFingerprint = fingerprint;
-    this.lastResult = executionResult;
-    return executionResult;
+    const execution: ChatExecutionResult = {
+      completion: output,
+      deltas,
+      metadata: {
+        ...(structuredOutputFailed ? { structured_output: 'failed' } : {}),
+        timing
+      }
+    };
+
+    if (incoming.length > 1) {
+      this.lastRequestFingerprint = fingerprint;
+      this.lastResult = execution;
+    } else {
+      this.lastRequestFingerprint = '';
+      this.lastResult = undefined;
+    }
+    return execution;
+  }
+
+  describe(): JsonObject {
+    return {
+      provider: this.provider.id,
+      providerName: this.provider.name,
+      transport: 'ui',
+      targetOrigin: new URL(this.config.targetUrl).origin,
+      persistentSession: this.session.persistent,
+      manualChallengeHandling: true,
+      progressiveUiStreaming: true,
+      boundedHistoryChars: RESOURCE_LIMITS.uiHistoryChars,
+      cancellation: 'cooperative',
+      reasoning: this.provider.id === 'chatgpt'
+        ? {
+            supported: true,
+            dynamic: true,
+            header: 'X-Kitt-Reasoning-Effort',
+            range: [0, 100],
+            levels: ['instant', 'medium', 'high', 'extra_high']
+          }
+        : { supported: false },
+      toolCalling: 'protocol-emulated',
+      toolExecution: 'client-side',
+      toolEnforcement: this.config.toolEnforcement ?? 'explore-first'
+    };
   }
 }
