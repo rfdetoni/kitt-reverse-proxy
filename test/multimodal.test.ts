@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { describeProxyError } from '../src/core/errors.js';
 import {
+  AttachmentInputError,
+  ProviderNoAttachmentSupportError,
   attachmentDescriptors,
   isPublicAttachmentAddress,
   isPublicImageAddress
@@ -63,4 +66,17 @@ test('multimodal keeps legacy image_url compatibility', () => {
     }]
   };
   assert.equal(attachmentDescriptors(body)[0]?.kind, 'image');
+});
+
+test('attachment failures are exposed as client errors', () => {
+  assert.deepEqual(describeProxyError(new AttachmentInputError('arquivo inválido')), {
+    status: 400,
+    code: 'attachment_input_error',
+    message: 'arquivo inválido'
+  });
+  assert.deepEqual(describeProxyError(new ProviderNoAttachmentSupportError()), {
+    status: 400,
+    code: 'provider_no_attachment_support',
+    message: 'O provider ativo não oferece upload de arquivos no transporte UI.'
+  });
 });
