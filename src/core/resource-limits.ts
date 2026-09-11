@@ -1,5 +1,8 @@
 export const RESOURCE_LIMITS = Object.freeze({
-  httpRequestBytes: 2 * 1024 * 1024,
+  // 40 MiB of binary attachments expands to ~53.4 MiB as base64. Keep enough
+  // headroom for JSON/tool metadata while remaining bounded. Authentication is
+  // applied before express.json() so unauthenticated callers cannot allocate it.
+  httpRequestBytes: 64 * 1024 * 1024,
   mcpRequestBytes: 2 * 1024 * 1024,
   discoveryRequestBytes: 2 * 1024 * 1024,
   discoveryResponseBytes: 5 * 1024 * 1024,
