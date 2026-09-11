@@ -114,6 +114,7 @@ class BoundedHistogram {
 export interface TelemetrySnapshot {
   requests_total: MetricRow[];
   tool_calls_total: MetricRow[];
+  provider_events_total: MetricRow[];
   sessions_active: number;
   sessions_created: number;
   sessions_evicted: number;
@@ -125,6 +126,7 @@ export interface TelemetrySnapshot {
 export class Telemetry {
   private readonly requests = new BoundedCounter();
   private readonly toolCalls = new BoundedCounter();
+  private readonly providerEvents = new BoundedCounter();
   private readonly parseFailures = new BoundedCounter();
   private readonly requestDuration = new BoundedHistogram(LATENCY_BUCKETS_MS);
   private readonly queueWait = new BoundedHistogram(LATENCY_BUCKETS_MS);
@@ -156,6 +158,14 @@ export class Telemetry {
     this.toolCalls.increment({ provider: boundedLabel(provider), function: functionLabel, outcome });
   }
 
+  recordProviderEvent(
+    provider: string,
+    transport: 'network' | 'ui',
+    event: 'success' | 'failure' | 'reachable_error' | 'circuit_open' | 'circuit_close' | 'circuit_reject' | 'half_open_probe' | 'bootstrap_fallback'
+  ): void {
+    this.providerEvents.increment({ provider: boundedLabel(provider), transport, event });
+  }
+
   recordParseFailure(layer: 'json' | 'codeblock' | 'regex' | 'rejected'): void {
     this.parseFailures.increment({ layer });
   }
@@ -178,6 +188,7 @@ export class Telemetry {
     return {
       requests_total: this.requests.rows(),
       tool_calls_total: this.toolCalls.rows(),
+      provider_events_total: this.providerEvents.rows(),
       sessions_active: this.activeSessions,
       sessions_created: this.createdSessions,
       sessions_evicted: this.evictedSessions,
@@ -194,6 +205,8 @@ export class Telemetry {
       ...snapshot.requests_total.map((row) => this.prometheusRow('requests_total', row)),
       '# TYPE tool_calls_total counter',
       ...snapshot.tool_calls_total.map((row) => this.prometheusRow('tool_calls_total', row)),
+      '# TYPE provider_events_total counter',
+      ...snapshot.provider_events_total.map((row) => this.prometheusRow('provider_events_total', row)),
       '# TYPE sessions_active gauge',
       `sessions_active ${snapshot.sessions_active}`,
       '# TYPE sessions_created counter',
@@ -213,6 +226,7 @@ export class Telemetry {
   resetForTests(): void {
     this.requests.clear();
     this.toolCalls.clear();
+    this.providerEvents.clear();
     this.parseFailures.clear();
     this.requestDuration.clear();
     this.queueWait.clear();
