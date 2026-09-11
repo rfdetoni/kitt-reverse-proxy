@@ -39,6 +39,9 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 - **K.I.T.T. ecosystem:** https://github.com/rfdetoni/kitt
 - **Agent CLI:** https://github.com/rfdetoni/kitt-agent-cli
+- **Runtime image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy
+- **Standalone image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-standalone
+- **Browser image (GHCR):** https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-browser
 - **Security model:** [SECURITY.md](SECURITY.md)
 - **Provider discovery:** `GET /v1/providers`
 - **Runtime capabilities:** `GET /v1/capabilities`
@@ -79,29 +82,42 @@ Use `--ref main` or `KITT_PROXY_REF=main` only when you intentionally want unrel
 
 ## Docker
 
-Docker support is optional. The repository provides two reverse-proxy image targets plus a dedicated Chromium sidecar:
+Docker support is optional. Every semantic release publishes three Linux container images to GitHub Container Registry (GHCR):
 
-- `runtime`: Node/Playwright client runtime without a bundled browser, intended to connect to a browser sidecar over CDP;
-- `standalone` (the default final target): includes Playwright Chromium for a self-contained headless container;
-- `docker/browser.Dockerfile`: isolated Chromium sidecar with a persistent profile, headless normal mode and optional noVNC UI for manual authentication.
+| Image | Purpose |
+| --- | --- |
+| `ghcr.io/rfdetoni/kitt-reverse-proxy` | lightweight `runtime` target for the browser-sidecar topology |
+| `ghcr.io/rfdetoni/kitt-reverse-proxy-standalone` | self-contained proxy with Playwright Chromium bundled |
+| `ghcr.io/rfdetoni/kitt-reverse-proxy-browser` | isolated Chromium sidecar with persistent profile and optional noVNC |
+
+Each release publishes `vMAJOR.MINOR.PATCH`, `MAJOR.MINOR.PATCH`, `MAJOR.MINOR`, `MAJOR` and `latest` aliases. `latest` tracks the newest stable release; pin the complete release tag or an immutable digest for reproducible deployments. Published images include OCI provenance and SBOM attestations and currently target `linux/amd64`.
+
+Package pages:
+
+- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy
+- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-standalone
+- https://github.com/rfdetoni/kitt-reverse-proxy/pkgs/container/kitt-reverse-proxy-browser
 
 ### Standalone headless container
 
+The simplest deployment uses the bundled-browser image:
+
 ```bash
-docker build -t kitt-reverse-proxy .
+docker pull ghcr.io/rfdetoni/kitt-reverse-proxy-standalone:latest
+
 docker run --rm \
   --shm-size=1g \
   -p 127.0.0.1:3000:3000 \
   -e PROXY_API_KEY="$(openssl rand -hex 32)" \
   -v kitt-browser-profile:/data/browser \
-  kitt-reverse-proxy
+  ghcr.io/rfdetoni/kitt-reverse-proxy-standalone:latest
 ```
 
 The container listens on `0.0.0.0` internally so other containers can reach it, therefore `PROXY_API_KEY` is mandatory. Publishing the port on host loopback keeps the API local to the machine.
 
 ### Browser sidecar
 
-The ecosystem Compose file in [`rfdetoni/kitt`](https://github.com/rfdetoni/kitt) uses the lighter `runtime` target and connects it to the dedicated browser container through `CDP_URL=http://browser:9222`. The CDP port is deliberately **not** published to the host.
+The ecosystem Compose file in [`rfdetoni/kitt`](https://github.com/rfdetoni/kitt) uses the lighter runtime image and connects it to the dedicated browser image through `CDP_URL=http://browser:9222`. The CDP port is deliberately **not** published to the host.
 
 For normal operation the sidecar runs Chromium headlessly. If the provider requires login, CAPTCHA or another manual challenge, switch the browser to headed mode and use the noVNC UI on host loopback:
 
@@ -112,6 +128,18 @@ KITT_BROWSER_MODE=headed docker compose up -d browser reverse-proxy
 Then open `http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=remote`, complete the authentication manually, set `KITT_BROWSER_MODE=headless` again and restart the browser service. The same `/data/browser` volume is reused, so the authenticated profile survives container restarts.
 
 Treat that browser-profile volume as credential material. Do not publish port `9222`, and do not expose the noVNC port beyond trusted host loopback.
+
+### Build from source
+
+The Dockerfile keeps both image targets available for development:
+
+```bash
+docker build --target runtime -t kitt-reverse-proxy:runtime .
+docker build --target standalone -t kitt-reverse-proxy:standalone .
+docker build -f docker/browser.Dockerfile -t kitt-browser:dev .
+```
+
+The root ecosystem `compose.yaml` contains both official image references and source build definitions. Compose therefore prefers the registry image and can build from source when a referenced image is not yet available. The `compose.dev.yaml` override in `rfdetoni/kitt` gives local development images distinct names.
 
 ---
 
