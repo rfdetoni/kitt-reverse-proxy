@@ -105,6 +105,33 @@ function repairJsonStringEscapes(input: string): string {
   return output;
 }
 
+function normalizeToolEnvelopeBody(input: string): string {
+  const trimmed = input.trim();
+  const candidates = [trimmed];
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  const quoteLike = (value: string | undefined): value is string => value === "'" || value === '`';
+
+  if (quoteLike(first) && trimmed.length > 1) candidates.push(trimmed.slice(1).trimStart());
+  if (quoteLike(last) && trimmed.length > 1) candidates.push(trimmed.slice(0, -1).trimEnd());
+  if (quoteLike(first) && first === last && trimmed.length > 2) {
+    candidates.push(trimmed.slice(1, -1).trim());
+  }
+
+  for (const candidate of [...new Set(candidates)]) {
+    const repaired = repairJsonStringEscapes(candidate);
+    try {
+      JSON.parse(repaired);
+      return repaired;
+    } catch {
+      // Only discard provider presentation quotes when the resulting payload
+      // is independently valid JSON. Structural corruption still fails closed.
+    }
+  }
+
+  return repairJsonStringEscapes(trimmed);
+}
+
 function normalizeProviderPatterns(text: string): string {
   let normalized = text.replace(/```(?:tool[_-]?call|function[_-]?call)\s*/gi, '```json\n');
 
@@ -114,7 +141,7 @@ function normalizeProviderPatterns(text: string): string {
       const body = rawBody.trim();
       let args: unknown = {};
       try {
-        args = body ? JSON.parse(repairJsonStringEscapes(body)) : {};
+        args = body ? JSON.parse(normalizeToolEnvelopeBody(body)) : {};
       } catch {
         args = { value: body };
       }
@@ -131,11 +158,12 @@ function normalizeProviderPatterns(text: string): string {
   );
 
   // Browser models often embed source code directly in textual JSON tool
-  // envelopes. Repair only invalid JSON string escapes/control characters;
-  // structural JSON errors still fail closed in extractToolCalls().
+  // envelopes. Repair invalid JSON string escapes/control characters and
+  // narrowly tolerate stray quote/backtick presentation noise around an
+  // otherwise-valid payload. Structural JSON errors still fail closed.
   normalized = normalized.replace(
     /<tool_call>([\s\S]*?)<\/tool_call>/gi,
-    (_whole, body: string) => `<tool_call>${repairJsonStringEscapes(body)}</tool_call>`
+    (_whole, body: string) => `<tool_call>${normalizeToolEnvelopeBody(body)}</tool_call>`
   );
 
   return normalized;
