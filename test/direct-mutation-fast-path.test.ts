@@ -8,18 +8,28 @@ const protocol = {
   systemPrompt: ''
 } as any;
 
-test('direct folder creation requires a tool without workspace exploration', () => {
+test('direct folder creation requires a mutation tool without workspace exploration', () => {
   const plan = buildToolEnforcementPlan(protocol, 'crie uma pasta teste', 'explore-first');
   assert.equal(plan.enabled, true);
   assert.equal(plan.workspaceDependent, false);
   assert.equal(plan.requireExploration, false);
   assert.equal(plan.requireAnyTool, true);
+  assert.equal(plan.requireMutation, true);
+});
+
+test('direct file creation requires a mutation tool without workspace exploration', () => {
+  const plan = buildToolEnforcementPlan(protocol, 'crie um arquivo src/new-file.ts', 'explore-first');
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.workspaceDependent, false);
+  assert.equal(plan.requireExploration, false);
+  assert.equal(plan.requireMutation, true);
 });
 
 test('direct mkdir command does not require an exploratory round trip', () => {
   const plan = buildToolEnforcementPlan(protocol, 'execute: mkdir -p teste', 'explore-first');
   assert.equal(plan.requireExploration, false);
   assert.equal(plan.requireAnyTool, true);
+  assert.equal(plan.requireMutation, true);
 
   assert.throws(() => enforceToolResponse({
     enforcement: plan,
@@ -27,7 +37,7 @@ test('direct mkdir command does not require an exploratory round trip', () => {
     calls: [],
     explorationEvidence: false,
     toolEvidence: false
-  }), /At least one tool call is required/);
+  }), /mutation tool call is required/i);
 
   assert.doesNotThrow(() => enforceToolResponse({
     enforcement: plan,

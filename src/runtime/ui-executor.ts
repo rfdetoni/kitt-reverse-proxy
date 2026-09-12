@@ -59,6 +59,7 @@ import {
   buildToolEnforcementRetryPrompt,
   enforceToolResponse,
   isExplorationToolCall,
+  isMutationToolCall,
   toolEnforcementTaskKey,
   type ToolEnforcementPlan
 } from './tool-enforcement.js';
@@ -126,8 +127,10 @@ export class UiChatExecutor implements ChatExecutor {
   private lastResult: ChatExecutionResult | undefined;
   private enforcementTaskKey = '';
   private explorationEvidence = false;
+  private mutationEvidence = false;
   private toolEvidence = false;
   private readonly explorationCallIds = new Set<string>();
+  private readonly mutationCallIds = new Set<string>();
 
   constructor(
     private readonly session: LiveBrowserSession,
@@ -169,8 +172,10 @@ export class UiChatExecutor implements ChatExecutor {
     this.toolNamesByCallId.clear();
     this.enforcementTaskKey = '';
     this.explorationEvidence = false;
+    this.mutationEvidence = false;
     this.toolEvidence = false;
     this.explorationCallIds.clear();
+    this.mutationCallIds.clear();
     const destination = this.provider.ui.newChatUrl || this.config.targetUrl;
     await navigateSession(this.session, destination, this.config.manualInterventionTimeoutMs)
       .catch((error: unknown) => {
@@ -189,16 +194,18 @@ export class UiChatExecutor implements ChatExecutor {
     return [incoming[incoming.length - 1]!];
   }
 
-  private rememberToolCall(call: OpenAiToolCall, exploration: boolean): void {
+  private rememberToolCall(call: OpenAiToolCall, exploration: boolean, mutation: boolean): void {
     if (!this.toolNamesByCallId.has(call.id) && this.toolNamesByCallId.size >= MAX_TRACKED_TOOL_CALLS) {
       const oldest = this.toolNamesByCallId.keys().next().value as string | undefined;
       if (oldest) {
         this.toolNamesByCallId.delete(oldest);
         this.explorationCallIds.delete(oldest);
+        this.mutationCallIds.delete(oldest);
       }
     }
     this.toolNamesByCallId.set(call.id, call.function.name);
     if (exploration) this.explorationCallIds.add(call.id);
+    if (mutation) this.mutationCallIds.add(call.id);
   }
 
   private storeHistory(incoming: CanonicalMessage[], assistantText: string): void {
@@ -270,8 +277,10 @@ export class UiChatExecutor implements ChatExecutor {
     if (currentTaskKey !== this.enforcementTaskKey) {
       this.enforcementTaskKey = currentTaskKey;
       this.explorationEvidence = false;
+      this.mutationEvidence = false;
       this.toolEvidence = false;
       this.explorationCallIds.clear();
+      this.mutationCallIds.clear();
     }
 
     const latestUserText = [...incoming].reverse().find((message) => message.role === 'user')?.text
@@ -298,10 +307,12 @@ export class UiChatExecutor implements ChatExecutor {
         }
         if (rememberedName) this.toolEvidence = true;
         if (callId && this.explorationCallIds.has(callId)) this.explorationEvidence = true;
+        if (callId && this.mutationCallIds.has(callId)) this.mutationEvidence = true;
         const result = formatToolResultPrompt(toolPrompt.text, callId, toolName);
         if (callId) {
           this.toolNamesByCallId.delete(callId);
           this.explorationCallIds.delete(callId);
+          this.mutationCallIds.delete(callId);
         }
         return result;
       });
@@ -320,7 +331,7 @@ export class UiChatExecutor implements ChatExecutor {
       prefix += 'Print any requested tool calls as visible <tool_call>{"name":"allowed_name","arguments":{}}</tool_call> blocks. The external agent executes them; stop and wait for its tool_result.\n\n';
     }
     if (structured) prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
-    prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence)}`;
+    prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence, this.mutationEvidence)}`;
 
     throwIfAborted(options?.signal);
     const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
@@ -377,7 +388,8 @@ export class UiChatExecutor implements ChatExecutor {
           protocol: plan,
           calls: parsed.tool_calls,
           explorationEvidence: this.explorationEvidence,
-          toolEvidence: this.toolEvidence
+          toolEvidence: this.toolEvidence,
+          mutationEvidence: this.mutationEvidence
         });
         break;
       } catch (error) {
@@ -413,7 +425,11 @@ export class UiChatExecutor implements ChatExecutor {
     }
 
     for (const call of parsed.tool_calls || []) {
-      this.rememberToolCall(call, isExplorationToolCall(call, plan));
+      this.rememberToolCall(
+        call,
+        isExplorationToolCall(call, plan),
+        isMutationToolCall(call, plan)
+      );
     }
 
     const responseContent = parsed.tool_calls?.length ? parsed.content : textToParse;

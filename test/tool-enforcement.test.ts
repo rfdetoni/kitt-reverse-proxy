@@ -127,22 +127,31 @@ test('exploration call is allowed before evidence exists', () => {
   }));
 });
 
-test('after exploration evidence a final answer and writes are allowed', () => {
+test('after exploration mutation requests still require a mutation result', () => {
   const p = protocol();
   const enforcement = buildToolEnforcementPlan(p, 'corrija o arquivo', 'explore-first');
-  assert.doesNotThrow(() => enforceToolResponse({
+  assert.equal(enforcement.requireMutation, true);
+  assert.throws(() => enforceToolResponse({
     enforcement,
     protocol: p,
     calls: [],
     explorationEvidence: true,
     toolEvidence: true
-  }));
+  }), (error: unknown) => error instanceof ToolEnforcementError && error.reason === 'mutation_required');
   assert.doesNotThrow(() => enforceToolResponse({
     enforcement,
     protocol: p,
     calls: [call('write_file', { path: 'a.ts', content: 'x' })],
     explorationEvidence: true,
     toolEvidence: true
+  }));
+  assert.doesNotThrow(() => enforceToolResponse({
+    enforcement,
+    protocol: p,
+    calls: [],
+    explorationEvidence: true,
+    toolEvidence: true,
+    mutationEvidence: true
   }));
 });
 
@@ -196,6 +205,7 @@ test('KITT compact runtime enforces repo exploration before patch or process mut
   const p = runtimeProtocol();
   const enforcement = buildToolEnforcementPlan(p, 'corrija o projeto', 'explore-first');
   assert.equal(enforcement.requireExploration, true);
+  assert.equal(enforcement.requireMutation, true);
   const read = runtimeCall('repo.read', { path: 'README.md' });
   const patch = runtimeCall('patch.apply', { patch: 'x' });
   assert.equal(isExplorationToolCall(read, p), true);
@@ -227,6 +237,11 @@ test('KITT runtime policy covers semantic exploration without treating read-only
     assert.equal(runtimeOperationEffect(operation), 'neutral', operation);
     assert.equal(isExplorationToolCall(runtimeCall(operation), p), false, operation);
     assert.equal(isMutationToolCall(runtimeCall(operation), p), false, operation);
+  }
+
+  for (const operation of ['repo.write_file', 'repo.create_directory', 'repo.move', 'repo.rename', 'repo.delete']) {
+    assert.equal(runtimeOperationEffect(operation), 'mutate', operation);
+    assert.equal(isMutationToolCall(runtimeCall(operation), p), true, operation);
   }
 
   assert.equal(runtimeOperationEffect('state.set'), 'mutate');

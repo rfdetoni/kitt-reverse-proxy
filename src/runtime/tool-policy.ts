@@ -17,6 +17,11 @@ const RUNTIME_OPERATION_EFFECTS = new Map<string, RuntimeOperationEffect>([
   ['security.scan', 'explore'],
 
   ['repo.edit_symbol', 'mutate'],
+  ['repo.write_file', 'mutate'],
+  ['repo.create_directory', 'mutate'],
+  ['repo.move', 'mutate'],
+  ['repo.rename', 'mutate'],
+  ['repo.delete', 'mutate'],
   ['artifacts.store', 'mutate'],
   ['patch.apply', 'mutate'],
   ['children.spawn', 'mutate'],

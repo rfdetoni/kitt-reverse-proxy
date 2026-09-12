@@ -22,8 +22,12 @@ const CODE_NOUN =
   /\b(?:class|classe|method|m[eé]todo|function|fun[cç][aã]o|endpoint|controller|service|repository|component|package|dependency|depend[eê]ncia|test|teste|bug|build|script|migration|migra[cç][aã]o|schema|query)\b/i;
 const CHANGE_INTENT =
   /\b(?:fix|corrig(?:ir|a|e|indo)?|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|review|revis(?:ar|e)|debug|investig(?:ar|ue)|resolve|resolver)\b/i;
+const MUTATION_INTENT =
+  /\b(?:fix|corrig(?:ir|a|e|indo)?|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|delete|deletar|excluir|move|mover|rename|renomear)\b/i;
 const DIRECT_FILESYSTEM_MUTATION =
   /^\s*(?:(?:por favor|please)\s+)?(?:(?:crie|criar|create|make)\s+(?:(?:um|uma|a|an)\s+)?(?:pasta|diret[oó]rio|folder|directory)\b|(?:execute|executar|rode|run)\s*:?\s*(?:mkdir|touch)\b)/i;
+const DIRECT_FILE_CREATION =
+  /^\s*(?:(?:por favor|please)\s+)?(?:crie|criar|create|make)\s+(?:(?:um|uma|a|an)\s+)?(?:arquivo|file)\s+[`"'@]?[-A-Za-z0-9_./\\]+\.[A-Za-z0-9]{1,16}\b/i;
 const PATH_LIKE =
   /(?:^|[\s"'`])(?:\.{0,2}\/|src\/|test\/|tests\/|lib\/|app\/|packages\/|[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|java|kt|kts|py|rs|go|cs|cpp|c|h|hpp|json|ya?ml|toml|xml|gradle|md|sql))(?:$|[\s"'`,:;])/i;
 
@@ -41,6 +45,7 @@ export class ToolEnforcementError extends ToolProtocolError {
       | 'exploration_required'
       | 'read_before_write'
       | 'tool_required'
+      | 'mutation_required'
   ) {
     super(message, 'model');
     this.name = 'ToolEnforcementError';
@@ -53,6 +58,7 @@ export interface ToolEnforcementPlan {
   workspaceDependent: boolean;
   requireExploration: boolean;
   requireAnyTool: boolean;
+  requireMutation: boolean;
   explorationToolNames: string[];
 }
 
@@ -157,16 +163,20 @@ export function buildToolEnforcementPlan(
       workspaceDependent: false,
       requireExploration: false,
       requireAnyTool: false,
+      requireMutation: false,
       explorationToolNames: []
     };
   }
 
-  const directFilesystemMutation = DIRECT_FILESYSTEM_MUTATION.test(latestUserText);
+  const directFilesystemMutation = DIRECT_FILESYSTEM_MUTATION.test(latestUserText)
+    || DIRECT_FILE_CREATION.test(latestUserText);
   const workspaceDependent = !directFilesystemMutation && isWorkspaceDependentRequest(latestUserText);
   const explorationTools = plan.tools.filter((tool) =>
     isDedicatedExplorationTool(tool) || isMixedShellTool(tool) || tool.name === 'kitt_runtime'
   );
   const requireExploration = explorationTools.length > 0 && workspaceDependent;
+  const requireMutation = directFilesystemMutation
+    || (workspaceDependent && MUTATION_INTENT.test(latestUserText));
 
   return {
     enabled: mode === 'required' || workspaceDependent || directFilesystemMutation,
@@ -174,6 +184,7 @@ export function buildToolEnforcementPlan(
     workspaceDependent,
     requireExploration,
     requireAnyTool: mode === 'required' || directFilesystemMutation,
+    requireMutation,
     explorationToolNames: explorationTools.map((tool) => tool.name)
   };
 }
@@ -219,13 +230,15 @@ export function enforceToolResponse(input: {
   calls: readonly OpenAiToolCall[] | undefined;
   explorationEvidence: boolean;
   toolEvidence: boolean;
+  mutationEvidence?: boolean;
 }): void {
   const {
     enforcement,
     protocol,
     calls = [],
     explorationEvidence,
-    toolEvidence
+    toolEvidence,
+    mutationEvidence = false
   } = input;
 
   if (!enforcement.enabled) return;
@@ -249,6 +262,17 @@ export function enforceToolResponse(input: {
     return;
   }
 
+  if (enforcement.requireMutation && !mutationEvidence) {
+    const mutations = calls.filter((call) => isMutationToolCall(call, protocol));
+    if (mutations.length === 0) {
+      throw new ToolEnforcementError(
+        'A mutation tool call is required to complete the requested workspace change; returning code, an artifact, or prose is not sufficient.',
+        'mutation_required'
+      );
+    }
+    return;
+  }
+
   if (enforcement.requireAnyTool && !toolEvidence && calls.length === 0) {
     throw new ToolEnforcementError(
       'At least one tool call is required before a final answer for this turn.',
@@ -260,7 +284,8 @@ export function enforceToolResponse(input: {
 export function buildToolEnforcementDirective(
   enforcement: ToolEnforcementPlan,
   explorationEvidence: boolean,
-  toolEvidence: boolean
+  toolEvidence: boolean,
+  mutationEvidence = false
 ): string {
   if (!enforcement.enabled) return '';
 
@@ -275,6 +300,12 @@ export function buildToolEnforcementDirective(
       'You MUST inspect the real workspace before any final answer or mutating tool call.',
       `Use one of these exploration tools first: ${enforcement.explorationToolNames.join(', ')}.`,
       'Return only the required exploration tool call now. Do not explain what you intend to do.'
+    );
+  } else if (enforcement.requireMutation && !mutationEvidence) {
+    lines.push(
+      'You MUST complete the requested workspace mutation through an available mutation tool before returning a final answer.',
+      'Returning code, a canvas/artifact, or prose does not count as applying the change.',
+      'Return only the mutation tool call now.'
     );
   } else if (enforcement.requireAnyTool && !toolEvidence) {
     lines.push(
@@ -309,6 +340,16 @@ export function buildToolEnforcementRetryPrompt(
       'Your previous response answered without obtaining evidence from the workspace.',
       `Call one exploration tool now${exploration ? `: ${exploration}` : '.'}`,
       'Do not provide explanation or a final answer.',
+      '[END KITT ENFORCEMENT RETRY]'
+    ].join('\n');
+  }
+
+  if (error.reason === 'mutation_required') {
+    return [
+      '[KITT ENFORCEMENT RETRY]',
+      'Your previous response did not apply the requested workspace change.',
+      'A code block, canvas/artifact, or explanation is not a filesystem mutation.',
+      'Call one available write/edit/patch/create/delete/move tool now and return no final answer.',
       '[END KITT ENFORCEMENT RETRY]'
     ].join('\n');
   }
