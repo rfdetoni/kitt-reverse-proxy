@@ -2,6 +2,7 @@ export type RuntimeOperationEffect = 'explore' | 'mutate' | 'neutral' | 'mixed';
 
 const RUNTIME_OPERATION_EFFECTS = new Map<string, RuntimeOperationEffect>([
   ['repo.read', 'explore'],
+  ['repo.list', 'explore'],
   ['repo.search', 'explore'],
   ['repo.inspect_symbol', 'explore'],
   ['repo.read_symbol', 'explore'],
