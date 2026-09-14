@@ -19,6 +19,34 @@ export interface UiResponseResult {
   durationMs: number;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function providerSpeakerLabels(provider: Pick<ProviderPreset, 'id' | 'name'>): string[] {
+  if (provider.id === 'generic') return [];
+  const displayName = provider.name.replace(/\s+web$/i, '').trim();
+  return [...new Set([provider.id, displayName].map((value) => value.trim()).filter(Boolean))]
+    .sort((left, right) => right.length - left.length);
+}
+
+/** Remove browser-UI speaker chrome without altering the model's actual answer. */
+export function cleanUiResponseText(
+  text: string,
+  provider: Pick<ProviderPreset, 'id' | 'name'>
+): string {
+  let cleaned = text.trim();
+  for (const label of providerSpeakerLabels(provider)) {
+    const prefix = new RegExp(
+      `^(?:(?:o|a)\\s+)?${escapeRegex(label)}\\s+(?:disse|diz|respondeu|said|says|replied)\\s*:?\\s*`,
+      'i'
+    );
+    const next = cleaned.replace(prefix, '').trim();
+    if (next !== cleaned) return next;
+  }
+  return cleaned;
+}
+
 function isThinkingIndicator(text: string): boolean {
   const value = text.trim().toLowerCase();
   return (
@@ -65,15 +93,16 @@ export async function awaitUiResponse(
     observedStreaming ||= streaming;
     const current = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
     const active = selectChangedSnapshot(baseline, current, sentPrompt);
+    const activeText = active?.text ? cleanUiResponseText(active.text, provider) : '';
 
-    if (active?.text && active.text !== lastText) {
-      lastText = active.text;
+    if (activeText && activeText !== lastText) {
+      lastText = activeText;
       stableSince = Date.now();
-      if (!isThinkingIndicator(active.text)) {
-        const delta = deltaFromCumulative(streamedText, active.text);
+      if (!isThinkingIndicator(activeText)) {
+        const delta = deltaFromCumulative(streamedText, activeText);
         if (delta) {
           if (firstDeltaMs === undefined) firstDeltaMs = Math.max(0, Date.now() - startedAt);
-          streamedText = active.text.trim();
+          streamedText = activeText.trim();
           if (onDelta) {
             await onDelta(delta);
           } else if (retainedDeltaChars + delta.length <= RESOURCE_LIMITS.uiDeltaChars) {
