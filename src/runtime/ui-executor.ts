@@ -280,7 +280,14 @@ export class UiChatExecutor implements ChatExecutor {
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
     const protocolFingerprint = toolProtocolFingerprint(plan);
     const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
-    const currentTaskKey = selectedPrompt.role === 'tool' ? this.enforcementTaskKey : toolEnforcementTaskKey(incoming);
+    // Agent hosts may encode tool results as user messages. Keep the original
+    // enforcement task across those synthetic continuations, just like native
+    // tool-role messages; otherwise the proxy resets its mutation evidence and
+    // lets the model stop after the first workspace operation.
+    const syntheticHostResult = selectedPrompt.role === 'user' && isSyntheticToolResult(selectedPrompt);
+    const currentTaskKey = selectedPrompt.role === 'tool' || syntheticHostResult
+      ? this.enforcementTaskKey
+      : toolEnforcementTaskKey(incoming);
     if (currentTaskKey !== this.enforcementTaskKey) {
       this.enforcementTaskKey = currentTaskKey;
       this.explorationEvidence = false;
