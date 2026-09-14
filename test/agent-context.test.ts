@@ -23,7 +23,8 @@ test('tool-enabled requests receive a late execution-agent system contract', () 
 
   assert.equal(systemMessages.length, 2);
   assert.match(systemMessages[0]?.content ?? '', /one direct, concise sentence/);
-  assert.match(systemMessages[1]?.content ?? '', /KITT AGENT EXECUTION CONTEXT/);
+  assert.match(systemMessages[1]?.content ?? '', /AGENT EXECUTION CONTEXT/);
+  assert.doesNotMatch(systemMessages[1]?.content ?? '', /KITT/i);
   assert.match(systemMessages[1]?.content ?? '', /execution agent rather than a conversational advisor/);
   assert.match(systemMessages[1]?.content ?? '', /Do not claim that you cannot create or modify files/);
   assert.match(systemMessages[1]?.content ?? '', /do not delegate executable steps back to the user/);
@@ -39,7 +40,7 @@ test('agent execution context is idempotent across repeated normalization', () =
   const messages = twice.messages as Array<{ content?: string }>;
 
   assert.equal(
-    messages.filter((message) => message.content?.includes('[KITT AGENT EXECUTION CONTEXT]')).length,
+    messages.filter((message) => message.content?.includes('[AGENT EXECUTION CONTEXT]')).length,
     1
   );
 });
