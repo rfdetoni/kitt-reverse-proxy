@@ -54,6 +54,14 @@ line two"}}}</tool_call>`;
   assert.equal(args.arguments.content, 'line one\nline two');
 });
 
+test('unescaped source-code quotes inside content are preserved', () => {
+  const response = String.raw`<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.write_file","arguments":{"path":"generate.py","content":"tree.append(f"{indent}{name}/")\nout.write("=== FILES ===")"}}}</tool_call>`;
+
+  const parsed = parseUiToolResponse(response, runtimePlan, [], 'gemini');
+  const args = JSON.parse(parsed.tool_calls?.[0]?.function.arguments || '{}');
+  assert.equal(args.arguments.content, 'tree.append(f"{indent}{name}/")\nout.write("=== FILES ===")');
+});
+
 test('structurally malformed tool JSON still fails closed', () => {
   const response = '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.write_file"</tool_call>';
   assert.throws(

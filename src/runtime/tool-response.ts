@@ -61,6 +61,11 @@ function repairJsonStringEscapes(input: string): string {
     }
 
     if (current === '"') {
+      const next = input.slice(index + 1).match(/\S/u)?.[0];
+      if (next !== undefined && !':,}]'.includes(next)) {
+        output += '\\"';
+        continue;
+      }
       output += current;
       inString = false;
       continue;
