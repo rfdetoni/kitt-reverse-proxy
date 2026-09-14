@@ -4,7 +4,7 @@ import { sendUiPrompt } from '../src/runtime/ui-interaction.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
 
-for (const mode of ['button', 'enter', 'stale-streaming', 'click-error', 'typing-fallback'] as const) {
+for (const mode of ['button', 'enter', 'stale-streaming', 'click-error', 'typing-fallback', 'expanded-newlines'] as const) {
   test(`prompt submission is single-shot and observable: ${mode}`, async () => {
     let clicks = 0;
     let enters = 0;
@@ -29,6 +29,10 @@ for (const mode of ['button', 'enter', 'stale-streaming', 'click-error', 'typing
       },
       async evaluate() { return composerText; }
     };
+
+    if (mode === 'expanded-newlines') {
+      input.evaluate = async () => composerText.replace(/\n/g, '\n\n');
+    }
 
     const send = {
       last() { return this; },
@@ -71,7 +75,7 @@ for (const mode of ['button', 'enter', 'stale-streaming', 'click-error', 'typing
       session,
       provider,
       { manualInterventionTimeoutMs: 1000 } as AppConfig,
-      'olá'
+      mode === 'expanded-newlines' ? 'olá\nmundo' : 'olá'
     );
 
     if (mode === 'click-error') {

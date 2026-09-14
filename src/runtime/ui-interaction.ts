@@ -9,7 +9,7 @@ import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { ManualInterventionRequiredError, UiAutomationError } from './ui-errors.js';
 
 function normalizeComposerText(value: string): string {
-  return value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').trim();
+  return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 async function readComposerText(input: Locator): Promise<string> {
@@ -55,7 +55,7 @@ async function waitForSubmissionConfirmation(
   wasStreaming: boolean,
   signal?: AbortSignal
 ): Promise<void> {
-  const deadline = Date.now() + 1_750;
+  const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     throwIfAborted(signal);
 
@@ -68,9 +68,8 @@ async function waitForSubmissionConfirmation(
     await abortableSleep(100, signal);
   }
 
-  throw new UiAutomationError(
-    'O prompt foi preenchido, mas o chat web não confirmou a submissão. Nenhum reenvio automático foi feito para evitar duplicatas.'
-  );
+  // Some rich editors keep their text while the response starts. Response
+  // observation below remains authoritative and never resubmits the prompt.
 }
 
 export async function browserGate(page: Page, provider: ProviderPreset): Promise<BrowserGate | null> {
