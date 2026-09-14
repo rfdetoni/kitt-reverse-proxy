@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { logger } from '../logger.js';
 import type { ProviderPreset } from '../providers/catalog.js';
@@ -7,6 +7,71 @@ import type { AppConfig, LiveBrowserSession } from '../types.js';
 import { anyVisible, firstVisibleLocator } from './ui-dom.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { ManualInterventionRequiredError, UiAutomationError } from './ui-errors.js';
+
+function normalizeComposerText(value: string): string {
+  return value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').trim();
+}
+
+async function readComposerText(input: Locator): Promise<string> {
+  return input.evaluate((element: Element) => {
+    if ('value' in element && typeof (element as HTMLInputElement).value === 'string') {
+      return (element as HTMLInputElement).value;
+    }
+    const html = element as HTMLElement;
+    return html.innerText || html.textContent || '';
+  }).catch(() => '');
+}
+
+async function writeComposerText(page: Page, input: Locator, prompt: string): Promise<void> {
+  const expected = normalizeComposerText(prompt);
+
+  try {
+    await input.fill(prompt, { timeout: 2_000 });
+  } catch {
+    // Some rich editors do not accept Playwright fill(); retry through the
+    // focused keyboard path below.
+  }
+
+  if (normalizeComposerText(await readComposerText(input)) === expected) return;
+
+  await input.focus().catch(() => undefined);
+  await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
+  await input.press('ControlOrMeta+A').catch(() => undefined);
+  await input.press('Backspace').catch(() => undefined);
+  await page.keyboard.insertText(prompt);
+
+  const actual = normalizeComposerText(await readComposerText(input));
+  if (actual !== expected) {
+    throw new UiAutomationError(
+      `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}.`
+    );
+  }
+}
+
+async function waitForSubmissionConfirmation(
+  session: LiveBrowserSession,
+  provider: ProviderPreset,
+  input: Locator,
+  wasStreaming: boolean,
+  signal?: AbortSignal
+): Promise<void> {
+  const deadline = Date.now() + 1_750;
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+
+    const remaining = normalizeComposerText(await readComposerText(input));
+    if (!remaining) return;
+
+    const streamingNow = await anyVisible(session.page, provider.ui.streamingSelectors);
+    if (!wasStreaming && streamingNow) return;
+
+    await abortableSleep(100, signal);
+  }
+
+  throw new UiAutomationError(
+    'O prompt foi preenchido, mas o chat web não confirmou a submissão. Nenhum reenvio automático foi feito para evitar duplicatas.'
+  );
+}
 
 export async function browserGate(page: Page, provider: ProviderPreset): Promise<BrowserGate | null> {
   return detectBrowserGate(page, provider.ui.inputSelectors);
@@ -67,40 +132,36 @@ export async function sendUiPrompt(
   const input = await firstVisibleLocator(session.page, provider.ui.inputSelectors);
   if (!input) throw new UiAutomationError('Campo de entrada do chat não foi localizado.');
 
-  await input.focus().catch(() => undefined);
-  await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
-
-  const isContentEditable = await input.getAttribute('contenteditable').catch(() => null);
-  if (isContentEditable === 'true' || isContentEditable === '') {
-    await input.press('ControlOrMeta+A').catch(() => undefined);
-    await input.press('Backspace').catch(() => undefined);
-    await session.page.keyboard.insertText(prompt);
-  } else {
-    try {
-      await input.fill(prompt, { timeout: 2_000 });
-    } catch {
-      await input.press('ControlOrMeta+A').catch(() => undefined);
-      await input.press('Backspace').catch(() => undefined);
-      await session.page.keyboard.insertText(prompt);
-    }
-  }
+  const wasStreaming = await anyVisible(session.page, provider.ui.streamingSelectors);
+  await writeComposerText(session.page, input, prompt);
 
   await abortableSleep(150, signal);
   const sendButtonDeadline = Date.now() + 2_500;
+  let submitted = false;
+
   while (Date.now() < sendButtonDeadline) {
     throwIfAborted(signal);
-    if (await anyVisible(session.page, provider.ui.streamingSelectors)) return;
     const send = await firstVisibleLocator(session.page, provider.ui.sendSelectors.map((selector) =>
       `${selector}:not([aria-label*="stop" i]):not([aria-label*="parar" i]):not([aria-label*="interromper" i]):not([data-testid="stop-button"])`
     ));
     if (send && await send.isEnabled().catch(() => false)) {
       await send.click({ timeout: 2_000 });
-      return;
+      submitted = true;
+      break;
     }
     await abortableSleep(100, signal);
   }
 
-  throwIfAborted(signal);
-  // Submit once: the same button can become Stop before the input clears.
-  await input.press('Enter', { timeout: 2_000 });
+  if (!submitted) {
+    throwIfAborted(signal);
+    await input.focus().catch(() => undefined);
+    await input.press('Enter', { timeout: 2_000 });
+    submitted = true;
+  }
+
+  if (!submitted) {
+    throw new UiAutomationError('Não foi possível submeter o prompt ao chat web.');
+  }
+
+  await waitForSubmissionConfirmation(session, provider, input, wasStreaming, signal);
 }
