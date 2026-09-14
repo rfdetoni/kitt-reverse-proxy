@@ -232,8 +232,14 @@ export class UiChatExecutor implements ChatExecutor {
 
     const previousUserTurns = this.history.filter((message) => message.role === 'user').length;
     const incomingUserTurns = incoming.filter((message) => message.role === 'user').length;
+    // Compaction can change the user prefix during a tool round trip. An issued
+    // pending call identifies the continuation without trusting client history.
+    const continuingTool = incoming.at(-1)?.role === 'tool'
+      && selectMinimalUiPrompts(incoming).every((message) =>
+        Boolean(message.toolCallId && this.toolNamesByCallId.has(message.toolCallId)));
     if (
       incoming.length > 1
+      && !continuingTool
       && incomingUserTurns > 0
       && this.history.length
       && (!userTurnsAreCompatible(this.history, incoming) || incomingUserTurns < previousUserTurns)
@@ -309,11 +315,6 @@ export class UiChatExecutor implements ChatExecutor {
         if (callId && this.explorationCallIds.has(callId)) this.explorationEvidence = true;
         if (callId && this.mutationCallIds.has(callId)) this.mutationEvidence = true;
         const result = formatToolResultPrompt(toolPrompt.text, callId, toolName);
-        if (callId) {
-          this.toolNamesByCallId.delete(callId);
-          this.explorationCallIds.delete(callId);
-          this.mutationCallIds.delete(callId);
-        }
         return result;
       });
       actionablePrompt = toolResults.join('\n');
@@ -424,6 +425,14 @@ export class UiChatExecutor implements ChatExecutor {
       else structuredOutputFailed = true;
     }
 
+    // Consume only after a successful response; failed sends may be retried.
+    for (const prompt of selectedPrompts) {
+      if (prompt.role === 'tool' && prompt.toolCallId) {
+        this.toolNamesByCallId.delete(prompt.toolCallId);
+        this.explorationCallIds.delete(prompt.toolCallId);
+        this.mutationCallIds.delete(prompt.toolCallId);
+      }
+    }
     for (const call of parsed.tool_calls || []) {
       this.rememberToolCall(
         call,

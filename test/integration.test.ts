@@ -125,7 +125,8 @@ test('UI protocol retries premature final answers and completes an API tool roun
     const final = await fetch(`${baseUrl}/v1/responses`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ instructions: 'Continue using the tool result.', tools,
-        input: [{ type: 'function_call_output', call_id: call.id, output: 'KITT coding agent' }] })
+        input: [{ role: 'user', content: 'compacted repository request' },
+          { type: 'function_call_output', call_id: call.id, output: 'KITT coding agent' }] })
     });
     assert.equal(final.status, 200);
     assert.equal((await final.json() as any).output_text, 'README.md describes KITT.');
