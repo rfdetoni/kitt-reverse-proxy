@@ -132,6 +132,12 @@ function normalizeToolEnvelopeBody(input: string): string {
   return repairJsonStringEscapes(trimmed);
 }
 
+function innermostToolEnvelopeBody(body: string): string {
+  const marker = '<tool_call>';
+  const nestedIndex = body.toLowerCase().lastIndexOf(marker);
+  return nestedIndex >= 0 ? body.slice(nestedIndex + marker.length) : body;
+}
+
 function normalizeProviderPatterns(text: string): string {
   let normalized = text.replace(/```(?:tool[_-]?call|function[_-]?call)\s*/gi, '```json\n');
 
@@ -157,13 +163,14 @@ function normalizeProviderPatterns(text: string): string {
     (_whole, payload: string) => `<tool_call>${payload}</tool_call>`
   );
 
-  // Browser models often embed source code directly in textual JSON tool
-  // envelopes. Repair invalid JSON string escapes/control characters and
-  // narrowly tolerate stray quote/backtick presentation noise around an
-  // otherwise-valid payload. Structural JSON errors still fail closed.
+  // Browser models can duplicate the opening <tool_call> marker while
+  // regenerating a malformed call. Prefer the innermost envelope: it is the
+  // latest complete candidate and still goes through allowlist/schema checks.
+  // This recovers provider presentation corruption without accepting invalid
+  // tool names or arguments.
   normalized = normalized.replace(
     /<tool_call>([\s\S]*?)<\/tool_call>/gi,
-    (_whole, body: string) => `<tool_call>${normalizeToolEnvelopeBody(body)}</tool_call>`
+    (_whole, body: string) => `<tool_call>${normalizeToolEnvelopeBody(innermostToolEnvelopeBody(body))}</tool_call>`
   );
 
   return normalized;
@@ -213,18 +220,15 @@ export function buildToolRetryPrompt(plan: ToolProtocolPlan, reason: string): st
     name: tool.name,
     parameters: tool.parameters ?? { type: 'object' }
   }));
-  const payload = JSON.stringify({
-    allowed_tools: exposed,
-    output: {
-      name: '<allowed function name>',
-      arguments: '<JSON object matching that function schema>'
-    }
-  });
+  const example = '<tool_call>{"name":"ALLOWED_TOOL_NAME","arguments":{}}</tool_call>';
   return [
     'Your previous response could not be parsed as a valid tool call.',
     `Reason: ${reason.slice(0, 600)}`,
-    `Respond ONLY with valid JSON matching: ${payload}`,
-    'Print the JSON in the visible assistant reply. Hidden website tool calls are not forwarded.',
-    'Do not use markdown or explanatory text. Stop and wait for the external agent to return the result.'
+    `Allowed tools and schemas: ${JSON.stringify(exposed)}`,
+    'Use the same canonical tool-call protocol as the original request; do not switch to bare JSON.',
+    `Respond ONLY with one or more canonical blocks shaped exactly like: ${example}`,
+    'Replace ALLOWED_TOOL_NAME with an allowed name and populate arguments to match that tool schema.',
+    'Do not use markdown or explanatory text. Hidden website tool calls are not forwarded.',
+    'Stop after the tool-call block(s) and wait for the external agent to return the result.'
   ].join('\n');
 }
