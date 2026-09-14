@@ -134,6 +134,30 @@ function normalizeToolEnvelopeBody(input: string): string {
     }
   }
 
+  // Some UI models emit source text with JSON delimiter quotes unescaped. Try
+  // a bounded breadth-first repair, accepting only a result JSON.parse accepts.
+  const queue = [trimmed];
+  const seen = new Set(queue);
+  for (let attempts = 0; queue.length && attempts < 512; attempts += 1) {
+    const candidate = queue.shift()!;
+    const repaired = repairJsonStringEscapes(candidate);
+    try {
+      JSON.parse(repaired);
+      return repaired;
+    } catch {
+      for (let index = 0; index < candidate.length; index += 1) {
+        if (candidate[index] !== '"' || candidate[index - 1] === '\\') continue;
+        const next = candidate.slice(index + 1).match(/\S/u)?.[0];
+        if (next === undefined || !':,}]'.includes(next)) continue;
+        const variant = `${candidate.slice(0, index)}\\"${candidate.slice(index + 1)}`;
+        if (!seen.has(variant)) {
+          seen.add(variant);
+          queue.push(variant);
+        }
+      }
+    }
+  }
+
   return repairJsonStringEscapes(trimmed);
 }
 

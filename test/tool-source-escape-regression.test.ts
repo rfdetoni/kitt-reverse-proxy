@@ -62,6 +62,13 @@ test('unescaped source-code quotes inside content are preserved', () => {
   assert.equal(args.arguments.content, 'tree.append(f"{indent}{name}/")\nout.write("=== FILES ===")');
 });
 
+test('source sets with quoted comma values are recovered', () => {
+  const response = String.raw`<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.write_file","arguments":{"path":"x.py","content":"IGNORED={".env", ".env.local"}"}}}</tool_call>`;
+  const parsed = parseUiToolResponse(response, runtimePlan, [], 'gemini');
+  const args = JSON.parse(parsed.tool_calls?.[0]?.function.arguments || '{}');
+  assert.equal(args.arguments.content, 'IGNORED={".env", ".env.local"}');
+});
+
 test('structurally malformed tool JSON still fails closed', () => {
   const response = '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.write_file"</tool_call>';
   assert.throws(
