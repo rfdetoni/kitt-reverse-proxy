@@ -21,9 +21,9 @@ const WORKSPACE_REFERENCE =
 const CODE_NOUN =
   /\b(?:class|classe|method|m[eé]todo|function|fun[cç][aã]o|endpoint|controller|service|repository|component|package|dependency|depend[eê]ncia|test|teste|bug|build|script|migration|migra[cç][aã]o|schema|query)\b/i;
 const CHANGE_INTENT =
-  /\b(?:fix|corrig(?:ir|a|e|indo)?|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|review|revis(?:ar|e)|debug|investig(?:ar|ue)|resolve|resolver)\b/i;
+  /\b(?:fix|corrig(?:ir|e|indo)|corrij(?:a|am|amos)|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|review|revis(?:ar|e)|debug|investig(?:ar|ue)|resolve|resolver)\b/i;
 const MUTATION_INTENT =
-  /\b(?:fix|corrig(?:ir|a|e|indo)?|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|delete|deletar|excluir|move|mover|rename|renomear)\b/i;
+  /\b(?:fix|corrig(?:ir|e|indo)|corrij(?:a|am|amos)|implement(?:ar|e|a)?|add|adicion(?:ar|e|a)?|remove|remov(?:er|a)|refactor|refator(?:ar|e)|improve|melhor(?:ar|e)|aprimor(?:ar|e)|change|alter(?:ar|e)|edit|editar|create|criar|update|atualiz(?:ar|e)|delete|deletar|excluir|move|mover|rename|renomear)\b/i;
 const DIRECT_FILESYSTEM_MUTATION =
   /^\s*(?:(?:por favor|please)\s+)?(?:(?:crie|criar|create|make)\s+(?:(?:um|uma|a|an)\s+)?(?:pasta|diret[oó]rio|folder|directory)\b|(?:execute|executar|rode|run)\s*:?\s*(?:mkdir|touch)\b)/i;
 const DIRECT_FILE_CREATION =
