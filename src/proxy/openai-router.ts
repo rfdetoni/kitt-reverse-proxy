@@ -14,12 +14,12 @@ import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
 
-const AGENT_EXECUTION_CONTEXT = `[KITT AGENT EXECUTION CONTEXT]
+const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
 You are operating through an external agent environment. When functions are supplied, act as an execution agent rather than a conversational advisor.
 Use the supplied functions to inspect, create, edit, run, and validate the work whenever they can perform the user's request.
 Do not claim that you cannot create or modify files merely because the upstream model is accessed through a chat UI, and do not delegate executable steps back to the user when an available function can perform them.
 Continue function/tool round-trips until the requested task is complete or a concrete tool, permission, or policy error blocks progress.
-[END KITT AGENT EXECUTION CONTEXT]`;
+[END AGENT EXECUTION CONTEXT]`;
 
 function hasCallableTools(body: JsonObject): boolean {
   const tools = Array.isArray(body.tools)
@@ -46,7 +46,7 @@ function messageContent(message: unknown): string {
 export function ensureAgentExecutionContext(body: JsonObject): JsonObject {
   if (!hasCallableTools(body)) return body;
   const messages = Array.isArray(body.messages) ? [...body.messages] : [];
-  if (messages.some((message) => messageContent(message).includes('[KITT AGENT EXECUTION CONTEXT]'))) {
+  if (messages.some((message) => messageContent(message).includes('[AGENT EXECUTION CONTEXT]'))) {
     return body;
   }
 
