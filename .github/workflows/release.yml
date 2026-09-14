@@ -73,9 +73,9 @@ jobs:
           sbom-path: release/sbom.cdx.json
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -83,7 +83,7 @@ jobs:
 
       - name: Generate runtime image metadata
         id: runtime-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy
           flavor: latest=auto
@@ -97,7 +97,7 @@ jobs:
             org.opencontainers.image.description=K.I.T.T. reverse-proxy runtime for the browser-sidecar architecture
             org.opencontainers.image.licenses=MIT
       - name: Publish reverse-proxy runtime image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: runtime
@@ -112,7 +112,7 @@ jobs:
 
       - name: Generate standalone image metadata
         id: standalone-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy-standalone
           flavor: latest=auto
@@ -126,7 +126,7 @@ jobs:
             org.opencontainers.image.description=K.I.T.T. reverse proxy with bundled Playwright Chromium
             org.opencontainers.image.licenses=MIT
       - name: Publish standalone reverse-proxy image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: standalone
@@ -141,7 +141,7 @@ jobs:
 
       - name: Generate browser image metadata
         id: browser-meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/kitt-reverse-proxy-browser
           flavor: latest=auto
@@ -155,7 +155,7 @@ jobs:
             org.opencontainers.image.description=K.I.T.T. isolated Chromium sidecar with optional noVNC authentication UI
             org.opencontainers.image.licenses=MIT
       - name: Publish browser sidecar image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/browser.Dockerfile
