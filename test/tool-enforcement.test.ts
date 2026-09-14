@@ -7,7 +7,8 @@ import {
   isExplorationToolCall,
   isMutationToolCall,
   isWorkspaceDependentRequest,
-  toolEnforcementTaskKey
+  toolEnforcementTaskKey,
+  isSyntheticToolResult
 } from '../src/runtime/tool-enforcement.js';
 import { runtimeOperationEffect } from '../src/runtime/tool-policy.js';
 import { buildToolProtocolPlan, type OpenAiToolCall } from '../src/mapping/tool-calling.js';
@@ -199,6 +200,15 @@ test('task key stays stable through tool result and changes on new user turn', (
   ]);
   assert.equal(original, withTool);
   assert.notEqual(original, nextUser);
+});
+
+test('agent host tool result does not become a new user task', () => {
+  const messages = [
+    { role: 'user' as const, text: 'crie backend e frontend' },
+    { role: 'user' as const, text: 'kitt_runtime result from the host. directory created' }
+  ];
+  assert.equal(isSyntheticToolResult(messages[1]!), true);
+  assert.equal(toolEnforcementTaskKey(messages), '1:crie backend e frontend');
 });
 
 test('KITT compact runtime enforces repo exploration before patch or process mutations', () => {

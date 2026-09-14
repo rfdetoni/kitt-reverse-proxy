@@ -143,12 +143,16 @@ export function toolEnforcementTaskKey(messages: readonly CanonicalMessage[]): s
   let userCount = 0;
   let lastUser = '';
   for (const message of messages) {
-    if (message.role === 'user') {
+    if (message.role === 'user' && !isSyntheticToolResult(message)) {
       userCount += 1;
       lastUser = message.text;
     }
   }
   return `${userCount}:${lastUser}`;
+}
+
+export function isSyntheticToolResult(message: Pick<CanonicalMessage, 'role' | 'text'>): boolean {
+  return message.role === 'user' && /\bresult from the host\b/i.test(message.text);
 }
 
 export function buildToolEnforcementPlan(
