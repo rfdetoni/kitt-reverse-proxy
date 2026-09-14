@@ -402,7 +402,7 @@ export class UiChatExecutor implements ChatExecutor {
         }
         telemetry.recordToolCall(this.provider.id, 'unknown', 'retry');
         const retryPrompt = error instanceof ToolEnforcementError
-          ? buildToolEnforcementRetryPrompt(enforcement, error)
+          ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         await this.sendPrompt(retryPrompt, options?.signal);
