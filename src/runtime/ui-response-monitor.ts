@@ -19,6 +19,8 @@ export interface UiResponseResult {
   durationMs: number;
 }
 
+const FIRST_USEFUL_DELTA_TIMEOUT_MS = 90_000;
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -71,6 +73,7 @@ export async function awaitUiResponse(
 ): Promise<UiResponseResult> {
   const startedAt = Date.now();
   const deadline = startedAt + config.uiResponseTimeoutMs;
+  const firstUsefulDeltaDeadline = Math.min(deadline, startedAt + FIRST_USEFUL_DELTA_TIMEOUT_MS);
   const deltas: string[] = [];
   let firstDeltaMs: number | undefined;
   let retainedDeltaChars = 0;
@@ -111,6 +114,12 @@ export async function awaitUiResponse(
           }
         }
       }
+    }
+
+    if (firstDeltaMs === undefined && Date.now() >= firstUsefulDeltaDeadline) {
+      throw new UiTimeoutError(
+        `Nenhum delta útil do chat foi detectado em ${Math.round((firstUsefulDeltaDeadline - startedAt) / 1000)}s.`
+      );
     }
 
     if (!streaming && lastText && !isThinkingIndicator(lastText)) {
