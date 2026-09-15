@@ -34,7 +34,12 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       model: manager.modelId,
       transport: manager.transport,
       endpoints: {
-        openai: { chat: '/v1/chat/completions', models: '/v1/models', responses: '/v1/responses' },
+        openai: {
+          chat: '/v1/chat/completions',
+          models: '/v1/models',
+          responses: '/v1/responses',
+          embeddings: '/v1/embeddings (unsupported: 501)'
+        },
         anthropic: { messages: '/v1/messages' },
         ollama: { chat: '/api/chat', generate: '/api/generate', tags: '/api/tags', version: '/api/version', show: '/api/show' },
         providers: '/v1/providers',
@@ -42,6 +47,7 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
         capabilities: '/v1/capabilities',
         health: '/healthz',
         readiness: '/readyz',
+        session: '/v1/kitt/session',
         sessions: '/v1/kitt/sessions',
         metrics: '/v1/kitt/metrics'
       },
@@ -127,6 +133,28 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
     res.json(runtimeCapabilities(manager, config));
   });
 
+  router.get('/v1/kitt/session', (req, res) => {
+    try {
+      const id = manager.normalizeSessionId(req.get('x-kitt-session-id'));
+      const session = manager.list().find((item) => item.id === id);
+      if (!session) {
+        sendOpenAiError(res, 404, `Sessão não encontrada: ${id}`, 'session_not_found');
+        return;
+      }
+      res.json({
+        session,
+        provider: manager.providerId,
+        transport: manager.transport,
+        model: manager.modelId,
+        queue_depth: manager.queueDepth(id),
+        resilience: resilience(manager) ?? { circuit: 'closed' },
+        capacity: manager.capacity()
+      });
+    } catch (error) {
+      sendProxyError(res, error);
+    }
+  });
+
   router.get('/v1/kitt/sessions', (_req, res) => {
     res.json({ sessions: manager.list(), capacity: manager.capacity() });
   });
@@ -174,6 +202,7 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
 
   router.get('/v1/kitt/status', (_req, res) => {
     res.json({
+      version: serviceVersion(),
       model: manager.modelId,
       provider: manager.providerId,
       transport: manager.transport,
