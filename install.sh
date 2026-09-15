@@ -44,6 +44,16 @@ command -v node >/dev/null || { echo "Node.js 24+ is required" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
 node -e "const m=Number(process.versions.node.split('.')[0]); if(m<24) process.exit(1)" || { echo "Node.js 24+ is required" >&2; exit 1; }
 
+PREVIOUS_VERSION="not installed"
+if [[ -f "$SRC/package.json" ]]; then
+  CURRENT_VERSION="$(node -e 'try { const p=require(process.argv[1]); if (typeof p.version === "string" && p.version.trim()) process.stdout.write(p.version.trim()); } catch {}' "$SRC/package.json")"
+  if [[ -n "$CURRENT_VERSION" ]]; then
+    PREVIOUS_VERSION="v$CURRENT_VERSION"
+  else
+    PREVIOUS_VERSION="unknown"
+  fi
+fi
+
 if [[ "$REF" == "stable" ]]; then
   if ! REF="$(
     git ls-remote --refs --tags "$REPO_URL" 'refs/tags/v*' |
@@ -72,6 +82,9 @@ git -C "$SRC" fetch --force --depth 1 origin "$REF"
 git -C "$SRC" checkout --detach --force FETCH_HEAD
 git -C "$SRC" clean -ffd
 
+TARGET_VERSION="$(node -e 'const p=require(process.argv[1]); if (typeof p.version !== "string" || !p.version.trim()) process.exit(2); process.stdout.write(p.version.trim());' "$SRC/package.json")"
+echo "Version: $PREVIOUS_VERSION -> v$TARGET_VERSION"
+
 (cd "$SRC" && npm ci --no-audit --no-fund --strict-allow-scripts && npm run build && npm prune --omit=dev --no-audit --no-fund)
 
 has_system_browser=0
@@ -92,5 +105,5 @@ exec node "$SRC/dist/gateway/cli.js" "\$@"
 EOF
 chmod +x "$BIN_PROXY" "$BIN_GATEWAY"
 "$BIN_PROXY" --help >/dev/null
-echo "K.I.T.T. Reverse Proxy $REF installed/updated at $INSTALL_ROOT."
+echo "K.I.T.T. Reverse Proxy v$TARGET_VERSION installed/updated at $INSTALL_ROOT."
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "Add $BIN_DIR to PATH." ;; esac
