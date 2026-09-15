@@ -161,7 +161,7 @@ export class Telemetry {
   recordProviderEvent(
     provider: string,
     transport: 'network' | 'ui',
-    event: 'success' | 'failure' | 'reachable_error' | 'circuit_open' | 'circuit_close' | 'circuit_reject' | 'half_open_probe' | 'bootstrap_fallback'
+    event: 'success' | 'failure' | 'reachable_error' | 'circuit_open' | 'circuit_close' | 'circuit_reject' | 'half_open_probe' | 'bootstrap_fallback' | 'ui_timeout_retry'
   ): void {
     this.providerEvents.increment({ provider: boundedLabel(provider), transport, event });
   }
