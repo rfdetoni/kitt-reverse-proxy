@@ -62,7 +62,7 @@ def release_level(commit_range: str) -> int:
         subject = subject.strip()
         body = body.strip()
 
-        if subject.startswith("chore(release):"):
+        if subject.startswith("chore(release):") or subject.startswith("chore(version):"):
             continue
 
         match = CONVENTIONAL_RE.match(subject)
@@ -100,29 +100,34 @@ def release_level(commit_range: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: next_semver.py CURRENT_VERSION", file=sys.stderr)
+    if len(sys.argv) not in {2, 3}:
+        print("usage: next_semver.py CURRENT_VERSION [PUBLISHED_RELEASE_TAG]", file=sys.stderr)
         return 2
 
     current = Version.parse(sys.argv[1])
-    latest = latest_semver_tag()
+    if len(sys.argv) == 3:
+        tag = sys.argv[2]
+        released = Version.parse(tag)
+        try:
+            git("rev-parse", "--verify", f"refs/tags/{tag}")
+        except subprocess.CalledProcessError:
+            print(f"published release tag is missing locally: {tag}", file=sys.stderr)
+            return 3
+    else:
+        latest = latest_semver_tag()
+        if latest is None:
+            print(current)
+            return 0
+        tag, released = latest
 
-    if latest is None:
-        print(current)
-        return 0
-
-    tag, released = latest
-    if current < released:
+    if current != released:
+        relation = "trails" if current < released else "is ahead of"
         print(
-            f"warning: declared version {current} trails latest tag {tag}; "
-            "automatic release is blocked until version history is reconciled",
+            f"declared version {current} {relation} published release {tag}; "
+            "reconcile package metadata before calculating the next release",
             file=sys.stderr,
         )
-        return 0
-
-    if current > released:
-        print(current)
-        return 0
+        return 3
 
     level = release_level(f"{tag}..HEAD")
     if level == 0:
