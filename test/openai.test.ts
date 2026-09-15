@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completionToResponses, responsesBodyToChat } from '../src/proxy/openai.js';
+import {
+  ChatStreamWriter,
+  completionToResponses,
+  openAiErrorType,
+  responsesBodyToChat,
+  sendOpenAiError
+} from '../src/proxy/openai.js';
 
 test('Responses API input converts to chat messages', () => {
   const chat = responsesBodyToChat({ model: 'x', input: 'hello' });
@@ -14,6 +20,20 @@ test('chat completion converts to basic Responses API envelope', () => {
   });
   assert.equal(response.object, 'response');
   assert.equal(response.output_text, 'hello');
+});
+
+test('Responses API carries estimated usage into its native usage fields', () => {
+  const response = completionToResponses({
+    id: 'c', object: 'chat.completion', created: 1, model: 'x',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9, kitt_estimated: true }
+  });
+  assert.deepEqual(response.usage, {
+    input_tokens: 7,
+    output_tokens: 2,
+    total_tokens: 9,
+    kitt_estimated: true
+  });
 });
 
 test('Responses API instructions become a system message', () => {
@@ -53,6 +73,7 @@ test('Responses stream uses current output_text event names and closes after res
   assert.doesNotMatch(output, /response\.text\.delta/);
   assert.equal(endedWith, undefined);
 });
+
 test('Responses input function_call_output becomes tool message', () => {
   const chat = responsesBodyToChat({
     input: [{ type: 'function_call_output', call_id: 'call_weather', output: '{"temp":18}' }]
@@ -116,4 +137,51 @@ test('Responses stream emits function argument events', async () => {
   assert.match(output, /response\.function_call_arguments\.delta/);
   assert.match(output, /response\.function_call_arguments\.done/);
   assert.match(output, /"type":"function_call"/);
+});
+
+test('OpenAI errors always use a structured SDK-compatible envelope', () => {
+  let status = 0;
+  let payload: any;
+  const fake = {
+    status(value: number) { status = value; return this; },
+    json(value: unknown) { payload = value; return this; }
+  };
+  sendOpenAiError(fake as never, 429, 'queue full', 'session_limit_exceeded');
+  assert.equal(status, 429);
+  assert.deepEqual(payload, {
+    error: {
+      message: 'queue full',
+      type: 'rate_limit_error',
+      param: null,
+      code: 'session_limit_exceeded'
+    }
+  });
+  assert.equal(openAiErrorType(400), 'invalid_request_error');
+  assert.equal(openAiErrorType(401), 'authentication_error');
+  assert.equal(openAiErrorType(503), 'api_error');
+});
+
+test('Chat stream emits SSE keepalive while a started stream is idle', async () => {
+  let output = '';
+  const fake = {
+    writableEnded: false,
+    destroyed: false,
+    status() { return this; },
+    setHeader() { return this; },
+    flushHeaders() {},
+    write(chunk: string) { output += chunk; return true; },
+    end(chunk?: unknown) {
+      this.writableEnded = true;
+      if (typeof chunk === 'string') output += chunk;
+      return this;
+    }
+  };
+  const writer = new ChatStreamWriter(fake as never, 'web', 5);
+  writer.delta('a');
+  await new Promise((resolve) => setTimeout(resolve, 18));
+  writer.finish({
+    id: 'c', object: 'chat.completion', created: 1, model: 'web',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'a' }, finish_reason: 'stop' }]
+  });
+  assert.match(output, /: ping\n\n/);
 });
