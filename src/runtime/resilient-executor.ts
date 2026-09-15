@@ -30,6 +30,14 @@ function availabilityFailure(error: unknown): boolean {
   ]).has(error.name);
 }
 
+function isUiTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'UiTimeoutError';
+}
+
+function isRequestAborted(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RequestAbortedError';
+}
+
 export interface ResilienceSnapshot extends JsonObject {
   circuit: 'closed' | 'open' | 'half_open';
   consecutive_failures: number;
@@ -80,11 +88,11 @@ export class ResilientChatExecutor implements ChatExecutor {
 
     const startedAt = Date.now();
     try {
-      const result = await this.delegate.execute(body, options);
+      const result = await this.executeWithSingleUiRecovery(body, options);
       this.recordSuccess(Date.now() - startedAt);
       return result;
     } catch (error) {
-      if (error instanceof Error && error.name === 'RequestAbortedError') {
+      if (isRequestAborted(error)) {
         if (this.halfOpenProbe) {
           this.halfOpenProbe = false;
           this.openUntil = Date.now() + Math.min(1_000, this.cooldownMs);
@@ -94,6 +102,32 @@ export class ResilientChatExecutor implements ChatExecutor {
       if (availabilityFailure(error)) this.recordFailure();
       else this.recordReachable(Date.now() - startedAt);
       throw error;
+    }
+  }
+
+  private async executeWithSingleUiRecovery(
+    body: JsonObject,
+    options?: ChatExecutionOptions
+  ): Promise<ChatExecutionResult> {
+    try {
+      return await this.delegate.execute(body, options);
+    } catch (error) {
+      const canRecover = (
+        this.transport === 'ui'
+        && isUiTimeout(error)
+        && typeof this.delegate.reset === 'function'
+        && !options?.signal?.aborted
+      );
+      if (!canRecover) throw error;
+
+      telemetry.recordProviderEvent(this.provider, this.transport, 'ui_timeout_retry');
+      await this.delegate.reset!();
+      if (options?.signal?.aborted) {
+        const aborted = new Error('Request aborted before UI retry.');
+        aborted.name = 'RequestAbortedError';
+        throw aborted;
+      }
+      return this.delegate.execute(body, options);
     }
   }
 
