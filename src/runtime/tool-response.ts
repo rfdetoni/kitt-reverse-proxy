@@ -95,6 +95,13 @@ function toolish(text: string): boolean {
   return /<tool_call\b|<\/tool_call>|```(?:tool[_-]?call|function[_-]?call)|\b(?:tool|function)[ _-]?call\s*[:=]/i.test(text);
 }
 
+function maskOrdinaryCodeFences(text: string): string {
+  return text.replace(
+    /```(?!\s*(?:tool[_-]?call|function[_-]?call)\b)[^\n\r]*[\r\n][\s\S]*?```/gi,
+    (block) => ' '.repeat(block.length)
+  );
+}
+
 function isEscapedQuote(input: string, index: number): boolean {
   let slashes = 0;
   for (let cursor = index - 1; cursor >= 0 && input[cursor] === '\\'; cursor -= 1) slashes += 1;
@@ -243,12 +250,15 @@ function normalizeToolEnvelopeBody(input: string): string {
 }
 
 function normalizeProviderPatterns(text: string): string {
-  try { JSON.parse(text); return text; } catch { /* Try browser presentation formats. */ }
-  const canonical = toolCallEnvelopes(text);
+  const canonical = toolCallEnvelopes(maskOrdinaryCodeFences(text));
   if (canonical.length) {
     try { canonical.forEach(block => JSON.parse(block.body)); return text; } catch { /* Repair invalid JSON below. */ }
   }
-  let normalized = text.replace(/```(?:tool[_-]?call|function[_-]?call)\s*/gi, '```json\n');
+
+  let normalized = text.replace(
+    /```(?:tool[_-]?call|function[_-]?call)\s*\r?\n?([\s\S]*?)```/gi,
+    (_whole, rawBody: string) => `<tool_call>${normalizeToolEnvelopeBody(rawBody)}</tool_call>`
+  );
 
   normalized = normalized.replace(
     /<tool_call\s+name=["']([A-Za-z0-9_.:-]{1,64})["']\s*>([\s\S]*?)<\/tool_call>/gi,
@@ -272,7 +282,7 @@ function normalizeProviderPatterns(text: string): string {
     (_whole, payload: string) => `<tool_call>${payload}</tool_call>`
   );
 
-  for (const block of toolCallEnvelopes(normalized)) {
+  for (const block of toolCallEnvelopes(maskOrdinaryCodeFences(normalized))) {
     normalized = normalized.replace(block.whole, () => `<tool_call>${normalizeToolEnvelopeBody(block.body)}</tool_call>`);
   }
 
@@ -287,19 +297,17 @@ export function parseUiToolResponse(
 ): ParsedModelOutput {
   if (!plan.tools.length || plan.choice.mode === 'none') return { content: text };
   const normalized = normalizeProviderPatterns(text);
-  let parsed: ParsedModelOutput;
+  const protocolVisibleText = maskOrdinaryCodeFences(normalized);
+  const explicitEnvelopes = toolCallEnvelopes(protocolVisibleText);
+  let parsed: ParsedModelOutput = { content: text };
 
-  const trimmed = normalized.trim();
-  try {
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+  if (explicitEnvelopes.length) {
+    try {
       parsed = extractToolCalls(normalized, plan);
-      if (!parsed.tool_calls?.length && toolish(normalized)) telemetry.recordParseFailure('json');
-    } else {
-      parsed = extractToolCalls(normalized, plan);
+    } catch (error) {
+      telemetry.recordParseFailure(/<tool_call\b/iu.test(normalized) ? 'regex' : 'json');
+      throw error;
     }
-  } catch (error) {
-    telemetry.recordParseFailure(/```/u.test(normalized) ? 'codeblock' : /<tool_call\b/iu.test(normalized) ? 'regex' : 'json');
-    throw error;
   }
 
   if (parsed.tool_calls?.length) {
@@ -310,9 +318,9 @@ export function parseUiToolResponse(
     return parsed;
   }
 
-  if (toolish(normalized)) {
+  if (toolish(protocolVisibleText)) {
     telemetry.recordParseFailure('rejected');
-    throw new ToolParseFailedError('A resposta parece conter uma tool call, mas nenhum formato válido pôde ser extraído.');
+    throw new ToolParseFailedError('A resposta parece conter uma tool call explícita, mas nenhum formato válido pôde ser extraído.');
   }
 
   assertToolChoiceSatisfied(plan, parsed.tool_calls);
@@ -334,6 +342,7 @@ export function buildToolRetryPrompt(plan: ToolProtocolPlan, reason: string): st
     'Replace ALLOWED_TOOL_NAME with an allowed name and populate arguments to match that tool schema.',
     'For file contents, emit valid JSON escaping for quotes, backslashes and newlines; prefer one small mutation per call rather than several large writes in one response.',
     'If the UI already emitted the complete file as a code artifact, a write call may contain only its path; KITT will attach the single matching artifact before schema validation.',
+    'Ordinary JSON/code blocks are treated as data, never as tool calls. Do not place a requested tool call inside a markdown code block.',
     'Do not use markdown or explanatory text. Hidden website tool calls are not forwarded.',
     'Stop after the tool-call block(s) and wait for the external agent to return the result.'
   ].join('\n');
