@@ -27,6 +27,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function normalizeArtifactPath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function selectArtifact(path: string, artifacts: readonly UiArtifactLike[]): UiArtifactLike | undefined {
+  const usable = artifacts.filter((artifact) => typeof artifact.code === 'string' && artifact.code.length > 0);
+  if (!usable.length) return undefined;
+  const target = normalizeArtifactPath(path);
+  const targetBase = target.split('/').at(-1) ?? target;
+  const matches = usable.filter((artifact) => {
+    if (!artifact.filename) return false;
+    const candidate = normalizeArtifactPath(artifact.filename);
+    const candidateBase = candidate.split('/').at(-1) ?? candidate;
+    return candidate === target || candidate.endsWith(`/${target}`) || candidateBase === targetBase;
+  });
+  if (matches.length === 1) return matches[0];
+  return usable.length === 1 ? usable[0] : undefined;
+}
+
+function hydrateArtifactBackedWrites(calls: readonly OpenAiToolCall[], artifacts: readonly UiArtifactLike[]): void {
+  if (!artifacts.length) return;
+  for (const call of calls) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(call.function.arguments);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed)) continue;
+
+    let writeArgs: Record<string, unknown> | undefined;
+    if (['write_file', 'repo.write_file'].includes(call.function.name)) {
+      writeArgs = parsed;
+    } else if (call.function.name === 'kitt_runtime' && parsed.operation === 'repo.write_file' && isRecord(parsed.arguments)) {
+      writeArgs = parsed.arguments;
+    }
+    if (!writeArgs || typeof writeArgs.path !== 'string') continue;
+    if (typeof writeArgs.content === 'string' && writeArgs.content.length > 0) continue;
+
+    const artifact = selectArtifact(writeArgs.path, artifacts);
+    if (!artifact) continue;
+    writeArgs.content = artifact.code;
+    call.function.arguments = JSON.stringify(parsed);
+  }
+}
+
 function validateArguments(calls: readonly OpenAiToolCall[], plan: ToolProtocolPlan): void {
   for (const call of calls) {
     const tool = plan.tools.find((candidate) => candidate.name === call.function.name);
@@ -56,11 +102,6 @@ function isEscapedQuote(input: string, index: number): boolean {
 }
 
 function escapeRawContentQuotes(input: string): string | undefined {
-  // UI models often serialize source code directly inside JSON's content string,
-  // leaving Java/TS/HTML quotes unescaped.  Generic quote guessing becomes
-  // combinatorial on real files, so repair only the well-known `content` field:
-  // choose a candidate closing quote from the end, escape every raw quote inside
-  // the source payload, and accept only a candidate that JSON.parse validates.
   const match = /"content"\s*:\s*"/g.exec(input);
   if (!match) return undefined;
   const contentStart = match.index + match[0].length;
@@ -69,8 +110,6 @@ function escapeRawContentQuotes(input: string): string | undefined {
     if (input[index] === '"' && !isEscapedQuote(input, index)) candidates.push(index);
   }
 
-  // The true closing quote is normally one of the last delimiters in the tool
-  // envelope.  Bound work to keep parser repair deterministic under hostile text.
   for (const closing of candidates.slice(-128).reverse()) {
     let body = '';
     for (let index = contentStart; index < closing; index += 1) {
@@ -178,9 +217,6 @@ function normalizeToolEnvelopeBody(input: string): string {
     }
   }
 
-  // Final bounded breadth-first repair remains useful for small malformed
-  // presentation payloads, but large source files are handled above in O(n*k)
-  // rather than exploding across quote combinations.
   const queue = [trimmed];
   const seen = new Set(queue);
   for (let attempts = 0; queue.length && attempts < 128; attempts += 1) {
@@ -246,7 +282,7 @@ function normalizeProviderPatterns(text: string): string {
 export function parseUiToolResponse(
   text: string,
   plan: ToolProtocolPlan,
-  _artifacts: readonly UiArtifactLike[] = [],
+  artifacts: readonly UiArtifactLike[] = [],
   provider = 'unknown'
 ): ParsedModelOutput {
   if (!plan.tools.length || plan.choice.mode === 'none') return { content: text };
@@ -267,6 +303,7 @@ export function parseUiToolResponse(
   }
 
   if (parsed.tool_calls?.length) {
+    hydrateArtifactBackedWrites(parsed.tool_calls, artifacts);
     validateArguments(parsed.tool_calls, plan);
     assertToolChoiceSatisfied(plan, parsed.tool_calls);
     for (const call of parsed.tool_calls) telemetry.recordToolCall(provider, call.function.name, 'success');
@@ -296,6 +333,7 @@ export function buildToolRetryPrompt(plan: ToolProtocolPlan, reason: string): st
     `Respond ONLY with one or more canonical blocks shaped exactly like: ${example}`,
     'Replace ALLOWED_TOOL_NAME with an allowed name and populate arguments to match that tool schema.',
     'For file contents, emit valid JSON escaping for quotes, backslashes and newlines; prefer one small mutation per call rather than several large writes in one response.',
+    'If the UI already emitted the complete file as a code artifact, a write call may contain only its path; KITT will attach the single matching artifact before schema validation.',
     'Do not use markdown or explanatory text. Hidden website tool calls are not forwarded.',
     'Stop after the tool-call block(s) and wait for the external agent to return the result.'
   ].join('\n');
