@@ -6,6 +6,7 @@ import { createRuntime } from './runtime/runtime-factory.js';
 import { createIsolatedUiSession } from './runtime/isolated-ui-session.js';
 import { SessionManager } from './runtime/session-manager.js';
 import { notifyIfUpdateAvailable } from './update-check.js';
+import { SERVICE_VERSION } from './version.js';
 
 async function main(): Promise<void> {
   await notifyIfUpdateAvailable(import.meta.url);
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
   try {
     logger.step(3, 3, 'Iniciando API OpenAI-compatible...');
     const server = await startProxyServer({ manager, config });
-    logger.success(`Proxy iniciado em http://${config.host}:${config.port}`);
+    logger.success(`KITT Reverse Proxy v${SERVICE_VERSION} iniciado em http://${config.host}:${config.port}`);
     logger.info('Endpoints: POST /v1/chat/completions, POST /v1/responses, GET /v1/models, GET /healthz');
     logger.info('Extensões: GET /v1/kitt/status, POST /v1/kitt/reset, GET /v1/kitt/sessions, GET /v1/kitt/metrics');
     logger.info(
