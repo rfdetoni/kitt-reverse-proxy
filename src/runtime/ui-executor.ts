@@ -127,6 +127,7 @@ export class UiChatExecutor implements ChatExecutor {
   private lastRequestFingerprint = '';
   private lastResult: ChatExecutionResult | undefined;
   private enforcementTaskKey = '';
+  private activeTaskUserText = '';
   private explorationEvidence = false;
   private mutationEvidence = false;
   private toolEvidence = false;
@@ -172,6 +173,7 @@ export class UiChatExecutor implements ChatExecutor {
     this.systemContextWasEnabled = false;
     this.toolNamesByCallId.clear();
     this.enforcementTaskKey = '';
+    this.activeTaskUserText = '';
     this.explorationEvidence = false;
     this.mutationEvidence = false;
     this.toolEvidence = false;
@@ -209,13 +211,31 @@ export class UiChatExecutor implements ChatExecutor {
     if (mutation) this.mutationCallIds.add(call.id);
   }
 
+  private markToolResultEvidence(callId: string): void {
+    if (!this.toolNamesByCallId.has(callId)) return;
+    this.toolEvidence = true;
+    if (this.explorationCallIds.has(callId)) this.explorationEvidence = true;
+    if (this.mutationCallIds.has(callId)) this.mutationEvidence = true;
+  }
+
+  private consumeToolCall(callId: string): void {
+    this.toolNamesByCallId.delete(callId);
+    this.explorationCallIds.delete(callId);
+    this.mutationCallIds.delete(callId);
+  }
+
+  private solePendingToolCall(): { callId: string; toolName: string } | undefined {
+    if (this.toolNamesByCallId.size !== 1) return undefined;
+    const entry = this.toolNamesByCallId.entries().next().value as [string, string] | undefined;
+    return entry ? { callId: entry[0], toolName: entry[1] } : undefined;
+  }
+
   private storeHistory(incoming: CanonicalMessage[], assistantText: string): void {
     let next: CanonicalMessage[];
     if (historyIsPrefix(this.history, incoming)) next = [...incoming, { role: 'assistant', text: assistantText }];
     else if (incoming.length === 1 && this.history.length) next = [...this.history, ...incoming, { role: 'assistant', text: assistantText }];
     else next = [...incoming, { role: 'assistant', text: assistantText }];
 
-    // Keep the client-provided prefix if caching the assistant answer would cross the memory budget.
     this.history = historyChars(next) <= RESOURCE_LIMITS.uiHistoryChars ? next : [...incoming];
   }
 
@@ -231,13 +251,20 @@ export class UiChatExecutor implements ChatExecutor {
     const fingerprint = requestFingerprint(body, options?.reasoningEffort);
     if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) return this.lastResult;
 
-    const previousUserTurns = this.history.filter((message) => message.role === 'user').length;
-    const incomingUserTurns = incoming.filter((message) => message.role === 'user').length;
-    // Compaction can change the user prefix during a tool round trip. An issued
-    // pending call identifies the continuation without trusting client history.
-    const continuingTool = incoming.at(-1)?.role === 'tool'
+    const previousUserTurns = this.history.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
+    const incomingUserTurns = incoming.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
+    const tail = incoming.at(-1);
+    const continuingSyntheticTool = Boolean(
+      tail
+      && tail.role === 'user'
+      && isSyntheticToolResult(tail)
+      && this.toolNamesByCallId.size > 0
+    );
+    const continuingTool = continuingSyntheticTool || (
+      incoming.at(-1)?.role === 'tool'
       && selectMinimalUiPrompts(incoming).every((message) =>
-        Boolean(message.toolCallId && this.toolNamesByCallId.has(message.toolCallId)));
+        Boolean(message.toolCallId && this.toolNamesByCallId.has(message.toolCallId)))
+    );
     if (
       incoming.length > 1
       && !continuingTool
@@ -280,10 +307,6 @@ export class UiChatExecutor implements ChatExecutor {
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
     const protocolFingerprint = toolProtocolFingerprint(plan);
     const protocolEnabled = plan.tools.length > 0 && plan.choice.mode !== 'none';
-    // Agent hosts may encode tool results as user messages. Keep the original
-    // enforcement task across those synthetic continuations, just like native
-    // tool-role messages; otherwise the proxy resets its mutation evidence and
-    // lets the model stop after the first workspace operation.
     const syntheticHostResult = selectedPrompt.role === 'user' && isSyntheticToolResult(selectedPrompt);
     const currentTaskKey = selectedPrompt.role === 'tool' || syntheticHostResult
       ? this.enforcementTaskKey
@@ -297,9 +320,16 @@ export class UiChatExecutor implements ChatExecutor {
       this.mutationCallIds.clear();
     }
 
-    const latestUserText = [...incoming].reverse().find((message) => message.role === 'user' && !isSyntheticToolResult(message))?.text
-      ?? [...this.history].reverse().find((message) => message.role === 'user')?.text
-      ?? '';
+    const explicitUserText = [...incoming].reverse().find(
+      (message) => message.role === 'user' && !isSyntheticToolResult(message)
+    )?.text;
+    if (!syntheticHostResult && explicitUserText) this.activeTaskUserText = explicitUserText;
+    const latestUserText = this.activeTaskUserText
+      || explicitUserText
+      || [...this.history].reverse().find(
+        (message) => message.role === 'user' && !isSyntheticToolResult(message)
+      )?.text
+      || '';
     const enforcement: ToolEnforcementPlan = buildToolEnforcementPlan(
       plan,
       latestUserText,
@@ -307,6 +337,7 @@ export class UiChatExecutor implements ChatExecutor {
     );
 
     let actionablePrompt = selectedPrompt.text;
+    let syntheticCallId: string | undefined;
     if (selectedPrompt.role === 'tool') {
       const toolResults = selectedPrompts.map((toolPrompt) => {
         const callId = toolPrompt.toolCallId;
@@ -319,13 +350,21 @@ export class UiChatExecutor implements ChatExecutor {
         if (toolName && plan.tools.length && !plan.tools.some((tool) => tool.name === toolName)) {
           throw new ToolProtocolError(`Resultado recebido para function não disponível: ${toolName}`);
         }
-        if (rememberedName) this.toolEvidence = true;
-        if (callId && this.explorationCallIds.has(callId)) this.explorationEvidence = true;
-        if (callId && this.mutationCallIds.has(callId)) this.mutationEvidence = true;
-        const result = formatToolResultPrompt(toolPrompt.text, callId, toolName);
-        return result;
+        if (callId) this.markToolResultEvidence(callId);
+        return formatToolResultPrompt(toolPrompt.text, callId, toolName);
       });
       actionablePrompt = toolResults.join('\n');
+    } else if (syntheticHostResult) {
+      const pendingCall = this.solePendingToolCall();
+      if (pendingCall) {
+        syntheticCallId = pendingCall.callId;
+        this.markToolResultEvidence(pendingCall.callId);
+        actionablePrompt = formatToolResultPrompt(
+          selectedPrompt.text,
+          pendingCall.callId,
+          pendingCall.toolName
+        );
+      }
     }
 
     const structured = structuredOutputPlan(body);
@@ -372,7 +411,7 @@ export class UiChatExecutor implements ChatExecutor {
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     let textToParse = result.text;
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
-    const artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
+    let artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
     if (!protocolEnabled && artifacts.length > 0) {
       const artifactBlocks = artifacts
         .filter((artifact) => !textToParse.includes(artifact.code))
@@ -413,9 +452,13 @@ export class UiChatExecutor implements ChatExecutor {
         const retryPrompt = error instanceof ToolEnforcementError
           ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
+        const retryArtifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         await this.sendPrompt(retryPrompt, options?.signal);
         textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
+        const retryArtifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
+        const freshArtifacts = filterNewArtifacts(retryArtifactBaseline, retryArtifactsAfter);
+        if (freshArtifacts.length) artifacts = [...artifacts, ...freshArtifacts];
       }
     }
 
@@ -433,14 +476,10 @@ export class UiChatExecutor implements ChatExecutor {
       else structuredOutputFailed = true;
     }
 
-    // Consume only after a successful response; failed sends may be retried.
     for (const prompt of selectedPrompts) {
-      if (prompt.role === 'tool' && prompt.toolCallId) {
-        this.toolNamesByCallId.delete(prompt.toolCallId);
-        this.explorationCallIds.delete(prompt.toolCallId);
-        this.mutationCallIds.delete(prompt.toolCallId);
-      }
+      if (prompt.role === 'tool' && prompt.toolCallId) this.consumeToolCall(prompt.toolCallId);
     }
+    if (syntheticCallId) this.consumeToolCall(syntheticCallId);
     for (const call of parsed.tool_calls || []) {
       this.rememberToolCall(
         call,
