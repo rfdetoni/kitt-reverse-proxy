@@ -16,6 +16,15 @@ function Invoke-Native([string]$Command, [string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE" }
 }
 
+function Get-PackageVersion([string]$PackageJsonPath) {
+  if (-not (Test-Path $PackageJsonPath)) { return $null }
+  $Value = & node -e "try { const p=require(process.argv[1]); if(typeof p.version==='string' && p.version.trim()) process.stdout.write(p.version.trim()); } catch {}" $PackageJsonPath
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $Text = ($Value | Out-String).Trim()
+  if ($Text) { return $Text }
+  return $null
+}
+
 if ($Uninstall) {
   Remove-Item $Root -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item $ProxyCmd,$GatewayCmd -Force -ErrorAction SilentlyContinue
@@ -27,6 +36,13 @@ foreach ($Tool in @('git','node','npm')) {
 }
 & node -e "if(Number(process.versions.node.split('.')[0])<24)process.exit(1)"
 if ($LASTEXITCODE -ne 0) { throw 'Node.js 24+ is required' }
+
+$PreviousVersion = 'not installed'
+$ExistingPackage = Join-Path $Src 'package.json'
+if (Test-Path $ExistingPackage) {
+  $ExistingVersion = Get-PackageVersion $ExistingPackage
+  $PreviousVersion = if ($ExistingVersion) { "v$ExistingVersion" } else { 'unknown' }
+}
 
 if ($Ref -eq 'stable') {
   $TagLines = & git ls-remote --refs --tags $Repo 'refs/tags/v*'
@@ -52,6 +68,11 @@ Invoke-Native 'git' @('-C',$Src,'remote','set-url','origin',$Repo)
 Invoke-Native 'git' @('-C',$Src,'fetch','--force','--depth','1','origin',$Ref)
 Invoke-Native 'git' @('-C',$Src,'checkout','--detach','--force','FETCH_HEAD')
 Invoke-Native 'git' @('-C',$Src,'clean','-ffd')
+
+$TargetVersion = Get-PackageVersion (Join-Path $Src 'package.json')
+if (-not $TargetVersion) { throw 'Could not determine installed package version' }
+Write-Host "Version: $PreviousVersion -> v$TargetVersion"
+
 Push-Location $Src
 try {
   Invoke-Native 'npm' @('ci','--no-audit','--no-fund','--strict-allow-scripts')
@@ -77,5 +98,5 @@ if ($Parts -notcontains $Bin) {
   $env:Path = "$Bin;$env:Path"
 }
 Invoke-Native $ProxyCmd @('--help')
-Write-Host "K.I.T.T. Reverse Proxy $Ref installed/updated at $Root."
+Write-Host "K.I.T.T. Reverse Proxy v$TargetVersion installed/updated at $Root."
 Write-Host 'Open a new terminal and run: kitt-reverse-proxy start chatgpt'
