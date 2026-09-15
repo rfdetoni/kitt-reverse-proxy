@@ -16,6 +16,7 @@ function sessionManagementContract(manager: SessionManager): JsonObject {
     version: 1,
     header: 'X-Kitt-Session-Id',
     list_endpoint: '/v1/kitt/sessions',
+    introspection_endpoint: '/v1/kitt/session',
     reset_endpoint: '/v1/kitt/reset',
     delete_endpoint_template: '/v1/kitt/sessions/:id',
     ...manager.capacity()
@@ -94,6 +95,11 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
     provider: manager.providerId,
     transport: manager.transport,
     model: manager.modelId,
+    usage: {
+      supported: true,
+      mode: 'estimated_when_unavailable',
+      usage_is_estimated: true
+    },
     structured_output: 'best_effort',
     structured_output_retry: true,
     tool_enforcement: config.toolEnforcement ?? 'explore-first',
@@ -113,14 +119,17 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       openai: {
         chat_completions: true,
         responses: true,
+        embeddings: false,
         streaming: true,
+        stream_keepalive: true,
         tools: true,
         legacy_functions: true,
         parallel_tool_calls: true,
         function_call_output: true,
         function_tools_only: true,
         previous_response_id: false,
-        structured_outputs: true
+        structured_outputs: true,
+        json_mode: true
       },
       anthropic: {
         messages: true,
@@ -139,27 +148,38 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       tool_calling: toolCalling,
       strict_json_schema_enforcement: false,
       conversation_scope: manager.capacity().accepts_named_sessions ? 'multi_session' : 'single_session',
-      cancellation: 'cooperative'
+      cancellation: 'cooperative',
+      token_usage: 'estimated_when_upstream_unavailable'
     }
   };
 }
 
 export function modelRecord(manager: SessionManager): JsonObject {
   const description = manager.describe();
+  const provider = PROVIDERS.find((item) => item.id === manager.providerId);
   const capabilities = runtimeCapabilities(manager, { toolEnforcement: 'auto' } as AppConfig);
   const openai = asObject(asObject(capabilities.protocols)?.openai);
+  const reasoning = reasoningContract(manager);
+  const imageInput = manager.transport === 'ui' && Boolean(provider?.ui.supportsImageUpload);
   const model: JsonObject = {
     id: manager.modelId,
     object: 'model',
     owned_by: SERVICE_NAME,
     root: manager.modelId,
     parent: null,
+    provider: manager.providerId,
+    transport: manager.transport,
     capabilities: {
       completion: true,
       chat_completion: true,
       tools: boolean(openai?.tools, true),
       tool_calls: boolean(openai?.tools, true),
-      streaming: boolean(openai?.streaming, true)
+      streaming: boolean(openai?.streaming, true),
+      structured_output: boolean(openai?.structured_outputs, true),
+      json_mode: boolean(openai?.json_mode, true),
+      image_input: imageInput,
+      reasoning: reasoning.supported === true,
+      embeddings: false
     }
   };
   if (typeof description.contextWindow === 'number') model.context_window = description.contextWindow;

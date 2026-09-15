@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   actions: write
+  pull-requests: write
 
 concurrency:
   group: automatic-release-main
@@ -15,7 +16,7 @@ concurrency:
 jobs:
   version:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,66 +27,175 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Synchronize package metadata
-        id: metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          current="$(node -p "require('./package.json').version")"
-          npm version "$current" --no-git-tag-version --allow-same-version >/dev/null
-          if git diff --quiet -- package.json package-lock.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "chore(version): synchronize package metadata"
-          git push --force origin HEAD:refs/heads/automation/package-metadata-sync
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-      - name: Calculate next semantic version
-        if: steps.metadata.outputs.changed != 'true'
-        id: version
+      - name: Resolve published release baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           current="$(node -p "require('./package.json').version")"
-          next="$(python .github/scripts/next_semver.py "$current")"
-          if [[ -z "$next" ]]; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "No releasable commits since the latest semantic tag."
-            exit 0
-          fi
-          echo "release=true" >> "$GITHUB_OUTPUT"
-          echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "next=$next" >> "$GITHUB_OUTPUT"
-          echo "tag=v$next" >> "$GITHUB_OUTPUT"
-      - name: Update package version in release commit
-        if: steps.version.outputs.release == 'true' && steps.version.outputs.next != steps.version.outputs.current
-        env:
-          NEXT_VERSION: ${{ steps.version.outputs.next }}
-        run: npm version "$NEXT_VERSION" --no-git-tag-version --allow-same-version
-      - name: Create immutable release tag
-        if: steps.version.outputs.release == 'true'
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            echo "Tag $RELEASE_TAG already exists; refusing to overwrite it." >&2
+          lock_version="$(node -p "require('./package-lock.json').version")"
+          lock_root="$(node -p "require('./package-lock.json').packages[''].version")"
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          if [[ ! "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Latest published release is not strict semver: $latest_tag" >&2
             exit 1
           fi
+          latest="${latest_tag#v}"
+          relation="$(python - "$current" "$latest" <<'PY'
+          import re, sys
+          pattern = re.compile(r'^(\d+)\.(\d+)\.(\d+)$')
+          def parse(raw):
+              match = pattern.fullmatch(raw)
+              if not match:
+                  raise SystemExit(f'invalid semantic version: {raw}')
+              return tuple(map(int, match.groups()))
+          current, latest = parse(sys.argv[1]), parse(sys.argv[2])
+          print('behind' if current < latest else 'ahead' if current > latest else 'equal')
+          PY
+          )"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "lock_version=$lock_version" >> "$GITHUB_OUTPUT"
+          echo "lock_root=$lock_root" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "relation=$relation" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile main with latest published release
+        if: steps.baseline.outputs.relation == 'behind'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.baseline.outputs.latest }}
+          RELEASE_TAG: ${{ steps.baseline.outputs.latest_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm version "$RELEASE_VERSION" --no-git-tag-version --allow-same-version >/dev/null
+          branch="automation/reconcile-${RELEASE_TAG}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
           git add package.json package-lock.json
-          git commit --allow-empty -m "chore(release): ${RELEASE_TAG}"
-          git tag -a "$RELEASE_TAG" -m "Release ${RELEASE_TAG}"
-          git push origin "refs/tags/$RELEASE_TAG"
-      - name: Dispatch validated release pipeline
+          git commit -m "chore(version): align main with ${RELEASE_TAG}"
+          git push --force origin "HEAD:refs/heads/$branch"
+          pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            gh pr create --base main --head "$branch" --title "chore(version): align main with ${RELEASE_TAG}" --body "Reconciles package.json and package-lock.json with the latest published release ${RELEASE_TAG}. Generated by the release-integrity workflow." >/dev/null
+            pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')"
+          fi
+          gh pr merge "$pr" --squash --delete-branch
+
+      - name: Stop after release reconciliation
+        if: steps.baseline.outputs.relation == 'behind'
+        run: echo "Main reconciliation PR merged; the resulting main push will continue the release state machine."
+
+      - name: Synchronize package lock metadata
+        if: >-
+          steps.baseline.outputs.relation != 'behind' &&
+          (steps.baseline.outputs.current != steps.baseline.outputs.lock_version ||
+           steps.baseline.outputs.current != steps.baseline.outputs.lock_root)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_VERSION: ${{ steps.baseline.outputs.current }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm version "$CURRENT_VERSION" --no-git-tag-version --allow-same-version >/dev/null
+          branch="automation/package-metadata-sync"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add package.json package-lock.json
+          git commit -m "chore(version): synchronize package metadata"
+          git push --force origin "HEAD:refs/heads/$branch"
+          pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            gh pr create --base main --head "$branch" --title "chore(version): synchronize package metadata" --body "Keeps package.json and package-lock.json at the exact same KITT version." >/dev/null
+            pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')"
+          fi
+          gh pr merge "$pr" --squash --delete-branch
+
+      - name: Publish version already committed to main
+        if: >-
+          steps.baseline.outputs.relation == 'ahead' &&
+          steps.baseline.outputs.current == steps.baseline.outputs.lock_version &&
+          steps.baseline.outputs.current == steps.baseline.outputs.lock_root
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_VERSION: ${{ steps.baseline.outputs.current }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${CURRENT_VERSION}"
+          head="$(git rev-parse HEAD)"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged="$(git rev-list -n1 "$tag")"
+            if [[ "$tagged" != "$head" ]]; then
+              echo "Tag $tag already exists at $tagged instead of current main $head; refusing to publish an ambiguous release." >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release $tag" "$head"
+            git push origin "refs/tags/$tag"
+          fi
+          gh workflow run release.yml --ref "$tag" -f tag="$tag"
+
+      - name: Calculate next semantic version
+        id: version
+        if: >-
+          steps.baseline.outputs.relation == 'equal' &&
+          steps.baseline.outputs.current == steps.baseline.outputs.lock_version &&
+          steps.baseline.outputs.current == steps.baseline.outputs.lock_root
+        env:
+          CURRENT_VERSION: ${{ steps.baseline.outputs.current }}
+          PUBLISHED_TAG: ${{ steps.baseline.outputs.latest_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          next="$(python .github/scripts/next_semver.py "$CURRENT_VERSION" "$PUBLISHED_TAG")"
+          if [[ -z "$next" ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "No releasable commits since $PUBLISHED_TAG."
+            exit 0
+          fi
+          candidate="$next"
+          while git rev-parse -q --verify "refs/tags/v${candidate}" >/dev/null; do
+            candidate="$(python - "$candidate" <<'PY'
+          import sys
+          major, minor, patch = map(int, sys.argv[1].split('.'))
+          print(f'{major}.{minor}.{patch + 1}')
+          PY
+            )"
+          done
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "next=$candidate" >> "$GITHUB_OUTPUT"
+          echo "tag=v$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Create and merge release version PR
         if: steps.version.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          NEXT_VERSION: ${{ steps.version.outputs.next }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: gh workflow run release.yml --ref "$RELEASE_TAG" -f tag="$RELEASE_TAG"
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm version "$NEXT_VERSION" --no-git-tag-version --allow-same-version >/dev/null
+          branch="automation/release-${RELEASE_TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add package.json package-lock.json
+          git commit -m "chore(release): ${RELEASE_TAG}"
+          git push --force origin "HEAD:refs/heads/$branch"
+          pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            gh pr create --base main --head "$branch" --title "chore(release): ${RELEASE_TAG}" --body "Commits the exact version metadata for ${RELEASE_TAG} to main before the tag/release can be published." >/dev/null
+            pr="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')"
+          fi
+          gh pr merge "$pr" --squash --delete-branch

@@ -8,11 +8,13 @@ import {
   ChatStreamWriter,
   completionToResponses,
   ResponsesStreamWriter,
-  responsesBodyToChat
+  responsesBodyToChat,
+  sendOpenAiError
 } from './openai.js';
 import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
+import { withEstimatedUsage } from './token-usage.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
 You are operating through an external agent environment. When functions are supplied, act as an execution agent rather than a conversational advisor.
@@ -71,6 +73,15 @@ function markStructuredOutput(res: Response, failed: boolean): void {
 export function createOpenAiRouter(manager: SessionManager): Router {
   const router = Router();
 
+  router.post('/v1/embeddings', (_req: Request, res: Response) => {
+    sendOpenAiError(
+      res,
+      501,
+      'Embeddings não são suportados por transports baseados em chats web.',
+      'embeddings_not_supported'
+    );
+  });
+
   router.post('/v1/chat/completions', async (req: Request, res: Response) => {
     try {
       await withRequestLifecycle(req, res, async (signal) => {
@@ -91,13 +102,15 @@ export function createOpenAiRouter(manager: SessionManager): Router {
             ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
           });
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-          writer.finish(adaptCompletionForLegacyFunctions(result.completion, body), bufferTools ? [] : result.deltas);
+          const completion = withEstimatedUsage(result.completion, body);
+          writer.finish(adaptCompletionForLegacyFunctions(completion, body), bufferTools ? [] : result.deltas);
           return;
         }
 
         const result = await manager.execute(sessionId, body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-        res.json(adaptCompletionForLegacyFunctions(result.completion, body));
+        const completion = withEstimatedUsage(result.completion, body);
+        res.json(adaptCompletionForLegacyFunctions(completion, body));
       });
     } catch (error) {
       logger.event('warn', 'openai.chat.error', { error });
@@ -121,13 +134,15 @@ export function createOpenAiRouter(manager: SessionManager): Router {
             ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
           });
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-          writer.finish(result.completion, bufferTools ? [] : result.deltas);
+          const completion = withEstimatedUsage(result.completion, body);
+          writer.finish(completion, bufferTools ? [] : result.deltas);
           return;
         }
 
         const result = await manager.execute(sessionId, body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-        res.json(completionToResponses(result.completion));
+        const completion = withEstimatedUsage(result.completion, body);
+        res.json(completionToResponses(completion));
       });
     } catch (error) {
       logger.event('warn', 'openai.responses.error', { error });

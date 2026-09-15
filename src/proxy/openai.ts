@@ -2,6 +2,9 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 import { isJsonObject, toJsonValue } from '../util/json.js';
+import { responsesUsage } from './token-usage.js';
+
+const SSE_HEARTBEAT_MS = 15_000;
 
 export function validateChatBody(value: unknown): JsonObject {
   if (!isJsonObject(value)) throw new Error('Body deve ser objeto JSON.');
@@ -104,6 +107,7 @@ export function completionToResponses(
     });
   }
 
+  const usage = responsesUsage(completion);
   return toJsonValue({
     id: responseId,
     object: 'response',
@@ -113,16 +117,28 @@ export function completionToResponses(
     incomplete_details: null,
     model: completion.model,
     output,
-    output_text: text
+    output_text: text,
+    ...(usage ? { usage } : {})
   }) as JsonObject;
 }
 
+export function openAiErrorType(status: number): string {
+  if (status === 401) return 'authentication_error';
+  if (status === 403) return 'permission_error';
+  if (status === 429) return 'rate_limit_error';
+  if (status >= 500) return 'api_error';
+  return 'invalid_request_error';
+}
+
 export function sendOpenAiError(res: Response, status: number, message: string, code = 'proxy_error'): void {
-  if (code === 'session_limit_exceeded') {
-    res.status(status).json({ error: 'session_limit_exceeded' });
-    return;
-  }
-  res.status(status).json({ error: { message, type: 'proxy_error', param: null, code } });
+  res.status(status).json({
+    error: {
+      message,
+      type: openAiErrorType(status),
+      param: null,
+      code
+    }
+  });
 }
 
 function prepareSse(res: Response): void {
@@ -134,18 +150,44 @@ function prepareSse(res: Response): void {
   res.flushHeaders?.();
 }
 
+function startSseHeartbeat(res: Response, intervalMs = SSE_HEARTBEAT_MS): () => void {
+  let stopped = false;
+  const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    res.removeListener?.('close', stop);
+  };
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      stop();
+      return;
+    }
+    res.write(': ping\n\n');
+  }, intervalMs);
+  timer.unref();
+  res.once?.('close', stop);
+  return stop;
+}
+
 export class ChatStreamWriter {
   private readonly id = `chatcmpl-web-${randomUUID()}`;
   private readonly created = Math.floor(Date.now() / 1000);
   private started = false;
   private accumulated = '';
+  private stopHeartbeat?: () => void;
 
-  constructor(private readonly res: Response, private readonly model: string) {}
+  constructor(
+    private readonly res: Response,
+    private readonly model: string,
+    private readonly heartbeatMs = SSE_HEARTBEAT_MS
+  ) {}
 
   begin(): void {
     if (this.started) return;
     this.started = true;
     prepareSse(this.res);
+    this.stopHeartbeat = startSseHeartbeat(this.res, this.heartbeatMs);
     this.res.write(`data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
@@ -238,8 +280,10 @@ export class ChatStreamWriter {
         delta: {},
         finish_reason: completion.choices[0]?.finish_reason
           || (legacyFunctionCall ? 'function_call' : toolCalls?.length ? 'tool_calls' : 'stop')
-      }]
+      }],
+      ...(completion.usage ? { usage: completion.usage } : {})
     })}\n\n`);
+    this.stopHeartbeat?.();
     this.res.end('data: [DONE]\n\n');
   }
 }
@@ -251,8 +295,13 @@ export class ResponsesStreamWriter {
   private started = false;
   private messageStarted = false;
   private accumulated = '';
+  private stopHeartbeat?: () => void;
 
-  constructor(private readonly res: Response, private readonly model: string) {}
+  constructor(
+    private readonly res: Response,
+    private readonly model: string,
+    private readonly heartbeatMs = SSE_HEARTBEAT_MS
+  ) {}
 
   private event(type: string, payload: Record<string, unknown>): void {
     this.sequence += 1;
@@ -263,6 +312,7 @@ export class ResponsesStreamWriter {
     if (this.started) return;
     this.started = true;
     prepareSse(this.res);
+    this.stopHeartbeat = startSseHeartbeat(this.res, this.heartbeatMs);
     this.event('response.created', {
       response: { id: this.responseId, object: 'response', status: 'in_progress', model: this.model }
     });
@@ -375,9 +425,11 @@ export class ResponsesStreamWriter {
         incomplete_details: null,
         model: completion.model || this.model,
         output,
-        output_text: fullText
+        output_text: fullText,
+        ...(responsesUsage(completion) ? { usage: responsesUsage(completion) } : {})
       }
     });
+    this.stopHeartbeat?.();
     this.res.end();
   }
 }
