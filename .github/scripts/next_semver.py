@@ -115,12 +115,10 @@ def main() -> int:
     if current < released:
         print(
             f"warning: declared version {current} trails latest tag {tag}; "
-            f"using {released} as the release baseline",
+            "automatic release is blocked until version history is reconciled",
             file=sys.stderr,
         )
-        baseline = released
-    else:
-        baseline = current
+        return 0
 
     if current > released:
         print(current)
@@ -130,7 +128,7 @@ def main() -> int:
     if level == 0:
         return 0
 
-    print(baseline.bump(level))
+    print(current.bump(level))
     return 0
 
 
