@@ -478,6 +478,30 @@ export function assertToolChoiceSatisfied(
   }
 }
 
+/** Delimit browser envelopes; malformed outer wrappers use latest complete inner wrapper. */
+export function toolCallEnvelopes(text: string): { whole: string; body: string }[] {
+  const blocks: { whole: string; body: string }[] = [];
+  const opening = /<tool_call>/ig;
+  let cursor = 0;
+  while (true) {
+    opening.lastIndex = cursor;
+    const startMatch = opening.exec(text);
+    if (!startMatch) break;
+    const start = startMatch.index;
+    const end = text.toLowerCase().lastIndexOf('</tool_call>');
+    if (end < start) break;
+    const outer = text.slice(start, end + '</tool_call>'.length);
+    const rawBody = text.slice(start + '<tool_call>'.length, end);
+    let nested = -1;
+    try { JSON.parse(rawBody.trim()); } catch { nested = rawBody.toLowerCase().lastIndexOf('<tool_call>'); }
+    const body = nested >= 0 ? rawBody.slice(nested + '<tool_call>'.length) : rawBody;
+    const whole = nested >= 0 ? outer.slice(outer.toLowerCase().lastIndexOf('<tool_call>')) : outer;
+    blocks.push({ whole, body });
+    cursor = end + '</tool_call>'.length;
+  }
+  return blocks;
+}
+
 export function extractToolCalls(
   text: string,
   plan?: ToolProtocolPlan
@@ -517,8 +541,12 @@ export function extractToolCalls(
     }
   };
 
-  for (const match of text.matchAll(/<tool_call>([\s\S]*?)<\/tool_call>/gi)) {
-    addParsed(match[1]!.trim(), match[0], true);
+  const trimmedInput = text.trim();
+  if (trimmedInput.startsWith('{') || trimmedInput.startsWith('[')) addParsed(trimmedInput, text);
+  if (!calls.length) {
+    for (const block of toolCallEnvelopes(text)) {
+      addParsed(block.body.trim(), block.whole, true);
+    }
   }
   if (!calls.length) {
     for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {

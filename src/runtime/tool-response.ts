@@ -1,6 +1,7 @@
 import {
   assertToolChoiceSatisfied,
   extractToolCalls,
+  toolCallEnvelopes,
   ToolProtocolError,
   type OpenAiToolCall,
   type ParsedModelOutput,
@@ -112,6 +113,7 @@ function repairJsonStringEscapes(input: string): string {
 
 function normalizeToolEnvelopeBody(input: string): string {
   const trimmed = input.trim();
+  try { JSON.parse(trimmed); return trimmed; } catch { /* Repair only invalid transport JSON. */ }
   const candidates = [trimmed];
   const first = trimmed[0];
   const last = trimmed[trimmed.length - 1];
@@ -161,13 +163,12 @@ function normalizeToolEnvelopeBody(input: string): string {
   return repairJsonStringEscapes(trimmed);
 }
 
-function innermostToolEnvelopeBody(body: string): string {
-  const marker = '<tool_call>';
-  const nestedIndex = body.toLowerCase().lastIndexOf(marker);
-  return nestedIndex >= 0 ? body.slice(nestedIndex + marker.length) : body;
-}
-
 function normalizeProviderPatterns(text: string): string {
+  try { JSON.parse(text); return text; } catch { /* Try browser presentation formats. */ }
+  const canonical = toolCallEnvelopes(text);
+  if (canonical.length) {
+    try { canonical.forEach(block => JSON.parse(block.body)); return text; } catch { /* Repair invalid JSON below. */ }
+  }
   let normalized = text.replace(/```(?:tool[_-]?call|function[_-]?call)\s*/gi, '```json\n');
 
   normalized = normalized.replace(
@@ -192,15 +193,9 @@ function normalizeProviderPatterns(text: string): string {
     (_whole, payload: string) => `<tool_call>${payload}</tool_call>`
   );
 
-  // Browser models can duplicate the opening <tool_call> marker while
-  // regenerating a malformed call. Prefer the innermost envelope: it is the
-  // latest complete candidate and still goes through allowlist/schema checks.
-  // This recovers provider presentation corruption without accepting invalid
-  // tool names or arguments.
-  normalized = normalized.replace(
-    /<tool_call>([\s\S]*?)<\/tool_call>/gi,
-    (_whole, body: string) => `<tool_call>${normalizeToolEnvelopeBody(innermostToolEnvelopeBody(body))}</tool_call>`
-  );
+  for (const block of toolCallEnvelopes(normalized)) {
+    normalized = normalized.replace(block.whole, () => `<tool_call>${normalizeToolEnvelopeBody(block.body)}</tool_call>`);
+  }
 
   return normalized;
 }

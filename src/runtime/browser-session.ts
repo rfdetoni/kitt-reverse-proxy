@@ -40,10 +40,9 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     } catch {
       // Config validation rejects malformed targets before runtime creation.
     }
-    const matchingPage = targetHostname
-      ? context.pages().find((page: Page) => !page.isClosed() && page.url().includes(targetHostname))
-      : undefined;
-    const page = matchingPage ?? firstUsablePage(context) ?? await context.newPage();
+    // CDP browser may contain stale/busy chat tabs from prior agent turns.
+    // Always use fresh tab; cookies/auth remain in shared context.
+    const page = await context.newPage();
     return {
       browser,
       context,

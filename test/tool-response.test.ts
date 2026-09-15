@@ -36,12 +36,18 @@ test('tool_call fenced block is normalized and parsed', () => {
 test('duplicated nested tool_call marker recovers innermost valid Gemini call', () => {
   const response = '<tool_call>{"name":"read_file","arguments":{"path":"broken","<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</tool_call>';
   const parsed = parseUiToolResponse(response, readFilePlan(), [], 'gemini');
-
   assert.equal(parsed.tool_calls?.length, 1);
-  assert.equal(parsed.tool_calls?.[0]?.function.name, 'read_file');
-  assert.deepEqual(JSON.parse(parsed.tool_calls?.[0]?.function.arguments ?? '{}'), {
-    path: 'README.md'
-  });
+  assert.deepEqual(JSON.parse(parsed.tool_calls![0]!.function.arguments), { path: 'README.md' });
+});
+
+test('literal tool envelopes inside file content remain data', () => {
+  const plan = buildToolProtocolPlan({ tools: [{ type: 'function', function: { name: 'write_file' } }] });
+  const content = '<tool_call>{"name":"write_file","arguments":{"path":"other.txt"}}</tool_call>';
+  const args = { path: 'example.txt', content };
+  const response = `<tool_call>${JSON.stringify({ name: 'write_file', arguments: args })}</tool_call>`;
+  const parsed = parseUiToolResponse(response, plan);
+  assert.equal(parsed.tool_calls?.length, 1);
+  assert.deepEqual(JSON.parse(parsed.tool_calls![0]!.function.arguments), args);
 });
 
 test('schema-invalid tool arguments fail closed', () => {
