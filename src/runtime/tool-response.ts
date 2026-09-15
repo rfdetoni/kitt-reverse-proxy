@@ -49,6 +49,49 @@ function toolish(text: string): boolean {
   return /<tool_call\b|<\/tool_call>|```(?:tool[_-]?call|function[_-]?call)|\b(?:tool|function)[ _-]?call\s*[:=]/i.test(text);
 }
 
+function isEscapedQuote(input: string, index: number): boolean {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && input[cursor] === '\\'; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+function escapeRawContentQuotes(input: string): string | undefined {
+  // UI models often serialize source code directly inside JSON's content string,
+  // leaving Java/TS/HTML quotes unescaped.  Generic quote guessing becomes
+  // combinatorial on real files, so repair only the well-known `content` field:
+  // choose a candidate closing quote from the end, escape every raw quote inside
+  // the source payload, and accept only a candidate that JSON.parse validates.
+  const match = /"content"\s*:\s*"/g.exec(input);
+  if (!match) return undefined;
+  const contentStart = match.index + match[0].length;
+  const candidates: number[] = [];
+  for (let index = contentStart; index < input.length; index += 1) {
+    if (input[index] === '"' && !isEscapedQuote(input, index)) candidates.push(index);
+  }
+
+  // The true closing quote is normally one of the last delimiters in the tool
+  // envelope.  Bound work to keep parser repair deterministic under hostile text.
+  for (const closing of candidates.slice(-128).reverse()) {
+    let body = '';
+    for (let index = contentStart; index < closing; index += 1) {
+      const current = input[index]!;
+      if (current === '"' && !isEscapedQuote(input, index)) body += '\\"';
+      else if (current === '\n') body += '\\n';
+      else if (current === '\r') body += '\\r';
+      else if (current === '\t') body += '\\t';
+      else body += current;
+    }
+    const candidate = `${input.slice(0, contentStart)}${body}${input.slice(closing)}`;
+    try {
+      JSON.parse(candidate);
+      return candidate;
+    } catch {
+      // Try the next possible closing delimiter.
+    }
+  }
+  return undefined;
+}
+
 function repairJsonStringEscapes(input: string): string {
   let output = '';
   let inString = false;
@@ -88,10 +131,6 @@ function repairJsonStringEscapes(input: string): string {
         index += 5;
         continue;
       }
-
-      // Preserve source-code escapes such as Python's \x00 or regex \d by
-      // escaping only the JSON transport backslash. JSON.parse then yields
-      // the exact original source text instead of rejecting the whole call.
       output += '\\\\';
       continue;
     }
@@ -126,6 +165,9 @@ function normalizeToolEnvelopeBody(input: string): string {
   }
 
   for (const candidate of [...new Set(candidates)]) {
+    const contentRepaired = escapeRawContentQuotes(candidate);
+    if (contentRepaired) return contentRepaired;
+
     const repaired = repairJsonStringEscapes(candidate);
     try {
       JSON.parse(repaired);
@@ -136,11 +178,12 @@ function normalizeToolEnvelopeBody(input: string): string {
     }
   }
 
-  // Some UI models emit source text with JSON delimiter quotes unescaped. Try
-  // a bounded breadth-first repair, accepting only a result JSON.parse accepts.
+  // Final bounded breadth-first repair remains useful for small malformed
+  // presentation payloads, but large source files are handled above in O(n*k)
+  // rather than exploding across quote combinations.
   const queue = [trimmed];
   const seen = new Set(queue);
-  for (let attempts = 0; queue.length && attempts < 512; attempts += 1) {
+  for (let attempts = 0; queue.length && attempts < 128; attempts += 1) {
     const candidate = queue.shift()!;
     const repaired = repairJsonStringEscapes(candidate);
     try {
@@ -252,6 +295,7 @@ export function buildToolRetryPrompt(plan: ToolProtocolPlan, reason: string): st
     'Use the same canonical tool-call protocol as the original request; do not switch to bare JSON.',
     `Respond ONLY with one or more canonical blocks shaped exactly like: ${example}`,
     'Replace ALLOWED_TOOL_NAME with an allowed name and populate arguments to match that tool schema.',
+    'For file contents, emit valid JSON escaping for quotes, backslashes and newlines; prefer one small mutation per call rather than several large writes in one response.',
     'Do not use markdown or explanatory text. Hidden website tool calls are not forwarded.',
     'Stop after the tool-call block(s) and wait for the external agent to return the result.'
   ].join('\n');
