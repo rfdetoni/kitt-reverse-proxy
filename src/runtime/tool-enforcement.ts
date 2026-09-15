@@ -270,7 +270,7 @@ export function enforceToolResponse(input: {
     const mutations = calls.filter((call) => isMutationToolCall(call, protocol));
     if (mutations.length === 0) {
       throw new ToolEnforcementError(
-        'A mutation tool call is required to complete the requested workspace change; returning code, an artifact, or prose is not sufficient.',
+        'A mutation tool call is required to complete the requested workspace change; returning code, an artifact, or prose is not sufficient. File/code contents intended for the workspace must be carried inside mutation tool arguments.',
         'mutation_required'
       );
     }
@@ -308,6 +308,9 @@ export function buildToolEnforcementDirective(
   } else if (enforcement.requireMutation && !mutationEvidence) {
     lines.push(
       'You MUST complete the requested workspace mutation through an available mutation tool before returning a final answer.',
+      'Any generated source code, configuration, script, markup, or file body intended for the workspace MUST be inside the mutation tool call arguments.',
+      'For create/write operations, include the target path and complete file content in the tool arguments; for edit/patch operations, include the exact edit or patch payload in the tool arguments.',
+      'Do NOT print file contents as prose or Markdown code fences and do NOT claim that text output changed the filesystem.',
       'Returning code, a canvas/artifact, or prose does not count as applying the change.',
       'Return only the mutation tool call now.'
     );
@@ -353,6 +356,9 @@ export function buildToolEnforcementRetryPrompt(
       '[KITT ENFORCEMENT RETRY]',
       'Your previous response did not apply the requested workspace change.',
       'A code block, canvas/artifact, or explanation is not a filesystem mutation.',
+      'Put every generated file body or code change inside the arguments of the mutation tool call itself.',
+      'For create/write, send path plus complete content; for edit/patch, send the exact edit or patch payload.',
+      'Do not emit the file contents as assistant text or Markdown.',
       'Call one available write/edit/patch/create/delete/move tool now and return no final answer.',
       '[END KITT ENFORCEMENT RETRY]'
     ].join('\n');
