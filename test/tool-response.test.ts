@@ -50,6 +50,39 @@ test('literal tool envelopes inside file content remain data', () => {
   assert.deepEqual(JSON.parse(parsed.tool_calls![0]!.function.arguments), args);
 });
 
+test('ordinary JSON code that resembles a tool call remains code', () => {
+  const text = [
+    'Example only:',
+    '```json',
+    '{"name":"read_file","arguments":{"path":"README.md"}}',
+    '```'
+  ].join('\n');
+  assert.deepEqual(parseUiToolResponse(text, readFilePlan()), { content: text });
+});
+
+test('package json generated for a project never becomes a tool call', () => {
+  const text = [
+    'backend/package.json',
+    '```json',
+    '{',
+    '  "name": "meufaztudo-backend",',
+    '  "version": "1.0.0",',
+    '  "scripts": {"dev":"ts-node src/index.ts","build":"tsc"}',
+    '}',
+    '```'
+  ].join('\n');
+  assert.deepEqual(parseUiToolResponse(text, readFilePlan()), { content: text });
+});
+
+test('literal canonical tool text inside an ordinary source fence remains data', () => {
+  const text = [
+    '```typescript',
+    'const example = `<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</tool_call>`;',
+    '```'
+  ].join('\n');
+  assert.deepEqual(parseUiToolResponse(text, readFilePlan()), { content: text });
+});
+
 test('schema-invalid tool arguments fail closed', () => {
   assert.throws(
     () => parseUiToolResponse(
