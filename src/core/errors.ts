@@ -22,6 +22,7 @@ import {
 import { ToolParseFailedError } from '../runtime/tool-response.js';
 import { ToolEnforcementError } from '../runtime/tool-enforcement.js';
 import { ToolProtocolError } from '../mapping/tool-calling.js';
+import { AgentContractError } from '../runtime/agent-contract.js';
 import {
   InvalidReasoningEffortError,
   ReasoningLevelUnavailableError,
@@ -48,6 +49,7 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   const message = error instanceof Error ? error.message : 'Erro interno do proxy.';
 
   if (error instanceof InvalidRequestError) return { status: error.status, code: error.code, message };
+  if (error instanceof AgentContractError) return { status: error.status, code: error.code, message };
   if (error instanceof RequestAbortedError) return { status: 499, code: 'request_aborted', message };
   if (error instanceof SessionLimitExceededError) return { status: 429, code: 'session_limit_exceeded', message };
   if (error instanceof SessionBusyError) return { status: 409, code: 'session_busy', message };
