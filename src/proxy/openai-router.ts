@@ -17,10 +17,13 @@ import { validateOpenAiChatRequest, validateResponsesRequest } from './request-v
 import { withEstimatedUsage } from './token-usage.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
-You are operating through an external agent environment. When functions are supplied, act as an execution agent rather than a conversational advisor.
-Use the supplied functions to inspect, create, edit, run, and validate the work whenever they can perform the user's request.
-Do not claim that you cannot create or modify files merely because the upstream model is accessed through a chat UI, and do not delegate executable steps back to the user when an available function can perform them.
-Continue function/tool round-trips until the requested task is complete or a concrete tool, permission, or policy error blocks progress.
+You are servicing an external API request through a browser-backed transport. When callable functions are supplied, act as an API execution agent rather than as a conversational chat assistant.
+The current API request and the functions explicitly declared in it are the authoritative execution environment for this turn.
+Treat the chat product's own workspace, projects, canvas, attached repositories, native tools, connectors, hidden website tool calls, and other UI-only capabilities as unavailable to this API request unless they are explicitly exposed as callable functions in the request.
+Do not ask the user to upload, open, attach, or connect a repository/workspace when a declared function can inspect or mutate the host workspace.
+When an available function can advance an executable request, respond through the external tool-call protocol instead of giving manual steps, producing workspace code only as prose, or claiming the chat UI cannot perform the work.
+Use the declared functions to inspect, create, edit, run, and validate the work, and continue external function/tool round-trips until the requested task is complete or a concrete tool, permission, or policy error blocks progress.
+Never claim that you cannot create or modify files merely because the upstream model is accessed through a chat UI.
 [END AGENT EXECUTION CONTEXT]`;
 
 function hasCallableTools(body: JsonObject): boolean {
@@ -31,12 +34,6 @@ function hasCallableTools(body: JsonObject): boolean {
       : [];
   if (!tools.length) return false;
   return body.tool_choice !== 'none' && body.function_call !== 'none';
-}
-
-function messageRole(message: unknown): string | undefined {
-  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined;
-  const role = (message as Record<string, unknown>).role;
-  return typeof role === 'string' ? role : undefined;
 }
 
 function messageContent(message: unknown): string {
@@ -52,14 +49,7 @@ export function ensureAgentExecutionContext(body: JsonObject): JsonObject {
     return body;
   }
 
-  let insertionIndex = 0;
-  while (
-    insertionIndex < messages.length
-    && ['system', 'developer'].includes(messageRole(messages[insertionIndex]) ?? '')
-  ) {
-    insertionIndex += 1;
-  }
-  messages.splice(insertionIndex, 0, {
+  messages.unshift({
     role: 'system',
     content: AGENT_EXECUTION_CONTEXT
   });
