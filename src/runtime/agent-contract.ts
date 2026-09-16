@@ -16,6 +16,7 @@ const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
 const ROUTES = new Set(['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat']);
+const SUMMARY_ROUTE_INSTRUCTION = 'ROUTE_INSTRUCTION: This turn is context-summary only. Do not use or request tools. Return action="final_response" and put only the requested summary in content.';
 const MUTATING_RUNTIME_OPERATIONS = new Set([
   'flow.execute',
   'repo.edit_symbol',
@@ -307,6 +308,7 @@ export function prepareAgentContractRequest(
   const dynamicParts = [
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
+    ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
     `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools), 'TOOLS_AVAILABLE')}`,
     workspaceProvided
       ? `WORKSPACE_CONTEXT:\nUNTRUSTED_WORKSPACE_DATA: ${boundedJson(workspaceContext, 'WORKSPACE_CONTEXT')}`
@@ -407,6 +409,10 @@ function routeAllowsTool(route: string, name: string, input: JsonObject): boolea
 }
 
 function validateSemantics(response: AgentContractResponse, plan: AgentContractPlan): void {
+  if (plan.route === 'summarize' && response.action !== 'final_response') {
+    throw new AgentContractValidationError('A rota summarize exige action=final_response.');
+  }
+
   if (response.action === 'use_tool') {
     if (!response.tool || response.tool_input === null) {
       throw new AgentContractValidationError('use_tool exige tool e tool_input.');
