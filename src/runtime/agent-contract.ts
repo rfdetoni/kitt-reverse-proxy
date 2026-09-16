@@ -12,13 +12,17 @@ const MAX_REASONING_SUMMARY_CHARS = 400;
 const MAX_DYNAMIC_CONTEXT_BYTES = 256 * 1024;
 const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
-const READ_ONLY_ROUTES = new Set(['context-gather', 'summarize', 'validate-diff']);
+const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
 const ROUTES = new Set(['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat']);
 const MUTATING_RUNTIME_OPERATIONS = new Set([
   'flow.execute',
   'repo.edit_symbol',
-  'artifacts.store',
+  'repo.write_file',
   'repo.create_directory',
+  'repo.move',
+  'repo.rename',
+  'repo.delete',
+  'artifacts.store',
   'patch.apply',
   'process.run',
   'children.spawn',
@@ -30,7 +34,17 @@ const MUTATING_RUNTIME_OPERATIONS = new Set([
   'mcp.call',
   'state.set'
 ]);
+const FILE_MUTATING_RUNTIME_OPERATIONS = new Set([
+  'repo.edit_symbol',
+  'repo.write_file',
+  'repo.create_directory',
+  'repo.move',
+  'repo.rename',
+  'repo.delete',
+  'patch.apply'
+]);
 const MUTATING_TOOL_NAME = /(?:^|[_.:-])(write|edit|patch|apply|delete|remove|move|rename|create|mkdir|commit|push|merge|run|execute|spawn|store|save|update|set)(?:$|[_.:-])/i;
+const FILE_MUTATING_TOOL_NAME = /(?:^|[_.:-])(write|edit|patch|apply|delete|remove|move|rename|create|mkdir)(?:$|[_.:-])/i;
 
 export const AGENT_CONTRACT_SYSTEM_PROMPT = `Você é o motor de decisão de um agente autônomo (kitt-agent-cli). Você não conversa com um humano — você troca mensagens com um orquestrador que executa tools e devolve resultados.
 
@@ -63,6 +77,7 @@ export interface AgentContractResponse {
 
 interface ToolDescriptor {
   name: string;
+  description?: string;
   parameters?: JsonValue;
 }
 
@@ -156,6 +171,7 @@ function extractTools(body: JsonObject): Map<string, ToolDescriptor> {
     if (!fn || typeof fn.name !== 'string' || !fn.name) continue;
     result.set(fn.name, {
       name: fn.name,
+      ...(typeof fn.description === 'string' && fn.description ? { description: fn.description } : {}),
       ...(fn.parameters !== undefined ? { parameters: fn.parameters as JsonValue } : {})
     });
   }
@@ -165,6 +181,7 @@ function extractTools(body: JsonObject): Map<string, ToolDescriptor> {
 function toolsForPrompt(tools: Map<string, ToolDescriptor>): JsonValue[] {
   return [...tools.values()].map((tool) => ({
     name: tool.name,
+    ...(tool.description !== undefined ? { description: tool.description } : {}),
     ...(tool.parameters !== undefined ? { input_schema: tool.parameters } : {})
   })) as JsonValue[];
 }
@@ -194,7 +211,7 @@ export function recordAgentContractValidation(sessionId: string, ok: boolean): v
   if (!ok) stats.failures += 1;
   const failureRate = stats.validations === 0 ? 0 : stats.failures / stats.validations;
   logger.event(ok ? 'info' : 'warn', 'agent.contract.validation', {
-    session_id: sessionId,
+    contract_session_id: sessionId,
     turns: stats.turns,
     validations: stats.validations,
     failures: stats.failures,
@@ -312,13 +329,31 @@ function parseStrictContract(text: string): AgentContractResponse {
   return value as unknown as AgentContractResponse;
 }
 
+function runtimeOperation(input: JsonObject): string | undefined {
+  const operation = input.operation;
+  return typeof operation === 'string' ? operation : undefined;
+}
+
 function isMutatingTool(name: string, input: JsonObject): boolean {
   if (name === 'kitt_runtime') {
-    const operation = input.operation;
-    if (typeof operation !== 'string') return true;
-    return MUTATING_RUNTIME_OPERATIONS.has(operation);
+    const operation = runtimeOperation(input);
+    return operation === undefined || MUTATING_RUNTIME_OPERATIONS.has(operation);
   }
   return MUTATING_TOOL_NAME.test(name);
+}
+
+function isFileMutatingTool(name: string, input: JsonObject): boolean {
+  if (name === 'kitt_runtime') {
+    const operation = runtimeOperation(input);
+    return operation === undefined || FILE_MUTATING_RUNTIME_OPERATIONS.has(operation);
+  }
+  return FILE_MUTATING_TOOL_NAME.test(name);
+}
+
+function routeAllowsTool(route: string, name: string, input: JsonObject): boolean {
+  if (STRICT_READ_ONLY_ROUTES.has(route)) return !isMutatingTool(name, input);
+  if (route === 'validate-diff') return !isFileMutatingTool(name, input);
+  return true;
 }
 
 function validateSemantics(response: AgentContractResponse, plan: AgentContractPlan): void {
@@ -328,8 +363,8 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
     }
     const tool = plan.tools.get(response.tool);
     if (!tool) throw new AgentContractValidationError(`Tool não disponível neste turno: ${response.tool}.`);
-    if (READ_ONLY_ROUTES.has(plan.route) && isMutatingTool(response.tool, response.tool_input)) {
-      throw new AgentContractValidationError(`A rota ${plan.route} não permite tools mutantes.`);
+    if (!routeAllowsTool(plan.route, response.tool, response.tool_input)) {
+      throw new AgentContractValidationError(`A rota ${plan.route} não permite a operação solicitada por ${response.tool}.`);
     }
     if (tool.parameters !== undefined) {
       const validation = validateJsonSchema(response.tool_input, tool.parameters);
