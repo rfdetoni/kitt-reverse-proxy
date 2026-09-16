@@ -6,7 +6,6 @@ import {
   AGENT_CONTRACT_VERSION,
   AgentContractError,
   AgentContractValidationError,
-  buildAgentContractRetryBody,
   prepareAgentContractRequest,
   recordAgentContractValidation,
   transformAgentContractCompletion,
@@ -75,13 +74,68 @@ function agentContractEnabled(req: Request): boolean {
   return (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase() === AGENT_CONTRACT_VERSION;
 }
 
+function actionConstraints(plan: AgentContractPlan): string[] {
+  const constraints: string[] = [];
+  if (plan.tools.size > 0) {
+    constraints.push(
+      'TOOLS_ALREADY_AVAILABLE: true',
+      `AVAILABLE_TOOL_NAMES: ${JSON.stringify([...plan.tools.keys()])}`,
+      'ACTION_CONSTRAINT: request_tools is forbidden because TOOLS_AVAILABLE was already supplied. If a listed tool can advance the task, use action="use_tool" with that tool.'
+    );
+  }
+  if (plan.workspaceProvided) {
+    constraints.push(
+      'WORKSPACE_ALREADY_AVAILABLE: true',
+      'ACTION_CONSTRAINT: request_workspace is forbidden because WORKSPACE_CONTEXT was already supplied. Use the supplied workspace evidence and available tools.'
+    );
+  }
+  if (plan.route === 'summarize') {
+    constraints.push('ACTION_CONSTRAINT: route summarize requires action="final_response".');
+  }
+  return constraints;
+}
+
+export function reinforceAgentContractPlan(plan: AgentContractPlan): AgentContractPlan {
+  const constraints = actionConstraints(plan);
+  if (!constraints.length) return plan;
+  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+  const constraintMessage = {
+    role: 'developer',
+    content: ['[KITT ACTION CONSTRAINTS]', ...constraints, '[END KITT ACTION CONSTRAINTS]'].join('\n')
+  };
+  const insertAt = Math.min(2, messages.length);
+  messages.splice(insertAt, 0, constraintMessage);
+  return { ...plan, body: { ...plan.body, messages } };
+}
+
 function prepareContract(req: Request, body: JsonObject, sessionId: string | undefined): AgentContractPlan | undefined {
   if (!agentContractEnabled(req)) return undefined;
   const route = req.get('x-kitt-route');
-  return prepareAgentContractRequest(body, {
+  const plan = prepareAgentContractRequest(body, {
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(route !== undefined ? { route } : {})
   });
+  return reinforceAgentContractPlan(plan);
+}
+
+export function buildAgentContractRepairBody(
+  plan: AgentContractPlan,
+  validationError: AgentContractValidationError
+): JsonObject {
+  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+  const constraints = actionConstraints(plan);
+  messages.push({
+    role: 'user',
+    content: [
+      '[KITT CONTRACT REPAIR]',
+      `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
+      'REPAIR_INSTRUCTION: Correct the semantic contract violation. Return exactly one JSON object matching the output contract, with no markdown or extra text.',
+      ...constraints,
+      'Do not repeat the invalid action from the previous response.',
+      '[END KITT CONTRACT REPAIR]'
+    ].join('\n')
+  });
+  return { ...plan.body, messages };
 }
 
 async function executeAgentContract(
@@ -96,6 +150,7 @@ async function executeAgentContract(
   });
 
   const first = await manager.execute(plan.sessionId, plan.body, options);
+  let firstValidationError: AgentContractValidationError | undefined;
   try {
     const transformed = transform(first);
     recordAgentContractValidation(plan.sessionId, true);
@@ -106,9 +161,14 @@ async function executeAgentContract(
       throw error;
     }
     recordAgentContractValidation(plan.sessionId, false);
+    firstValidationError = error;
   }
 
-  const retry = await manager.execute(plan.sessionId, buildAgentContractRetryBody(plan), options);
+  const retry = await manager.execute(
+    plan.sessionId,
+    buildAgentContractRepairBody(plan, firstValidationError),
+    options
+  );
   try {
     const transformed = transform(retry);
     recordAgentContractValidation(plan.sessionId, true);
@@ -122,7 +182,7 @@ async function executeAgentContract(
     throw new AgentContractError(
       502,
       'agent_contract_invalid',
-      `O modelo violou o contrato de saída após 1 retry automático: ${error.message}`
+      `O modelo violou o contrato de saída após 1 retry semântico automático: ${error.message}`
     );
   }
 }
