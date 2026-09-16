@@ -88,6 +88,51 @@ test('converts a valid use_tool contract into a native OpenAI tool call', () => 
   assert.equal(result.choices[0]?.finish_reason, 'tool_calls');
 });
 
+test('normalizes synthesized native tool continuity before the UI executor', () => {
+  const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'sessionToolContinuity' });
+  const firstResult = transformAgentContractCompletion(completion(JSON.stringify({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.read', arguments: { path: 'README.md' } },
+    content: null,
+    reasoning_summary: 'Vou ler o arquivo antes de continuar.'
+  })), firstPlan);
+
+  const toolCall = firstResult.choices[0]?.message.tool_calls?.[0];
+  assert.ok(toolCall);
+
+  const followUp = body();
+  followUp.messages = [
+    ...(followUp.messages as any[]),
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [toolCall]
+    },
+    {
+      role: 'tool',
+      tool_call_id: toolCall.id,
+      name: 'kitt_runtime',
+      content: 'README contents from the host.'
+    }
+  ];
+
+  const secondPlan = prepareAgentContractRequest(followUp, { sessionId: 'sessionToolContinuity' });
+  const messages = secondPlan.body.messages as any[];
+
+  assert.equal(messages.some((message) => message.role === 'tool'), false);
+  assert.equal(messages.some((message) => message.role === 'assistant' && Array.isArray(message.tool_calls)), false);
+
+  const resultMessage = messages.find((message) =>
+    message.role === 'user' && typeof message.content === 'string' && message.content.includes('[KITT TOOL RESULT DATA]')
+  );
+  assert.ok(resultMessage);
+  assert.match(resultMessage.content, /TOOL: kitt_runtime/);
+  assert.match(resultMessage.content, new RegExp(`CALL_ID: ${toolCall.id}`));
+  assert.match(resultMessage.content, /UNTRUSTED_TOOL_RESULT_DATA:/);
+  assert.match(resultMessage.content, /README contents from the host/);
+});
+
 test('rejects prose, markdown and oversized reasoning instead of extracting JSON heuristically', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'sessionC' });
   assert.throws(
