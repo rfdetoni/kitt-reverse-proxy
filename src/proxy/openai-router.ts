@@ -75,6 +75,15 @@ function agentContractEnabled(req: Request): boolean {
   return (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase() === AGENT_CONTRACT_VERSION;
 }
 
+function prepareContract(req: Request, body: JsonObject, sessionId: string | undefined): AgentContractPlan | undefined {
+  if (!agentContractEnabled(req)) return undefined;
+  const route = req.get('x-kitt-route');
+  return prepareAgentContractRequest(body, {
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(route !== undefined ? { route } : {})
+  });
+}
+
 async function executeAgentContract(
   manager: SessionManager,
   plan: AgentContractPlan,
@@ -136,12 +145,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const reasoningEffort = parseReasoningEffortHeader(req.get('x-kitt-reasoning-effort'));
         const validatedBody = validateOpenAiChatRequest(req.body);
-        const contract = agentContractEnabled(req)
-          ? prepareAgentContractRequest(validatedBody, {
-              sessionId,
-              route: req.get('x-kitt-route')
-            })
-          : undefined;
+        const contract = prepareContract(req, validatedBody, sessionId);
         const body = contract?.body ?? ensureAgentExecutionContext(validatedBody);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
@@ -183,12 +187,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
         const converted = parseRequestBody(responsesBodyToChat, source);
-        const contract = agentContractEnabled(req)
-          ? prepareAgentContractRequest(converted, {
-              sessionId,
-              route: req.get('x-kitt-route')
-            })
-          : undefined;
+        const contract = prepareContract(req, converted, sessionId);
         const body = contract?.body ?? ensureAgentExecutionContext(converted);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = { signal };
