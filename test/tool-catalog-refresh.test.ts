@@ -44,7 +44,7 @@ test('API directive exposes every available function with its argument schema', 
 });
 
 test('UI executor refreshes the complete tool directive on every tool-enabled request', () => {
-  const source = readFileSync(new URL('../src/runtime/ui-executor.ts', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../src/runtime/ui-executor.ts', import.meta.url), 'utf8');
 
   assert.match(
     source,

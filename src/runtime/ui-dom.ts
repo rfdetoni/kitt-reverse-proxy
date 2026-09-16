@@ -98,7 +98,6 @@ export async function collectVisibleSnapshots(page: Page, selectors: readonly st
         return results;
       }, { selectorList: selectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
       for (const snapshot of raw) output.push({ ...snapshot, frameIndex });
-      if (frameIndex === 0 && raw.length > 0) break;
     } catch {}
   }
   return output;

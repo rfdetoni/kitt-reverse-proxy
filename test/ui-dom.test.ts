@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterNewArtifacts, selectChangedSnapshot, type UiTextSnapshot } from '../src/runtime/ui-dom.js';
+import { collectVisibleSnapshots, filterNewArtifacts, selectChangedSnapshot, type UiTextSnapshot } from '../src/runtime/ui-dom.js';
+
+test('collects assistant snapshots from child frames when main frame has history', async () => {
+  const frame = (text: string) => ({
+    isDetached: () => false,
+    evaluate: async () => [{
+      selector: '[assistant]', count: 1, index: 0, identity: text, priority: 0, text
+    }]
+  });
+  const snapshots = await collectVisibleSnapshots({
+    frames: () => [frame('old answer'), frame('new answer')]
+  } as any, ['[assistant]']);
+
+  assert.deepEqual(snapshots.map((snapshot) => [snapshot.frameIndex, snapshot.text]), [
+    [0, 'old answer'],
+    [1, 'new answer']
+  ]);
+});
 
 test('changed UI snapshot is matched against the same selector and frame', () => {
   const baseline: UiTextSnapshot[] = [
