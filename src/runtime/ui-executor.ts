@@ -62,6 +62,7 @@ import {
   isMutationToolCall,
   toolEnforcementTaskKey,
   isSyntheticToolResult,
+  resolveToolEnforcementTaskText,
   type ToolEnforcementPlan
 } from './tool-enforcement.js';
 import { throwIfAborted } from './cancellation.js';
@@ -323,7 +324,9 @@ export class UiChatExecutor implements ChatExecutor {
     const explicitUserText = [...incoming].reverse().find(
       (message) => message.role === 'user' && !isSyntheticToolResult(message)
     )?.text;
-    if (!syntheticHostResult && explicitUserText) this.activeTaskUserText = explicitUserText;
+    if (!syntheticHostResult && explicitUserText) {
+      this.activeTaskUserText = resolveToolEnforcementTaskText(this.activeTaskUserText, explicitUserText);
+    }
     const latestUserText = this.activeTaskUserText
       || explicitUserText
       || [...this.history].reverse().find(
