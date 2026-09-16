@@ -39,6 +39,10 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - run: npm run verify
+      - name: Validate multicore installer build
+        run: node scripts/build-fast.mjs
+      - name: Validate fast-build output
+        run: node --check dist/cli.js
       - name: Validate POSIX installer syntax
         if: runner.os != 'Windows'
         run: bash -n install.sh
