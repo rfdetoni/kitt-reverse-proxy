@@ -30,6 +30,8 @@ const DIRECT_FILE_CREATION =
   /^\s*(?:(?:por favor|please)\s+)?(?:crie|criar|create|make)\s+(?:(?:um|uma|a|an)\s+)?(?:arquivo|file)\s+[`"'@]?[-A-Za-z0-9_./\\]+\.[A-Za-z0-9]{1,16}\b/i;
 const PATH_LIKE =
   /(?:^|[\s"'`])(?:\.{0,2}\/|src\/|test\/|tests\/|lib\/|app\/|packages\/|[A-Za-z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|java|kt|kts|py|rs|go|cs|cpp|c|h|hpp|json|ya?ml|toml|xml|gradle|md|sql))(?:$|[\s"'`,:;])/i;
+const TASK_CONTINUATION =
+  /^\s*(?:(?:por favor|please)\s+)?(?:fa[cç]a(?:\s+isso)?|pode\s+fazer(?:\s+isso)?|continue|continua|continuar|prossiga|execute(?:\s+isso)?|aplique(?:\s+isso)?|implemente(?:\s+isso)?|sim|yes|do\s+it|go\s+ahead|proceed|apply\s+it|implement\s+it)(?:[\s.!?,;:]|$)/i;
 
 const READ_ONLY_COMMAND =
   /^(?:(?:rtk\s+)?(?:pwd|ls|tree|rg|grep|find|cat|head|tail|wc|file|stat)\b|git\s+(?:status|diff|log|show|branch\b|rev-parse\b|ls-files\b)|sed\s+-n\b)/i;
@@ -131,6 +133,21 @@ function isMutatingShellCommand(command: string | undefined): boolean {
   return SHELL_CONTROL_OR_WRITE.test(command);
 }
 
+export function isTaskContinuationRequest(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || normalized.length > 240) return false;
+  return TASK_CONTINUATION.test(normalized);
+}
+
+export function resolveToolEnforcementTaskText(activeTaskText: string, latestUserText: string): string {
+  const latest = latestUserText.trim();
+  if (!latest) return activeTaskText;
+  if (activeTaskText && isTaskContinuationRequest(latest)) {
+    return `${activeTaskText}\n${latest}`;
+  }
+  return latest;
+}
+
 export function isWorkspaceDependentRequest(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) return false;
@@ -143,10 +160,10 @@ export function toolEnforcementTaskKey(messages: readonly CanonicalMessage[]): s
   let userCount = 0;
   let lastUser = '';
   for (const message of messages) {
-    if (message.role === 'user' && !isSyntheticToolResult(message)) {
-      userCount += 1;
-      lastUser = message.text;
-    }
+    if (message.role !== 'user' || isSyntheticToolResult(message)) continue;
+    if (lastUser && isTaskContinuationRequest(message.text)) continue;
+    userCount += 1;
+    lastUser = message.text;
   }
   return `${userCount}:${lastUser}`;
 }
