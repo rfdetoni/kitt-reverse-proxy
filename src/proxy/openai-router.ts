@@ -1,9 +1,20 @@
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../logger.js';
 import { adaptCompletionForLegacyFunctions, requestMayReturnToolCalls } from '../mapping/tool-calling.js';
+import {
+  AGENT_CONTRACT_HEADER,
+  AGENT_CONTRACT_VERSION,
+  AgentContractError,
+  AgentContractValidationError,
+  buildAgentContractRetryBody,
+  prepareAgentContractRequest,
+  recordAgentContractValidation,
+  transformAgentContractCompletion,
+  type AgentContractPlan
+} from '../runtime/agent-contract.js';
 import { parseReasoningEffortHeader } from '../runtime/reasoning.js';
 import type { SessionManager } from '../runtime/session-manager.js';
-import type { ChatExecutionOptions, JsonObject } from '../types.js';
+import type { ChatExecutionOptions, ChatExecutionResult, JsonObject } from '../types.js';
 import {
   ChatStreamWriter,
   completionToResponses,
@@ -60,6 +71,53 @@ function markStructuredOutput(res: Response, failed: boolean): void {
   if (failed && !res.headersSent) res.setHeader('X-Kitt-Structured-Output', 'failed');
 }
 
+function agentContractEnabled(req: Request): boolean {
+  return (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase() === AGENT_CONTRACT_VERSION;
+}
+
+async function executeAgentContract(
+  manager: SessionManager,
+  plan: AgentContractPlan,
+  options: ChatExecutionOptions
+): Promise<ChatExecutionResult> {
+  const transform = (result: ChatExecutionResult): ChatExecutionResult => ({
+    ...result,
+    completion: transformAgentContractCompletion(result.completion, plan),
+    deltas: []
+  });
+
+  const first = await manager.execute(plan.sessionId, plan.body, options);
+  try {
+    const transformed = transform(first);
+    recordAgentContractValidation(plan.sessionId, true);
+    return transformed;
+  } catch (error) {
+    if (!(error instanceof AgentContractValidationError)) {
+      recordAgentContractValidation(plan.sessionId, true);
+      throw error;
+    }
+    recordAgentContractValidation(plan.sessionId, false);
+  }
+
+  const retry = await manager.execute(plan.sessionId, buildAgentContractRetryBody(plan), options);
+  try {
+    const transformed = transform(retry);
+    recordAgentContractValidation(plan.sessionId, true);
+    return transformed;
+  } catch (error) {
+    if (!(error instanceof AgentContractValidationError)) {
+      recordAgentContractValidation(plan.sessionId, true);
+      throw error;
+    }
+    recordAgentContractValidation(plan.sessionId, false);
+    throw new AgentContractError(
+      502,
+      'agent_contract_invalid',
+      `O modelo violou o contrato de saída após 1 retry automático: ${error.message}`
+    );
+  }
+}
+
 export function createOpenAiRouter(manager: SessionManager): Router {
   const router = Router();
 
@@ -77,30 +135,41 @@ export function createOpenAiRouter(manager: SessionManager): Router {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
         const reasoningEffort = parseReasoningEffortHeader(req.get('x-kitt-reasoning-effort'));
-        const body = ensureAgentExecutionContext(validateOpenAiChatRequest(req.body));
-        const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
+        const validatedBody = validateOpenAiChatRequest(req.body);
+        const contract = agentContractEnabled(req)
+          ? prepareAgentContractRequest(validatedBody, {
+              sessionId,
+              route: req.get('x-kitt-route')
+            })
+          : undefined;
+        const body = contract?.body ?? ensureAgentExecutionContext(validatedBody);
+        const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
           signal,
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {})
         };
 
-        if (body.stream === true) {
-          const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
+        if (validatedBody.stream === true) {
+          const model = typeof validatedBody.model === 'string' && validatedBody.model.trim() ? validatedBody.model : manager.modelId;
           const writer = new ChatStreamWriter(res, model);
-          const result = await manager.execute(sessionId, body, {
-            ...baseOptions,
-            ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
-          });
+          const result = contract
+            ? await executeAgentContract(manager, contract, baseOptions)
+            : await manager.execute(sessionId, body, {
+                ...baseOptions,
+                ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
+              });
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-          const completion = withEstimatedUsage(result.completion, body);
-          writer.finish(adaptCompletionForLegacyFunctions(completion, body), bufferTools ? [] : result.deltas);
+          const completion = withEstimatedUsage(result.completion, validatedBody);
+          writer.finish(adaptCompletionForLegacyFunctions(completion, validatedBody), bufferTools ? [] : result.deltas);
           return;
         }
 
-        const result = await manager.execute(sessionId, body, baseOptions);
+        const result = contract
+          ? await executeAgentContract(manager, contract, baseOptions)
+          : await manager.execute(sessionId, body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-        const completion = withEstimatedUsage(result.completion, body);
-        res.json(adaptCompletionForLegacyFunctions(completion, body));
+        const completion = withEstimatedUsage(result.completion, validatedBody);
+        res.json(adaptCompletionForLegacyFunctions(completion, validatedBody));
       });
     } catch (error) {
       logger.event('warn', 'openai.chat.error', { error });
@@ -113,25 +182,37 @@ export function createOpenAiRouter(manager: SessionManager): Router {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
-        const body = ensureAgentExecutionContext(parseRequestBody(responsesBodyToChat, source));
-        const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.response_format);
+        const converted = parseRequestBody(responsesBodyToChat, source);
+        const contract = agentContractEnabled(req)
+          ? prepareAgentContractRequest(converted, {
+              sessionId,
+              route: req.get('x-kitt-route')
+            })
+          : undefined;
+        const body = contract?.body ?? ensureAgentExecutionContext(converted);
+        const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
+        const baseOptions: ChatExecutionOptions = { signal };
 
         if (source.stream === true) {
-          const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
+          const model = typeof converted.model === 'string' && converted.model.trim() ? converted.model : manager.modelId;
           const writer = new ResponsesStreamWriter(res, model);
-          const result = await manager.execute(sessionId, body, {
-            signal,
-            ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
-          });
+          const result = contract
+            ? await executeAgentContract(manager, contract, baseOptions)
+            : await manager.execute(sessionId, body, {
+                signal,
+                ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
+              });
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-          const completion = withEstimatedUsage(result.completion, body);
+          const completion = withEstimatedUsage(result.completion, converted);
           writer.finish(completion, bufferTools ? [] : result.deltas);
           return;
         }
 
-        const result = await manager.execute(sessionId, body, { signal });
+        const result = contract
+          ? await executeAgentContract(manager, contract, baseOptions)
+          : await manager.execute(sessionId, body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
-        const completion = withEstimatedUsage(result.completion, body);
+        const completion = withEstimatedUsage(result.completion, converted);
         res.json(completionToResponses(completion));
       });
     } catch (error) {
