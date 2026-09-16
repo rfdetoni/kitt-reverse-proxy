@@ -297,6 +297,9 @@ export function prepareAgentContractRequest(
   }
 
   const route = normalizeRoute(options.route ?? turnContext?.route);
+  // Context summaries must never inherit a generic runtime tool from a
+  // caller's implementation prompt; this route never executes workspace work.
+  if (route === 'summarize') tools.clear();
   const workspaceContext = turnContext?.workspace_context ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
   const reinject = shouldReinject(sessionId);

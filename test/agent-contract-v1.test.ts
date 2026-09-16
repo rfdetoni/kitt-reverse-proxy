@@ -174,6 +174,22 @@ test('validate-diff rejects file mutation but permits validation command executi
   assert.equal(result.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
 });
 
+test('summarize never exposes a generic workspace runtime tool', () => {
+  const plan = prepareAgentContractRequest(body('summarize'), { sessionId: 'summarySession' });
+
+  assert.equal(plan.tools.size, 0);
+  assert.throws(
+    () => transformAgentContractCompletion(completion(JSON.stringify({
+      action: 'use_tool',
+      tool: 'kitt_runtime',
+      tool_input: { operation: 'repo.create_directory', arguments: { path: 'backend' } },
+      content: null,
+      reasoning_summary: 'Não devo executar workspace durante resumo.'
+    })), plan),
+    AgentContractValidationError
+  );
+});
+
 test('returns a structured orchestration error when workspace is explicitly requested', () => {
   const plan = prepareAgentContractRequest(body('chat', 'not_provided'), { sessionId: 'sessionE' });
   assert.throws(
