@@ -38,6 +38,7 @@ function body(route = 'chat', workspace: unknown = { files: ['README.md'] }): Js
       type: 'function',
       function: {
         name: 'kitt_runtime',
+        description: 'Execute KITT runtime operations.',
         parameters: {
           type: 'object',
           properties: {
@@ -60,6 +61,7 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
   assert.equal(messages[0].content, AGENT_CONTRACT_SYSTEM_PROMPT);
   assert.equal(messages[1].role, 'developer');
   assert.match(messages[1].content, /TOOLS_AVAILABLE:/);
+  assert.match(messages[1].content, /Execute KITT runtime operations/);
   assert.match(messages[1].content, /UNTRUSTED_WORKSPACE_DATA:/);
   assert.match(messages[1].content, /ORCHESTRATOR_CONTEXT_DATA:/);
   assert.equal(plan.body.tools, undefined);
@@ -104,7 +106,7 @@ test('rejects prose, markdown and oversized reasoning instead of extracting JSON
   );
 });
 
-test('rejects mutating runtime operations on validate-diff route', () => {
+test('validate-diff rejects file mutation but permits validation command execution', () => {
   const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionD' });
   assert.throws(
     () => transformAgentContractCompletion(completion(JSON.stringify({
@@ -116,6 +118,15 @@ test('rejects mutating runtime operations on validate-diff route', () => {
     })), plan),
     AgentContractValidationError
   );
+
+  const result = transformAgentContractCompletion(completion(JSON.stringify({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'process.run', arguments: { command: 'npm test' } },
+    content: null,
+    reasoning_summary: 'Vou executar a validação solicitada.'
+  })), plan);
+  assert.equal(result.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
 });
 
 test('returns a structured orchestration error when workspace is explicitly requested', () => {
