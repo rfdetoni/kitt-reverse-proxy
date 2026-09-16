@@ -371,15 +371,16 @@ export class UiChatExecutor implements ChatExecutor {
     }
 
     const structured = structuredOutputPlan(body);
-    let prefix = protocolFingerprint !== this.protocolFingerprint ? formatApiDirective(plan) : '';
+    let prefix = protocolEnabled
+      ? formatApiDirective(plan)
+      : protocolFingerprint !== this.protocolFingerprint
+        ? formatApiDirective(plan)
+        : '';
     if (!protocolEnabled && this.toolProtocolWasEnabled) {
       prefix = `[API TOOL PROTOCOL UPDATE]\nTools are disabled for this turn. Do not emit tool calls.\n[END API TOOL PROTOCOL UPDATE]\n\n${prefix}`;
     }
     if (!plan.systemPrompt && this.systemContextWasEnabled) {
       prefix = `[API SYSTEM CONTEXT UPDATE]\nThe previous API system context is no longer active for this turn. Follow the current user request without that prior API system context.\n[END API SYSTEM CONTEXT UPDATE]\n\n${prefix}`;
-    }
-    if (protocolEnabled && protocolFingerprint === this.protocolFingerprint) {
-      prefix += 'Print any requested tool calls as visible <tool_call>{"name":"allowed_name","arguments":{}}</tool_call> blocks. The external agent executes them; stop and wait for its tool_result.\n\n';
     }
     if (structured) prefix = `${prefix}[RESPONSE FORMAT INSTRUCTION]\n${structured.instruction}\n[END RESPONSE FORMAT INSTRUCTION]\n\n`;
     prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence, this.mutationEvidence)}`;
