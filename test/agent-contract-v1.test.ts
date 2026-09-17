@@ -136,12 +136,8 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
   assert.match(resultMessage.content, /README contents from the host/);
 });
 
-test('rejects prose, markdown and oversized reasoning instead of extracting JSON heuristically', () => {
+test('rejects oversized reasoning while wrapped JSON normalization is covered separately', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'sessionC' });
-  assert.throws(
-    () => transformAgentContractCompletion(completion('```json\n{"action":"final_response"}\n```'), plan),
-    AgentContractValidationError
-  );
   assert.throws(
     () => transformAgentContractCompletion(completion(JSON.stringify({
       action: 'final_response',
