@@ -93,7 +93,7 @@ test('parallel trailing tool outputs are all selected and history is not', async
 });
 
 
-test('user turn compatibility detects a different full conversation', async () => {
+test('user turn compatibility rejects a different full conversation without reset', async () => {
   const { userTurnsAreCompatible } = await import('../src/runtime/ui-history.js');
   const previous = canonicalMessages({
     messages: [
@@ -112,8 +112,10 @@ test('user turn compatibility detects a different full conversation', async () =
     ]
   });
   const other = canonicalMessages({ messages: [{ role: 'user', content: 'conversation B' }, { role: 'user', content: 'next' }] });
+  const rewind = canonicalMessages({ messages: [{ role: 'user', content: 'conversation A' }] });
   assert.equal(userTurnsAreCompatible(previous, same), true);
-  assert.equal(userTurnsAreCompatible(previous, other), false);
+  assert.throws(() => userTurnsAreCompatible(previous, other), { name: 'ConversationStateConflictError' });
+  assert.throws(() => userTurnsAreCompatible(previous, rewind), { name: 'ConversationStateConflictError' });
 });
 
 
