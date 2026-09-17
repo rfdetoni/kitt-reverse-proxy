@@ -18,6 +18,14 @@ function normalizeComposerText(value: string): string {
   return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function selectorTargetsEditableElement(selector: string): boolean {
+  const normalized = selector.toLowerCase();
+  return /(^|[\s>+~,])textarea(?:[\s.#[:]|$)/.test(normalized)
+    || /(^|[\s>+~,])input(?:[\s.#[:]|$)/.test(normalized)
+    || normalized.includes('[contenteditable="true"]')
+    || normalized.includes("[contenteditable='true']");
+}
+
 async function locatorIsEditable(input: Locator): Promise<boolean> {
   return input.evaluate((element: Element) => {
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
@@ -32,20 +40,27 @@ async function firstEditableLocator(page: Page, selectors: readonly string[]): P
   for (const frame of page.frames().filter((candidate) => !candidate.isDetached())) {
     for (const selector of selectors) {
       try {
-        const matches = frame.locator(selector);
-        const count = await matches.count();
-        for (let index = count - 1; index >= 0; index -= 1) {
-          const candidate = matches.nth(index);
-          if (!await candidate.isVisible({ timeout: 150 }).catch(() => false)) continue;
-          if (await locatorIsEditable(candidate)) return candidate;
+        const candidate = frame.locator(selector).last();
+        if (await candidate.count() === 0) continue;
+        if (!await candidate.isVisible({ timeout: 150 }).catch(() => false)) continue;
 
-          const descendants = candidate.locator(EDITABLE_DESCENDANT_SELECTOR);
-          const descendantCount = await descendants.count();
-          for (let nestedIndex = descendantCount - 1; nestedIndex >= 0; nestedIndex -= 1) {
-            const nested = descendants.nth(nestedIndex);
-            if (!await nested.isVisible({ timeout: 150 }).catch(() => false)) continue;
-            if (await locatorIsEditable(nested)) return nested;
-          }
+        // Selectors that themselves target native/text-editable controls are safe to
+        // accept directly. This also keeps lightweight Playwright test doubles
+        // compatible without weakening wrapper selectors such as #prompt-textarea.
+        if (selectorTargetsEditableElement(selector) || await locatorIsEditable(candidate)) {
+          return candidate;
+        }
+
+        // A provider selector may point at a visible composer wrapper. Resolve the
+        // actual editable descendant instead of typing into the wrapper itself.
+        const descendants = candidate.locator(EDITABLE_DESCENDANT_SELECTOR);
+        const descendant = descendants.last();
+        if (
+          await descendant.count() > 0
+          && await descendant.isVisible({ timeout: 150 }).catch(() => false)
+          && await locatorIsEditable(descendant)
+        ) {
+          return descendant;
         }
       } catch {
         // The page can re-render while locating the composer. Try the next candidate.
