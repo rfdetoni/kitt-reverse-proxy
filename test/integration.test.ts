@@ -138,7 +138,7 @@ test('UI protocol retries premature final answers and completes an API tool roun
   }
 });
 
-test('proxy server handles session header, native reasoning, request ID, metrics, errors and LRU limits', async () => {
+test('proxy server handles session header, inert legacy reasoning header, request ID, metrics, errors and LRU limits', async () => {
   let createdNamedCount = 0;
   let receivedReasoning: number | undefined;
   const manager = new SessionManager({
@@ -169,7 +169,7 @@ test('proxy server handles session header, native reasoning, request ID, metrics
       body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
     });
     assert.equal(res1.status, 200);
-    assert.equal(receivedReasoning, 80);
+    assert.equal(receivedReasoning, undefined);
     const reqId1 = res1.headers.get('X-Kitt-Request-Id');
     assert(reqId1 && reqId1.length > 0);
     assert.equal(createdNamedCount, 0);
@@ -188,16 +188,16 @@ test('proxy server handles session header, native reasoning, request ID, metrics
     assert.equal(res2.headers.get('X-Kitt-Request-Id'), customReqId);
     assert.equal(createdNamedCount, 1);
 
-    const resInvalidReasoning = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const resLegacyReasoning = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Kitt-Reasoning-Effort': '101'
       },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'invalid reasoning' }] })
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'legacy reasoning header' }] })
     });
-    assert.equal(resInvalidReasoning.status, 400);
-    assert.equal((await resInvalidReasoning.json() as any).error.code, 'invalid_reasoning_effort');
+    assert.equal(resLegacyReasoning.status, 200);
+    assert.equal(receivedReasoning, undefined);
 
     const resInvalidSess = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
