@@ -1,5 +1,6 @@
 import type { JsonObject } from '../types.js';
 import { messageToText, normalizeMessages } from '../mapping/messages.js';
+import { ConversationStateConflictError } from './ui-errors.js';
 
 export interface CanonicalMessage {
   role: string;
@@ -36,9 +37,13 @@ export function userTurnsAreCompatible(
   const previous = history.filter((message) => message.role === 'user').map((message) => message.text);
   const next = incoming.filter((message) => message.role === 'user').map((message) => message.text);
   if (!previous.length || !next.length) return true;
-  const shorter = previous.length <= next.length ? previous : next;
-  const longer = previous.length <= next.length ? next : previous;
-  return shorter.every((text, index) => longer[index] === text);
+
+  // A browser-backed session is stateful. Rewinding or replacing user history must
+  // never silently navigate to a fresh chat because that can duplicate side effects.
+  if (next.length < previous.length || previous.some((text, index) => next[index] !== text)) {
+    throw new ConversationStateConflictError();
+  }
+  return true;
 }
 
 export function historyFingerprint(messages: CanonicalMessage[]): string {
