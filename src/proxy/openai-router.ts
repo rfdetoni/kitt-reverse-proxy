@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../logger.js';
 import { adaptCompletionForLegacyFunctions, requestMayReturnToolCalls } from '../mapping/tool-calling.js';
@@ -11,6 +12,7 @@ import {
   transformAgentContractCompletion,
   type AgentContractPlan
 } from '../runtime/agent-contract.js';
+import { RequestIdConflictError, RequestIdempotencyCache } from '../runtime/request-idempotency.js';
 import { parseReasoningEffortHeader } from '../runtime/reasoning.js';
 import type { SessionManager } from '../runtime/session-manager.js';
 import type { ChatExecutionOptions, ChatExecutionResult, JsonObject } from '../types.js';
@@ -35,6 +37,8 @@ When an available function can advance an executable request, respond through th
 Use the declared functions to inspect, create, edit, run, and validate the work, and continue external function/tool round-trips until the requested task is complete or a concrete tool, permission, or policy error blocks progress.
 Never claim that you cannot create or modify files merely because the upstream model is accessed through a chat UI.
 [END AGENT EXECUTION CONTEXT]`;
+
+const agentRequestCache = new RequestIdempotencyCache<ChatExecutionResult>();
 
 function hasCallableTools(body: JsonObject): boolean {
   const tools = Array.isArray(body.tools)
@@ -138,6 +142,30 @@ export function buildAgentContractRepairBody(
   return { ...plan.body, messages };
 }
 
+function contractResponseDigest(result: ChatExecutionResult): { response_sha256: string; response_bytes: number } {
+  const raw = JSON.stringify(result.completion);
+  return {
+    response_sha256: createHash('sha256').update(raw).digest('hex'),
+    response_bytes: Buffer.byteLength(raw, 'utf8')
+  };
+}
+
+function recordContractAttempt(
+  plan: AgentContractPlan,
+  attempt: 'initial' | 'repair',
+  result: ChatExecutionResult,
+  validationError?: AgentContractValidationError
+): void {
+  logger.event(validationError ? 'warn' : 'info', 'agent.contract.validation.detail', {
+    contract_session_id: plan.sessionId,
+    route: plan.route,
+    attempt,
+    outcome: validationError ? 'invalid' : 'valid',
+    ...(validationError ? { validation_reason: validationError.message } : {}),
+    ...contractResponseDigest(result)
+  });
+}
+
 async function executeAgentContract(
   manager: SessionManager,
   plan: AgentContractPlan,
@@ -154,6 +182,7 @@ async function executeAgentContract(
   try {
     const transformed = transform(first);
     recordAgentContractValidation(plan.sessionId, true);
+    recordContractAttempt(plan, 'initial', first);
     return transformed;
   } catch (error) {
     if (!(error instanceof AgentContractValidationError)) {
@@ -161,6 +190,7 @@ async function executeAgentContract(
       throw error;
     }
     recordAgentContractValidation(plan.sessionId, false);
+    recordContractAttempt(plan, 'initial', first, error);
     firstValidationError = error;
   }
 
@@ -172,6 +202,7 @@ async function executeAgentContract(
   try {
     const transformed = transform(retry);
     recordAgentContractValidation(plan.sessionId, true);
+    recordContractAttempt(plan, 'repair', retry);
     return transformed;
   } catch (error) {
     if (!(error instanceof AgentContractValidationError)) {
@@ -179,11 +210,34 @@ async function executeAgentContract(
       throw error;
     }
     recordAgentContractValidation(plan.sessionId, false);
+    recordContractAttempt(plan, 'repair', retry, error);
     throw new AgentContractError(
       502,
       'agent_contract_invalid',
       `O modelo violou o contrato de saída após 1 retry semântico automático: ${error.message}`
     );
+  }
+}
+
+async function executeAgentContractIdempotent(
+  req: Request,
+  manager: SessionManager,
+  plan: AgentContractPlan,
+  options: ChatExecutionOptions
+): Promise<ChatExecutionResult> {
+  const requestId = req.get('x-kitt-request-id');
+  try {
+    return await agentRequestCache.execute(
+      plan.sessionId,
+      requestId,
+      { route: plan.route, body: plan.originalBody },
+      () => executeAgentContract(manager, plan, options)
+    );
+  } catch (error) {
+    if (error instanceof RequestIdConflictError) {
+      throw new AgentContractError(409, 'request_id_conflict', error.message);
+    }
+    throw error;
   }
 }
 
@@ -217,7 +271,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           const model = typeof validatedBody.model === 'string' && validatedBody.model.trim() ? validatedBody.model : manager.modelId;
           const writer = new ChatStreamWriter(res, model);
           const result = contract
-            ? await executeAgentContract(manager, contract, baseOptions)
+            ? await executeAgentContractIdempotent(req, manager, contract, baseOptions)
             : await manager.execute(sessionId, body, {
                 ...baseOptions,
                 ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
@@ -229,7 +283,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         }
 
         const result = contract
-          ? await executeAgentContract(manager, contract, baseOptions)
+          ? await executeAgentContractIdempotent(req, manager, contract, baseOptions)
           : await manager.execute(sessionId, body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, validatedBody);
@@ -256,7 +310,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           const model = typeof converted.model === 'string' && converted.model.trim() ? converted.model : manager.modelId;
           const writer = new ResponsesStreamWriter(res, model);
           const result = contract
-            ? await executeAgentContract(manager, contract, baseOptions)
+            ? await executeAgentContractIdempotent(req, manager, contract, baseOptions)
             : await manager.execute(sessionId, body, {
                 signal,
                 ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
@@ -268,7 +322,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         }
 
         const result = contract
-          ? await executeAgentContract(manager, contract, baseOptions)
+          ? await executeAgentContractIdempotent(req, manager, contract, baseOptions)
           : await manager.execute(sessionId, body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, converted);
