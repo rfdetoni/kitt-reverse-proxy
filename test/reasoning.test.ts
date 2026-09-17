@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   InvalidReasoningEffortError,
   parseReasoningEffortHeader,
+  reasoningFallbackLevels,
   reasoningLevelForEffort
 } from '../src/runtime/reasoning.js';
 
@@ -27,4 +28,14 @@ test('0..100 maps to ChatGPT reasoning tiers', () => {
   assert.equal(reasoningLevelForEffort(90), 'high');
   assert.equal(reasoningLevelForEffort(91), 'extra_high');
   assert.equal(reasoningLevelForEffort(100), 'extra_high');
+});
+
+test('reasoning fallback never escalates above the requested tier', () => {
+  assert.deepEqual(reasoningFallbackLevels('instant'), ['instant']);
+  assert.deepEqual(reasoningFallbackLevels('medium'), ['medium', 'instant']);
+  assert.deepEqual(reasoningFallbackLevels('high'), ['high', 'medium', 'instant']);
+  assert.deepEqual(
+    reasoningFallbackLevels('extra_high'),
+    ['extra_high', 'high', 'medium', 'instant']
+  );
 });
