@@ -30,10 +30,6 @@ function availabilityFailure(error: unknown): boolean {
   ]).has(error.name);
 }
 
-function isUiTimeout(error: unknown): boolean {
-  return error instanceof Error && error.name === 'UiTimeoutError';
-}
-
 function isRequestAborted(error: unknown): boolean {
   return error instanceof Error && error.name === 'RequestAbortedError';
 }
@@ -88,7 +84,12 @@ export class ResilientChatExecutor implements ChatExecutor {
 
     const startedAt = Date.now();
     try {
-      const result = await this.executeWithSingleUiRecovery(body, options);
+      // A failed UI request must never reset the browser session implicitly. In the
+      // UI transport, reset() navigates to the provider's new-chat URL and clears
+      // conversation state, so using it as retry recovery silently opens a second
+      // conversation. Propagate the failure and let the caller decide whether an
+      // explicit session reset is appropriate.
+      const result = await this.delegate.execute(body, options);
       this.recordSuccess(Date.now() - startedAt);
       return result;
     } catch (error) {
@@ -102,32 +103,6 @@ export class ResilientChatExecutor implements ChatExecutor {
       if (availabilityFailure(error)) this.recordFailure();
       else this.recordReachable(Date.now() - startedAt);
       throw error;
-    }
-  }
-
-  private async executeWithSingleUiRecovery(
-    body: JsonObject,
-    options?: ChatExecutionOptions
-  ): Promise<ChatExecutionResult> {
-    try {
-      return await this.delegate.execute(body, options);
-    } catch (error) {
-      const canRecover = (
-        this.transport === 'ui'
-        && isUiTimeout(error)
-        && typeof this.delegate.reset === 'function'
-        && !options?.signal?.aborted
-      );
-      if (!canRecover) throw error;
-
-      telemetry.recordProviderEvent(this.provider, this.transport, 'ui_timeout_retry');
-      await this.delegate.reset!();
-      if (options?.signal?.aborted) {
-        const aborted = new Error('Request aborted before UI retry.');
-        aborted.name = 'RequestAbortedError';
-        throw aborted;
-      }
-      return this.delegate.execute(body, options);
     }
   }
 

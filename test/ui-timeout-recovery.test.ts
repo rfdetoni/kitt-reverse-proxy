@@ -31,11 +31,11 @@ class FakeUiExecutor implements ChatExecutor {
   calls = 0;
   resets = 0;
 
-  constructor(private readonly failEveryCall = false) {}
+  constructor(private readonly fail = true) {}
 
   async execute(_body: JsonObject, _options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
     this.calls += 1;
-    if (this.calls === 1 || this.failEveryCall) {
+    if (this.fail) {
       const error = new Error('stalled UI');
       error.name = 'UiTimeoutError';
       throw error;
@@ -52,21 +52,8 @@ class FakeUiExecutor implements ChatExecutor {
   }
 }
 
-test('UI timeout resets session once and retries the same request', async () => {
+test('UI timeout is propagated without opening a new conversation or retrying', async () => {
   const delegate = new FakeUiExecutor();
-  const executor = new ResilientChatExecutor(delegate, 'gemini');
-
-  const result = await executor.execute({ messages: [{ role: 'user', content: 'implement' }] });
-
-  assert.equal(result.completion.choices[0]?.message.content, 'ok');
-  assert.equal(delegate.calls, 2);
-  assert.equal(delegate.resets, 1);
-  assert.equal(executor.snapshot().failures, 0);
-  assert.equal(executor.snapshot().successes, 1);
-});
-
-test('second UI timeout is propagated without a retry loop', async () => {
-  const delegate = new FakeUiExecutor(true);
   const executor = new ResilientChatExecutor(delegate, 'gemini');
 
   await assert.rejects(
@@ -74,7 +61,25 @@ test('second UI timeout is propagated without a retry loop', async () => {
     (error: unknown) => error instanceof Error && error.name === 'UiTimeoutError'
   );
 
-  assert.equal(delegate.calls, 2);
-  assert.equal(delegate.resets, 1);
+  assert.equal(delegate.calls, 1);
+  assert.equal(delegate.resets, 0);
   assert.equal(executor.snapshot().failures, 1);
+  assert.equal(executor.snapshot().successes, 0);
+});
+
+test('explicit reset remains available without being used for automatic recovery', async () => {
+  const delegate = new FakeUiExecutor(false);
+  const executor = new ResilientChatExecutor(delegate, 'gemini');
+
+  const result = await executor.execute({ messages: [{ role: 'user', content: 'implement' }] });
+
+  assert.equal(result.completion.choices[0]?.message.content, 'ok');
+  assert.equal(delegate.calls, 1);
+  assert.equal(delegate.resets, 0);
+  assert.equal(executor.snapshot().failures, 0);
+  assert.equal(executor.snapshot().successes, 1);
+
+  assert.ok(executor.reset);
+  await executor.reset!();
+  assert.equal(delegate.resets, 1);
 });
