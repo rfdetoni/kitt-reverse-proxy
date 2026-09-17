@@ -617,6 +617,14 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
   }
 }
 
+function looksLikeContractAttempt(source: string): boolean {
+  const text = source.trim();
+  if (!text) return false;
+  if (text.startsWith('{')) return true;
+  if (/```(?:json)?\s*\{/i.test(text)) return true;
+  return /"(?:action|tool|tool_input|reasoning_summary)"\s*:/.test(text);
+}
+
 export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
   plan: AgentContractPlan
@@ -633,6 +641,7 @@ export function transformAgentContractCompletion(
       && error.message === NON_JSON_CONTRACT_MESSAGE
       && TEXT_FALLBACK_ROUTES.has(plan.route)
       && source.trim()
+      && !looksLikeContractAttempt(source)
     ) {
       response = {
         action: 'final_response',
