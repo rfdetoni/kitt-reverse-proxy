@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { logger } from '../logger.js';
 import type { ProviderPreset } from '../providers/catalog.js';
 
 export type ReasoningLevel = 'instant' | 'medium' | 'high' | 'extra_high';
@@ -62,6 +63,45 @@ const OPTION_SELECTOR = [
   '[data-radix-popper-content-wrapper] button'
 ].join(',');
 
+const TRIGGER_RETRY_ATTEMPTS = 3;
+const TRIGGER_RETRY_DELAY_MS = 120;
+const UNAVAILABLE_CACHE_TTL_MS = 60_000;
+
+interface ReasoningPageState {
+  appliedLevel?: ReasoningLevel;
+  unavailableUntil: Map<ReasoningLevel, number>;
+  warnedDegradations: Set<string>;
+}
+
+const PAGE_REASONING_STATE = new WeakMap<Page, ReasoningPageState>();
+
+function stateFor(page: Page): ReasoningPageState {
+  let state = PAGE_REASONING_STATE.get(page);
+  if (!state) {
+    state = {
+      unavailableUntil: new Map<ReasoningLevel, number>(),
+      warnedDegradations: new Set<string>()
+    };
+    PAGE_REASONING_STATE.set(page, state);
+  }
+  return state;
+}
+
+function warnDegradationOnce(
+  page: Page,
+  requested: ReasoningLevel,
+  applied: ReasoningLevel
+): void {
+  const state = stateFor(page);
+  const key = `${requested}->${applied}`;
+  if (state.warnedDegradations.has(key)) return;
+  state.warnedDegradations.add(key);
+  logger.warn(
+    `Reasoning ${requested} indisponível; usando ${applied} nesta sessão. `
+    + 'A disponibilidade será verificada novamente após o período de cache.'
+  );
+}
+
 function fold(value: string): string {
   return value
     .normalize('NFD')
@@ -116,6 +156,17 @@ async function firstVisible(page: Page, selectors: readonly string[]): Promise<L
   return undefined;
 }
 
+async function reasoningTrigger(page: Page): Promise<Locator | undefined> {
+  for (let attempt = 0; attempt < TRIGGER_RETRY_ATTEMPTS; attempt += 1) {
+    const trigger = await firstVisible(page, CHATGPT_TRIGGER_SELECTORS);
+    if (trigger) return trigger;
+    if (attempt + 1 < TRIGGER_RETRY_ATTEMPTS) {
+      await page.waitForTimeout(TRIGGER_RETRY_DELAY_MS);
+    }
+  }
+  return undefined;
+}
+
 export function parseReasoningEffortHeader(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;
   const normalized = value.trim();
@@ -137,8 +188,17 @@ export function reasoningLevelForEffort(effort: number): ReasoningLevel {
   return 'extra_high';
 }
 
-function acceptableLevels(requested: ReasoningLevel): ReasoningLevel[] {
-  return requested === 'extra_high' ? ['extra_high', 'high'] : [requested];
+export function reasoningFallbackLevels(requested: ReasoningLevel): ReasoningLevel[] {
+  switch (requested) {
+    case 'extra_high':
+      return ['extra_high', 'high', 'medium', 'instant'];
+    case 'high':
+      return ['high', 'medium', 'instant'];
+    case 'medium':
+      return ['medium', 'instant'];
+    case 'instant':
+      return ['instant'];
+  }
 }
 
 async function visibleReasoningOption(
@@ -166,11 +226,37 @@ export async function applyReasoningEffort(
   const requestedLevel = reasoningLevelForEffort(effort);
   if (provider.id !== 'chatgpt') throw new ReasoningNotSupportedError(provider.id);
 
-  const trigger = await firstVisible(page, CHATGPT_TRIGGER_SELECTORS);
+  const state = stateFor(page);
+  if (state.appliedLevel === requestedLevel) {
+    return {
+      requestedEffort: effort,
+      requestedLevel,
+      appliedLevel: requestedLevel,
+      changed: false,
+      degraded: false
+    };
+  }
+
+  const unavailableUntil = state.unavailableUntil.get(requestedLevel) ?? 0;
+  if (unavailableUntil > Date.now() && state.appliedLevel) {
+    warnDegradationOnce(page, requestedLevel, state.appliedLevel);
+    return {
+      requestedEffort: effort,
+      requestedLevel,
+      appliedLevel: state.appliedLevel,
+      changed: false,
+      degraded: state.appliedLevel !== requestedLevel
+    };
+  }
+  if (unavailableUntil) state.unavailableUntil.delete(requestedLevel);
+
+  const trigger = await reasoningTrigger(page);
   if (!trigger) throw new ReasoningNotSupportedError(provider.id);
 
   const currentLevel = levelFromText(await locatorText(trigger));
+  if (currentLevel) state.appliedLevel = currentLevel;
   if (currentLevel === requestedLevel) {
+    state.unavailableUntil.delete(requestedLevel);
     return {
       requestedEffort: effort,
       requestedLevel,
@@ -183,14 +269,34 @@ export async function applyReasoningEffort(
   await trigger.click({ force: true, timeout: 2_000 });
   await page.waitForTimeout(120);
 
-  const option = await visibleReasoningOption(page, acceptableLevels(requestedLevel));
+  const option = await visibleReasoningOption(page, reasoningFallbackLevels(requestedLevel));
   if (!option) {
     await page.keyboard.press('Escape').catch(() => undefined);
+    state.unavailableUntil.set(requestedLevel, Date.now() + UNAVAILABLE_CACHE_TTL_MS);
+    if (currentLevel) {
+      state.appliedLevel = currentLevel;
+      warnDegradationOnce(page, requestedLevel, currentLevel);
+      return {
+        requestedEffort: effort,
+        requestedLevel,
+        appliedLevel: currentLevel,
+        changed: false,
+        degraded: true
+      };
+    }
     throw new ReasoningLevelUnavailableError(requestedLevel);
   }
 
   await option.locator.click({ force: true, timeout: 2_000 });
   await page.waitForTimeout(120);
+
+  state.appliedLevel = option.level;
+  if (option.level === requestedLevel) {
+    state.unavailableUntil.delete(requestedLevel);
+  } else {
+    state.unavailableUntil.set(requestedLevel, Date.now() + UNAVAILABLE_CACHE_TTL_MS);
+    warnDegradationOnce(page, requestedLevel, option.level);
+  }
 
   return {
     requestedEffort: effort,
