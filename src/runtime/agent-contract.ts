@@ -16,7 +16,10 @@ const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
 const MUTATION_ROUTES = new Set(['code-generation', 'code-edit']);
+const TEXT_FALLBACK_ROUTES = new Set(['validate-diff', 'summarize']);
 const ROUTES = new Set(['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat']);
+const CONTRACT_ACTIONS = new Set(['use_tool', 'final_response', 'request_workspace', 'request_tools']);
+const NON_JSON_CONTRACT_MESSAGE = 'A resposta do modelo não é um objeto JSON puro.';
 const SUMMARY_ROUTE_INSTRUCTION = 'ROUTE_INSTRUCTION: This turn is context-summary only. Do not use or request tools. Return action="final_response" and put only the requested summary in content.';
 const MUTATING_RUNTIME_OPERATIONS = new Set([
   'flow.execute',
@@ -433,13 +436,79 @@ function sentenceCount(text: string): number {
   return normalized.split(/(?<=[.!?])\s+/u).filter((part) => part.trim()).length;
 }
 
-function parseStrictContract(text: string): AgentContractResponse {
-  let value: unknown;
-  try {
-    value = JSON.parse(text.trim());
-  } catch {
-    throw new AgentContractValidationError('A resposta do modelo não é um objeto JSON puro.');
+function contractJsonCandidates(text: string): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') {
+        depth += 1;
+        continue;
+      }
+      if (char !== '}') continue;
+
+      depth -= 1;
+      if (depth !== 0) continue;
+
+      const candidateText = text.slice(start, index + 1);
+      try {
+        const candidate = JSON.parse(candidateText);
+        if (
+          isRecord(candidate)
+          && typeof candidate.action === 'string'
+          && CONTRACT_ACTIONS.has(candidate.action)
+          && !seen.has(candidateText)
+        ) {
+          candidates.push(candidate);
+          seen.add(candidateText);
+        }
+      } catch {
+        // Keep scanning later opening braces; surrounding prose may contain braces too.
+      }
+      break;
+    }
   }
+
+  return candidates;
+}
+
+function parseContractValue(text: string): unknown {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const candidates = contractJsonCandidates(trimmed);
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+      throw new AgentContractValidationError('A resposta contém múltiplos objetos JSON compatíveis com o contrato.');
+    }
+    throw new AgentContractValidationError(NON_JSON_CONTRACT_MESSAGE);
+  }
+}
+
+function parseStrictContract(text: string): AgentContractResponse {
+  const value = parseContractValue(text);
   if (!isRecord(value)) throw new AgentContractValidationError('A resposta do modelo deve ser um objeto JSON.');
 
   const expected = new Set(['action', 'tool', 'tool_input', 'content', 'reasoning_summary']);
@@ -454,7 +523,7 @@ function parseStrictContract(text: string): AgentContractResponse {
   }
 
   const action = value.action;
-  if (!['use_tool', 'final_response', 'request_workspace', 'request_tools'].includes(String(action))) {
+  if (!CONTRACT_ACTIONS.has(String(action))) {
     throw new AgentContractValidationError('action inválida.');
   }
   if (value.tool !== null && typeof value.tool !== 'string') throw new AgentContractValidationError('tool deve ser string ou null.');
@@ -554,7 +623,34 @@ export function transformAgentContractCompletion(
 ): OpenAiCompletion {
   const source = completion.choices[0]?.message.content;
   if (typeof source !== 'string') throw new AgentContractValidationError('Resposta do modelo sem conteúdo JSON textual.');
-  const response = parseStrictContract(source);
+
+  let response: AgentContractResponse;
+  try {
+    response = parseStrictContract(source);
+  } catch (error) {
+    if (
+      error instanceof AgentContractValidationError
+      && error.message === NON_JSON_CONTRACT_MESSAGE
+      && TEXT_FALLBACK_ROUTES.has(plan.route)
+      && source.trim()
+    ) {
+      response = {
+        action: 'final_response',
+        tool: null,
+        tool_input: null,
+        content: source.trim(),
+        reasoning_summary: ''
+      };
+      logger.event('warn', 'agent.contract.text_fallback', {
+        contract_session_id: plan.sessionId,
+        route: plan.route,
+        response_bytes: Buffer.byteLength(source, 'utf8')
+      });
+    } else {
+      throw error;
+    }
+  }
+
   validateSemantics(response, plan);
 
   if (response.action === 'request_workspace') {
