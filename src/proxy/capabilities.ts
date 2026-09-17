@@ -23,17 +23,10 @@ function sessionManagementContract(manager: SessionManager): JsonObject {
   };
 }
 
-function reasoningContract(manager: SessionManager): JsonObject {
-  const description = manager.describe();
-  const reasoning = asObject(description.reasoning);
-  if (!reasoning || reasoning.supported !== true) return { supported: false };
-  return {
-    supported: true,
-    dynamic: boolean(reasoning.dynamic, true),
-    header: 'X-Kitt-Reasoning-Effort',
-    range: Array.isArray(reasoning.range) ? reasoning.range : [0, 100],
-    ...(Array.isArray(reasoning.levels) ? { levels: reasoning.levels } : {})
-  };
+function reasoningContract(): JsonObject {
+  // Reasoning is configured by the user in the authenticated WebChat UI.
+  // The reverse proxy intentionally exposes no API-side reasoning control.
+  return { supported: false };
 }
 
 export function providerRecord(provider: ProviderPreset, manager?: SessionManager): JsonObject {
@@ -64,17 +57,14 @@ export function providerRecord(provider: ProviderPreset, manager?: SessionManage
 
 export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
   const sessions = sessionManagementContract(manager);
-  const reasoning = reasoningContract(manager);
   return {
     protocol: 'openai-chat-completions',
     native_tool_roundtrip: true,
     session_header: 'X-Kitt-Session-Id',
     request_id_header: 'X-Kitt-Request-Id',
-    reasoning_header: reasoning.supported === true ? 'X-Kitt-Reasoning-Effort' : null,
-    reasoning_range: reasoning.supported === true ? reasoning.range ?? [0, 100] : [0, 100],
-    reasoning_supported: reasoning.supported === true,
-    reasoning_dynamic: reasoning.dynamic === true,
-    reasoning,
+    reasoning_header: null,
+    reasoning_supported: false,
+    reasoning: reasoningContract(),
     session_management: sessions,
     parallel_tool_calls_recommended: false
   };
@@ -84,7 +74,6 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
   const provider = PROVIDERS.find((item) => item.id === manager.providerId);
   const description = manager.describe();
   const imageInput = manager.transport === 'ui' && Boolean(provider?.ui.supportsImageUpload);
-  const reasoning = reasoningContract(manager);
   const toolCalling = typeof description.toolCalling === 'string' ? description.toolCalling : 'protocol-emulated';
   const resilience = asObject(description.resilience);
 
@@ -108,7 +97,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       supported: imageInput,
       provider: manager.providerId
     },
-    reasoning,
+    reasoning: reasoningContract(),
     resilience: resilience ?? { circuit: 'closed' },
     provider_discovery: {
       list_endpoint: '/v1/providers',
@@ -159,7 +148,6 @@ export function modelRecord(manager: SessionManager): JsonObject {
   const provider = PROVIDERS.find((item) => item.id === manager.providerId);
   const capabilities = runtimeCapabilities(manager, { toolEnforcement: 'auto' } as AppConfig);
   const openai = asObject(asObject(capabilities.protocols)?.openai);
-  const reasoning = reasoningContract(manager);
   const imageInput = manager.transport === 'ui' && Boolean(provider?.ui.supportsImageUpload);
   const model: JsonObject = {
     id: manager.modelId,
@@ -178,7 +166,7 @@ export function modelRecord(manager: SessionManager): JsonObject {
       structured_output: boolean(openai?.structured_outputs, true),
       json_mode: boolean(openai?.json_mode, true),
       image_input: imageInput,
-      reasoning: reasoning.supported === true,
+      reasoning: false,
       embeddings: false
     }
   };
