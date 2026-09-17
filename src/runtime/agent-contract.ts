@@ -5,7 +5,7 @@ import { validateJsonSchema } from '../util/json-schema.js';
 
 export const AGENT_CONTRACT_HEADER = 'X-Kitt-Agent-Contract';
 export const AGENT_CONTRACT_VERSION = 'v1';
-export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o JSON do contrato, sem texto extra.';
+export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o JSON do contrato, sem texto extra. Respeite ROUTE e use somente tools/operações presentes em TOOLS_AVAILABLE.';
 
 const TURN_CONTEXT_MARKER = '[KITT TURN CONTEXT]';
 const TOOL_RESULT_MARKER = '[KITT TOOL RESULT DATA]';
@@ -235,12 +235,52 @@ function extractTools(body: JsonObject): Map<string, ToolDescriptor> {
   return result;
 }
 
-function toolsForPrompt(tools: Map<string, ToolDescriptor>): JsonValue[] {
-  return [...tools.values()].map((tool) => ({
-    name: tool.name,
-    ...(tool.description !== undefined ? { description: tool.description } : {}),
-    ...(tool.parameters !== undefined ? { input_schema: tool.parameters } : {})
-  })) as JsonValue[];
+function runtimeOperationAllowedForRoute(route: string, operation: string): boolean {
+  if (STRICT_READ_ONLY_ROUTES.has(route)) return !MUTATING_RUNTIME_OPERATIONS.has(operation);
+  if (route === 'validate-diff') return !FILE_MUTATING_RUNTIME_OPERATIONS.has(operation);
+  return true;
+}
+
+function toolVisibleForRoute(route: string, name: string): boolean {
+  if (name === 'kitt_runtime') return true;
+  if (STRICT_READ_ONLY_ROUTES.has(route)) return !MUTATING_TOOL_NAME.test(name);
+  if (route === 'validate-diff') return !FILE_MUTATING_TOOL_NAME.test(name);
+  return true;
+}
+
+function routeScopedParameters(route: string, tool: ToolDescriptor): JsonValue | undefined {
+  const parameters = tool.parameters;
+  if (tool.name !== 'kitt_runtime' || !isRecord(parameters)) return parameters;
+  const properties = isRecord(parameters.properties) ? parameters.properties : undefined;
+  const operation = properties && isRecord(properties.operation) ? properties.operation : undefined;
+  if (!operation || !Array.isArray(operation.enum)) return parameters;
+
+  const allowedOperations = operation.enum.filter(
+    (value) => typeof value !== 'string' || runtimeOperationAllowedForRoute(route, value)
+  );
+  return {
+    ...parameters,
+    properties: {
+      ...properties,
+      operation: {
+        ...operation,
+        enum: allowedOperations
+      }
+    }
+  } as JsonValue;
+}
+
+function toolsForPrompt(tools: Map<string, ToolDescriptor>, route: string): JsonValue[] {
+  return [...tools.values()]
+    .filter((tool) => toolVisibleForRoute(route, tool.name))
+    .map((tool) => {
+      const parameters = routeScopedParameters(route, tool);
+      return {
+        name: tool.name,
+        ...(tool.description !== undefined ? { description: tool.description } : {}),
+        ...(parameters !== undefined ? { input_schema: parameters } : {})
+      };
+    }) as JsonValue[];
 }
 
 function hasMutationCapability(tools: Map<string, ToolDescriptor>): boolean {
@@ -344,7 +384,7 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
-    `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools), 'TOOLS_AVAILABLE')}`,
+    `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools, route), 'TOOLS_AVAILABLE')}`,
     `MUTATION_TOOL_AVAILABLE: ${mutationToolAvailable}`,
     `MUTATION_ROUND_TRIP_OBSERVED: ${mutationRoundTripObserved}`,
     ...(mutationRequiredBeforeFinal ? [

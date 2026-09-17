@@ -42,7 +42,10 @@ function body(route = 'chat', workspace: unknown = { files: ['README.md'] }): Js
         parameters: {
           type: 'object',
           properties: {
-            operation: { type: 'string' },
+            operation: {
+              type: 'string',
+              enum: ['repo.read', 'repo.write_file', 'patch.apply', 'process.run']
+            },
             arguments: { type: 'object' }
           },
           required: ['operation', 'arguments'],
@@ -149,6 +152,28 @@ test('rejects prose, markdown and oversized reasoning instead of extracting JSON
     })), plan),
     AgentContractValidationError
   );
+});
+
+test('validate-diff advertises only route-allowed runtime operations', () => {
+  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionScopedTools' });
+  const messages = plan.body.messages as any[];
+  const developer = String(messages[1]?.content || '');
+
+  assert.match(developer, /repo\.read/);
+  assert.match(developer, /process\.run/);
+  assert.doesNotMatch(developer, /repo\.write_file/);
+  assert.doesNotMatch(developer, /patch\.apply/);
+});
+
+test('context-gather does not advertise mutating runtime operations', () => {
+  const plan = prepareAgentContractRequest(body('context-gather'), { sessionId: 'sessionReadOnlyTools' });
+  const messages = plan.body.messages as any[];
+  const developer = String(messages[1]?.content || '');
+
+  assert.match(developer, /repo\.read/);
+  assert.doesNotMatch(developer, /repo\.write_file/);
+  assert.doesNotMatch(developer, /patch\.apply/);
+  assert.doesNotMatch(developer, /process\.run/);
 });
 
 test('validate-diff rejects file mutation but permits validation command execution', () => {
