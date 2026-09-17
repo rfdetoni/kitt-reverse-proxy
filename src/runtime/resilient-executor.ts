@@ -24,7 +24,6 @@ function availabilityFailure(error: unknown): boolean {
   }
   return new Set([
     'UiTimeoutError',
-    'UiAutomationError',
     'UpstreamRedirectError',
     'UpstreamResponseTooLargeError'
   ]).has(error.name);
@@ -100,6 +99,9 @@ export class ResilientChatExecutor implements ChatExecutor {
         }
         throw error;
       }
+      // UiAutomationError means the provider was reachable but our browser
+      // interaction failed. Treating it as provider unavailability can open the
+      // circuit after repeated deterministic DOM failures and hide the real cause.
       if (availabilityFailure(error)) this.recordFailure();
       else this.recordReachable(Date.now() - startedAt);
       throw error;
