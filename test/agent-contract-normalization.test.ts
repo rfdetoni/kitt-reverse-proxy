@@ -77,6 +77,17 @@ test('validate-diff turns plain final prose into a final response instead of HTT
   assert.equal(result.choices[0]?.finish_reason, 'stop');
 });
 
+test('validate-diff does not downgrade malformed contract intent to text fallback', () => {
+  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'normalize-malformed-contract' });
+  assert.throws(
+    () => transformAgentContractCompletion(
+      completion('{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"process.run","arguments":{"command":"echo broken"}}'),
+      plan
+    ),
+    AgentContractValidationError
+  );
+});
+
 test('mutation routes keep rejecting unstructured prose', () => {
   const plan = prepareAgentContractRequest(body('code-edit'), { sessionId: 'normalize-mutation-strict' });
   assert.throws(
