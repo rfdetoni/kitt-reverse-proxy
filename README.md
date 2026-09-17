@@ -182,14 +182,16 @@ For generic chats, `auto` tries network discovery first and falls back to the no
 
 The provider registry is deliberately small and curated rather than quantity-driven.
 
-| Provider | API model | Default transport | UI image input | Reasoning control |
+| Provider | API model | Default transport | UI image input | Reasoning ownership |
 | --- | --- | --- | --- | --- |
-| ChatGPT | `chatgpt-web` | UI | Yes | Yes |
-| Claude | `claude-web` | UI | Yes | No |
-| Gemini | `gemini-web` | UI | Yes | No |
-| Kimi | `kimi-web` | UI | No | No |
-| DeepSeek | `deepseek-web` | UI | No | No |
-| Generic web chat | `adaptive-web-chat` | Network → UI fallback | Depends on target | No |
+| ChatGPT | `chatgpt-web` | UI | Yes | WebChat UI |
+| Claude | `claude-web` | UI | Yes | WebChat UI |
+| Gemini | `gemini-web` | UI | Yes | WebChat UI |
+| Kimi | `kimi-web` | UI | No | WebChat UI |
+| DeepSeek | `deepseek-web` | UI | No | WebChat UI |
+| Generic web chat | `adaptive-web-chat` | Network → UI fallback | Depends on target | Target WebChat |
+
+For browser-backed providers, the proxy never changes the model's reasoning/thinking level from API headers, agent settings or injected prompts. Configure reasoning directly in the authenticated WebChat when the provider exposes that control. Legacy `X-Kitt-Reasoning-Effort` headers are accepted only for compatibility and ignored.
 
 Discovery endpoints:
 
@@ -253,8 +255,9 @@ K.I.T.T.-specific headers:
 ```text
 X-Kitt-Session-Id: stable conversation id
 X-Kitt-Request-Id: unique request id
-X-Kitt-Reasoning-Effort: 0..100 when supported
 ```
+
+`X-Kitt-Reasoning-Effort` is a deprecated compatibility header. If an older client still sends it, the proxy ignores it; it never changes the WebChat reasoning setting.
 
 Chat Completions streaming uses standard SSE and terminates with `[DONE]`. Native tool calls are reconstructed for the Agent CLI round trip. `parallel_tool_calls=false` remains the recommended K.I.T.T. path.
 
