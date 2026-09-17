@@ -128,9 +128,10 @@ test('publishes the exact compatibility surface consumed by KITT Agent CLI', asy
     assert.equal(contract.native_tool_roundtrip, true);
     assert.equal(contract.session_header, 'X-Kitt-Session-Id');
     assert.equal(contract.request_id_header, 'X-Kitt-Request-Id');
-    assert.equal(contract.reasoning_header, 'X-Kitt-Reasoning-Effort');
-    assert.equal(contract.reasoning_supported, true);
-    assert.deepEqual(contract.reasoning_range, [0, 100]);
+    assert.equal(contract.reasoning_header, null);
+    assert.equal(contract.reasoning_supported, false);
+    assert.equal(contract.reasoning_range, undefined);
+    assert.deepEqual(contract.reasoning, { supported: false });
     assert.equal(contract.parallel_tool_calls_recommended, false);
     assert.equal(contract.session_management.header, 'X-Kitt-Session-Id');
     assert.equal(contract.session_management.provider, 'chatgpt');
@@ -142,7 +143,7 @@ test('publishes the exact compatibility surface consumed by KITT Agent CLI', asy
   }
 });
 
-test('streams a native function call with stable session semantics and terminal DONE marker', async () => {
+test('streams a native function call while ignoring legacy reasoning headers', async () => {
   const { manager, server, baseUrl, captured } = await fixture();
   try {
     const response = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -188,7 +189,7 @@ test('streams a native function call with stable session semantics and terminal 
     assert.equal(calls[0].function.name, 'repo.read');
     assert.equal(calls[0].function.arguments, '{"path":"README.md"}');
     assert.equal(events.at(-1)?.choices?.[0]?.finish_reason, 'tool_calls');
-    assert.equal(captured.at(-1)?.reasoningEffort, 80);
+    assert.equal(captured.at(-1)?.reasoningEffort, undefined);
     assert.equal(manager.list().some((session) => session.id === 'conversationA'), true);
   } finally {
     await close(server, manager);
