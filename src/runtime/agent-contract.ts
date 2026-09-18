@@ -606,6 +606,124 @@ function repairJsonSerialization(text: string): string {
   return repaired;
 }
 
+function decodeLooseStringPayload(raw: string): string | undefined {
+  let escaped = '';
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index]!;
+    if (char === '\\') {
+      const next = raw[index + 1];
+      if (next === 'u') {
+        const unicode = raw.slice(index + 2, index + 6);
+        if (/^[0-9a-fA-F]{4}$/u.test(unicode)) {
+          escaped += `\\u${unicode}`;
+          index += 5;
+          continue;
+        }
+        escaped += '\\\\';
+        continue;
+      }
+      if (next && ['"', '\\', '/', 'b', 'f', 'n', 'r', 't'].includes(next)) {
+        escaped += char + next;
+        index += 1;
+        continue;
+      }
+      escaped += '\\\\';
+      continue;
+    }
+    if (char === '"') {
+      escaped += '\\"';
+      continue;
+    }
+    const code = char.charCodeAt(0);
+    if (code < 0x20) {
+      if (char === '\n') escaped += '\\n';
+      else if (char === '\r') escaped += '\\r';
+      else if (char === '\t') escaped += '\\t';
+      else if (char === '\b') escaped += '\\b';
+      else if (char === '\f') escaped += '\\f';
+      else escaped += `\\u${code.toString(16).padStart(4, '0')}`;
+      continue;
+    }
+    escaped += char;
+  }
+
+  try {
+    const parsed = JSON.parse(`"${escaped}"`);
+    return typeof parsed === 'string' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recoverMalformedRepoWriteFileContract(text: string): AgentContractResponse | undefined {
+  const source = text.trim();
+  if (!/"action"\s*:\s*"use_tool"/u.test(source)) return undefined;
+  if (!/"tool"\s*:\s*"kitt_runtime"/u.test(source)) return undefined;
+
+  const operationMatch = /"operation"\s*:\s*"repo\.write_file"/u.exec(source);
+  if (!operationMatch?.index && operationMatch?.index !== 0) return undefined;
+
+  const argumentsIndex = source.indexOf('"arguments"', operationMatch.index);
+  if (argumentsIndex < 0) return undefined;
+
+  const contentField = /"content"\s*:\s*"/gu;
+  contentField.lastIndex = argumentsIndex;
+  const contentMatch = contentField.exec(source);
+  if (!contentMatch?.index) return undefined;
+  const contentStart = contentField.lastIndex;
+
+  const pathPrefix = source.slice(argumentsIndex, contentMatch.index);
+  const pathMatch = /"path"\s*:\s*("(?:\\.|[^"\\])*")/u.exec(pathPrefix);
+  if (!pathMatch) return undefined;
+
+  let pathValue: unknown;
+  try {
+    pathValue = JSON.parse(pathMatch[1]!);
+  } catch {
+    return undefined;
+  }
+  if (typeof pathValue !== 'string' || !pathValue.trim()) return undefined;
+
+  const suffix = /,\s*"content"\s*:\s*null\s*,\s*"reasoning_summary"\s*:\s*("(?:\\.|[^"\\])*")\s*}\s*$/u.exec(source);
+  if (!suffix?.index) return undefined;
+
+  let cursor = suffix.index - 1;
+  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
+  if (source[cursor] !== '}') return undefined;
+  cursor -= 1;
+  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
+  if (source[cursor] !== '}') return undefined;
+  cursor -= 1;
+  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
+  if (source[cursor] !== '"') return undefined;
+
+  const rawContent = source.slice(contentStart, cursor);
+  const decodedContent = decodeLooseStringPayload(rawContent);
+  if (decodedContent === undefined) return undefined;
+
+  let reasoningSummary: unknown;
+  try {
+    reasoningSummary = JSON.parse(suffix[1]!);
+  } catch {
+    return undefined;
+  }
+  if (typeof reasoningSummary !== 'string') return undefined;
+
+  return {
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: {
+      operation: 'repo.write_file',
+      arguments: {
+        path: pathValue,
+        content: decodedContent
+      }
+    },
+    content: null,
+    reasoning_summary: reasoningSummary
+  };
+}
+
 function parseLooseJsonObject(text: string): Record<string, unknown> | undefined {
   const trimmed = text.trim();
   const attempts = [trimmed];
@@ -867,10 +985,13 @@ export function transformAgentContractCompletion(
   try {
     response = parseStrictContract(source);
   } catch (error) {
-    const normalizedToolCall = contractFromKittToolEnvelope(source);
+    const normalizedWriteFile = recoverMalformedRepoWriteFileContract(source);
+    const normalizedToolCall = normalizedWriteFile ?? contractFromKittToolEnvelope(source);
     if (normalizedToolCall) {
       response = normalizedToolCall;
-      logger.event('warn', 'agent.contract.tool_envelope_normalized', {
+      logger.event('warn', normalizedWriteFile
+        ? 'agent.contract.write_file_serialization_normalized'
+        : 'agent.contract.tool_envelope_normalized', {
         contract_session_id: plan.sessionId,
         route: plan.route,
         response_bytes: Buffer.byteLength(source, 'utf8')
