@@ -1,6 +1,7 @@
 import { PROVIDERS, type ProviderPreset } from '../providers/catalog.js';
 import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
+import { AGENT_CONTRACT_HEADER, AGENT_CONTRACT_VERSION, AGENT_ROUTE_HEADER, AGENT_ROUTES } from '../runtime/agent-contract.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
 
 function asObject(value: JsonValue | undefined): JsonObject | undefined {
@@ -60,6 +61,12 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
   return {
     protocol: 'openai-chat-completions',
     native_tool_roundtrip: true,
+    agent_contract: {
+      version: AGENT_CONTRACT_VERSION,
+      header: AGENT_CONTRACT_HEADER,
+      route_header: AGENT_ROUTE_HEADER,
+      routes: [...AGENT_ROUTES]
+    },
     session_header: 'X-Kitt-Session-Id',
     request_id_header: 'X-Kitt-Request-Id',
     reasoning_header: null,
