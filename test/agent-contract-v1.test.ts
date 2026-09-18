@@ -62,6 +62,8 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
 
   assert.equal(messages[0].role, 'system');
   assert.equal(messages[0].content, AGENT_CONTRACT_SYSTEM_PROMPT);
+  assert.match(messages[0].content, /preserve a formatação normal da linguagem\/projeto/);
+  assert.match(messages[0].content, /Linguagens sensíveis a indentação/);
   assert.equal(messages[1].role, 'developer');
   assert.match(messages[1].content, /TOOLS_AVAILABLE:/);
   assert.match(messages[1].content, /Execute KITT runtime operations/);
