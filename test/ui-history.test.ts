@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalMessages, deltaFromCumulative, historyFingerprint, historyIsPrefix, selectMinimalUiPrompt } from '../src/runtime/ui-history.js';
+import { canonicalLogicalMessages, canonicalMessages, deltaFromCumulative, historyFingerprint, historyIsPrefix, selectMinimalUiPrompt, userTurnsAreCompatible } from '../src/runtime/ui-history.js';
 
 test('canonical history keeps developer instructions and fingerprints exact retries', () => {
   const body = { messages: [{ role: 'developer', content: 'policy' }, { role: 'user', content: 'hello' }] };
@@ -127,4 +127,32 @@ test('assistant-tail request never reselects an earlier user message', () => {
     ]
   });
   assert.equal(selectMinimalUiPrompt(messages), undefined);
+});
+
+
+test('transient contract repair prompt is excluded from logical API history', () => {
+  const originalBody = {
+    messages: [
+      { role: 'developer', content: 'contract' },
+      { role: 'user', content: 'implement feature' }
+    ]
+  };
+  const repairBody = {
+    messages: [
+      ...originalBody.messages,
+      { role: 'user', content: '[KITT CONTRACT REPAIR]\nreturn valid JSON' }
+    ]
+  };
+
+  const actual = canonicalMessages(repairBody);
+  const logical = canonicalLogicalMessages(repairBody, originalBody);
+  const previous = [
+    ...canonicalMessages(originalBody),
+    { role: 'assistant', text: 'invalid contract output' }
+  ];
+
+  assert.equal(actual.filter((message) => message.role === 'user').length, 2);
+  assert.equal(logical.filter((message) => message.role === 'user').length, 1);
+  assert.equal(logical.at(-1)?.text, 'implement feature');
+  assert.equal(userTurnsAreCompatible(previous, logical), true);
 });
