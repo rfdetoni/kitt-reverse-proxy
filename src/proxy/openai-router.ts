@@ -5,6 +5,7 @@ import { adaptCompletionForLegacyFunctions, requestMayReturnToolCalls } from '..
 import {
   AGENT_CONTRACT_HEADER,
   AGENT_CONTRACT_VERSION,
+  AGENT_ROUTE_HEADER,
   AgentContractError,
   AgentContractValidationError,
   prepareAgentContractRequest,
@@ -114,7 +115,7 @@ export function reinforceAgentContractPlan(plan: AgentContractPlan): AgentContra
 
 function prepareContract(req: Request, body: JsonObject, sessionId: string | undefined): AgentContractPlan | undefined {
   if (!agentContractEnabled(req)) return undefined;
-  const route = req.get('x-kitt-route');
+  const route = req.get(AGENT_ROUTE_HEADER);
   const plan = prepareAgentContractRequest(body, {
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(route !== undefined ? { route } : {})
