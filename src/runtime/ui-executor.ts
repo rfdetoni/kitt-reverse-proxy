@@ -29,6 +29,7 @@ import {
 } from '../mapping/tool-calling.js';
 import {
   canonicalMessages,
+  canonicalLogicalMessages,
   computeDeltas,
   selectMinimalUiPrompts,
   historyIsPrefix,
@@ -244,8 +245,13 @@ export class UiChatExecutor implements ChatExecutor {
     const executionStartedAt = Date.now();
     throwIfAborted(options?.signal);
     const incoming = canonicalMessages(body);
+    const logicalIncoming = canonicalLogicalMessages(body, options?.logicalHistoryBody);
     if (!incoming.length) throw new UiAutomationError('Nenhuma mensagem textual utilizável foi recebida.');
-    if (historyChars(incoming) > RESOURCE_LIMITS.uiHistoryChars) {
+    if (!logicalIncoming.length) throw new UiAutomationError('O histórico lógico da requisição está vazio.');
+    if (
+      historyChars(incoming) > RESOURCE_LIMITS.uiHistoryChars
+      || historyChars(logicalIncoming) > RESOURCE_LIMITS.uiHistoryChars
+    ) {
       throw new UiAutomationError(`Histórico UI excede ${RESOURCE_LIMITS.uiHistoryChars} caracteres.`);
     }
 
@@ -253,7 +259,7 @@ export class UiChatExecutor implements ChatExecutor {
     if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) return this.lastResult;
 
     const previousUserTurns = this.history.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
-    const incomingUserTurns = incoming.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
+    const incomingUserTurns = logicalIncoming.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
     const tail = incoming.at(-1);
     const continuingSyntheticTool = Boolean(
       tail
@@ -271,7 +277,7 @@ export class UiChatExecutor implements ChatExecutor {
       && !continuingTool
       && incomingUserTurns > 0
       && this.history.length
-      && (!userTurnsAreCompatible(this.history, incoming) || incomingUserTurns < previousUserTurns)
+      && (!userTurnsAreCompatible(this.history, logicalIncoming) || incomingUserTurns < previousUserTurns)
     ) {
       logger.info('Novo histórico de conversa detectado pelo cliente API. Executando reset automático da sessão browser...');
       await this.reset(options?.signal);
@@ -311,7 +317,7 @@ export class UiChatExecutor implements ChatExecutor {
     const syntheticHostResult = selectedPrompt.role === 'user' && isSyntheticToolResult(selectedPrompt);
     const currentTaskKey = selectedPrompt.role === 'tool' || syntheticHostResult
       ? this.enforcementTaskKey
-      : toolEnforcementTaskKey(incoming);
+      : toolEnforcementTaskKey(logicalIncoming);
     if (currentTaskKey !== this.enforcementTaskKey) {
       this.enforcementTaskKey = currentTaskKey;
       this.explorationEvidence = false;
@@ -321,7 +327,7 @@ export class UiChatExecutor implements ChatExecutor {
       this.mutationCallIds.clear();
     }
 
-    const explicitUserText = [...incoming].reverse().find(
+    const explicitUserText = [...logicalIncoming].reverse().find(
       (message) => message.role === 'user' && !isSyntheticToolResult(message)
     )?.text;
     if (!syntheticHostResult && explicitUserText) {
@@ -497,7 +503,7 @@ export class UiChatExecutor implements ChatExecutor {
     this.protocolFingerprint = protocolFingerprint;
     this.toolProtocolWasEnabled = protocolEnabled;
     this.systemContextWasEnabled = Boolean(plan.systemPrompt);
-    this.storeHistory(incoming, textToParse);
+    this.storeHistory(logicalIncoming, textToParse);
 
     const deltas = parsed.tool_calls?.length
       ? []
