@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildAgentContractRepairBody,
+  contractRepairExecutionOptions,
   reinforceAgentContractPlan
 } from '../src/proxy/openai-router.js';
 import {
@@ -75,4 +76,20 @@ test('semantic retry includes the validation cause and available tool names', ()
   assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
   assert.match(repair, /request_workspace is forbidden/);
   assert.match(repair, /Do not repeat the invalid action/);
+});
+
+
+test('semantic repair preserves the original caller-visible history', () => {
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId: 'repair-history-isolation' })
+  );
+  const options = contractRepairExecutionOptions(plan, {});
+  const logical = options.logicalHistoryBody as JsonObject;
+
+  assert.equal(logical, plan.body);
+  const messages = logical.messages as Array<{ role?: string; content?: string }>;
+  assert.equal(
+    messages.some((message) => message.content?.includes('[KITT CONTRACT REPAIR]')),
+    false
+  );
 });
