@@ -127,7 +127,7 @@ function write(
     return;
   }
   const prefix = level === 'error' ? '[-]' : level === 'warn' ? '[!]' : level === 'success' ? '[+]' : level === 'debug' ? '[d]' : level === 'trace' ? '[t]' : '[i]';
-  const details = Object.keys(safeFields).length ? ` ${JSON.stringify(safeFields)}` : '';
+  const details = verbosity >= 1 && Object.keys(safeFields).length ? ` ${JSON.stringify(safeFields)}` : '';
   emit(`${prefix} ${cleaned}${details}`);
 }
 
