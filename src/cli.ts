@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
 
-  configureLogger({ format: config.logFormat, level: config.logLevel, file: config.logFile });
+  configureLogger({ format: config.logFormat, level: config.logLevel ?? 0, file: config.logFile });
   logger.debug('proxy.config', { config });
   logger.trace('proxy.config.full', { config, argv: args });
 
