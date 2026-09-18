@@ -199,6 +199,15 @@ function recordContractAttempt(
     ...(validationError ? { validation_reason: validationError.message } : {}),
     ...contractResponseDigest(result)
   });
+  logger.trace('agent.contract.attempt.raw', {
+    contract_session_id: plan.sessionId,
+    route: plan.route,
+    attempt,
+    validation_error: validationError?.message ?? null,
+    completion: result.completion,
+    deltas: result.deltas,
+    metadata: result.metadata ?? null
+  });
 }
 
 async function executeAgentContract(
@@ -212,6 +221,13 @@ async function executeAgentContract(
     deltas: []
   });
 
+  logger.trace('agent.contract.request.raw', {
+    contract_session_id: plan.sessionId,
+    route: plan.route,
+    attempt: 'initial',
+    body: plan.body,
+    options
+  });
   const first = await manager.execute(plan.sessionId, plan.body, options);
   let firstValidationError: AgentContractValidationError | undefined;
   try {
@@ -229,9 +245,17 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
+  const repairBody = buildAgentContractRepairBody(plan, firstValidationError);
+  logger.trace('agent.contract.request.raw', {
+    contract_session_id: plan.sessionId,
+    route: plan.route,
+    attempt: 'repair',
+    body: repairBody,
+    options: contractRepairExecutionOptions(plan, options)
+  });
   const retry = await manager.execute(
     plan.sessionId,
-    buildAgentContractRepairBody(plan, firstValidationError),
+    repairBody,
     contractRepairExecutionOptions(plan, options)
   );
   let repairValidationError: AgentContractValidationError | undefined;
@@ -250,9 +274,20 @@ async function executeAgentContract(
     repairValidationError = error;
   }
 
+  const serializationRepairBody = buildAgentContractSerializationRepairBody(
+    plan,
+    repairValidationError
+  );
+  logger.trace('agent.contract.request.raw', {
+    contract_session_id: plan.sessionId,
+    route: plan.route,
+    attempt: 'serialization-repair',
+    body: serializationRepairBody,
+    options: contractRepairExecutionOptions(plan, options)
+  });
   const serializationRetry = await manager.execute(
     plan.sessionId,
-    buildAgentContractSerializationRepairBody(plan, repairValidationError),
+    serializationRepairBody,
     contractRepairExecutionOptions(plan, options)
   );
   try {
@@ -315,7 +350,23 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const reasoningEffort = parseReasoningEffortHeader(req.get('x-kitt-reasoning-effort'));
         const validatedBody = validateOpenAiChatRequest(req.body);
+        logger.trace('openai.chat.request.raw', {
+          headers: req.headers,
+          body: validatedBody,
+          session_id: sessionId ?? null,
+          reasoning_effort: reasoningEffort ?? null
+        });
         const contract = prepareContract(req, validatedBody, sessionId);
+        if (contract) {
+          logger.trace('openai.chat.contract.plan', {
+            session_id: contract.sessionId,
+            route: contract.route,
+            workspace_provided: contract.workspaceProvided,
+            mutation_tool_available: contract.mutationToolAvailable,
+            mutation_round_trip_observed: contract.mutationRoundTripObserved,
+            body: contract.body
+          });
+        }
         const body = contract?.body ?? ensureAgentExecutionContext(validatedBody);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
@@ -357,7 +408,23 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
         const converted = parseRequestBody(responsesBodyToChat, source);
+        logger.trace('openai.responses.request.raw', {
+          headers: req.headers,
+          body: source,
+          converted,
+          session_id: sessionId ?? null
+        });
         const contract = prepareContract(req, converted, sessionId);
+        if (contract) {
+          logger.trace('openai.responses.contract.plan', {
+            session_id: contract.sessionId,
+            route: contract.route,
+            workspace_provided: contract.workspaceProvided,
+            mutation_tool_available: contract.mutationToolAvailable,
+            mutation_round_trip_observed: contract.mutationRoundTripObserved,
+            body: contract.body
+          });
+        }
         const body = contract?.body ?? ensureAgentExecutionContext(converted);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = { signal };
