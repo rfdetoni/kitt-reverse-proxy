@@ -5,6 +5,8 @@ import { validateJsonSchema } from '../util/json-schema.js';
 
 export const AGENT_CONTRACT_HEADER = 'X-Kitt-Agent-Contract';
 export const AGENT_CONTRACT_VERSION = 'v1';
+export const AGENT_ROUTE_HEADER = 'X-Kitt-Route';
+export const AGENT_ROUTES = ['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat'] as const;
 export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o JSON do contrato, sem texto extra. Respeite ROUTE e use somente tools/operações presentes em TOOLS_AVAILABLE.';
 
 const TURN_CONTEXT_MARKER = '[KITT TURN CONTEXT]';
@@ -17,7 +19,7 @@ const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
 const MUTATION_ROUTES = new Set(['code-generation', 'code-edit']);
 const TEXT_FALLBACK_ROUTES = new Set(['validate-diff', 'summarize']);
-const ROUTES = new Set(['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat']);
+const ROUTES = new Set<string>(AGENT_ROUTES);
 const CONTRACT_ACTIONS = new Set(['use_tool', 'final_response', 'request_workspace', 'request_tools']);
 const NON_JSON_CONTRACT_MESSAGE = 'A resposta do modelo não é um objeto JSON puro.';
 const SUMMARY_ROUTE_INSTRUCTION = 'ROUTE_INSTRUCTION: This turn is context-summary only. Do not use or request tools. Return action="final_response" and put only the requested summary in content.';
