@@ -1,11 +1,16 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { RESOURCE_LIMITS } from './core/resource-limits.js';
 import { getRequestContext } from './util/request-context.js';
 
 export type LogFormat = 'text' | 'json';
 export type LogSink = 'stdout' | 'stderr';
+export type LogLevel = 0 | 1 | 2;
 
 let format: LogFormat = 'text';
 let sink: LogSink = 'stdout';
+let verbosity: LogLevel = 0;
+let filePath: string | undefined;
 
 const RESERVED_FIELDS = new Set([
   'timestamp', 'level', 'request_id', 'session_id', 'provider', 'event', 'duration_ms', 'message'
@@ -37,25 +42,25 @@ export function sanitizeLogMessage(message: string): string {
   });
 }
 
-function sanitizeField(value: unknown, key: string, depth: number): unknown {
+function sanitizeField(value: unknown, key: string, depth: number, full = false): unknown {
   if (SENSITIVE_FIELD.test(key)) return '[REDACTED]';
-  if (depth >= RESOURCE_LIMITS.structuredLogDepth) return '[MAX_DEPTH]';
+  if (!full && depth >= RESOURCE_LIMITS.structuredLogDepth) return '[MAX_DEPTH]';
   if (typeof value === 'string') return sanitizeLogMessage(value);
   if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) return value;
   if (value instanceof Error) return { name: value.name, message: sanitizeLogMessage(value.message) };
   if (Array.isArray(value)) {
-    const items = value.slice(0, RESOURCE_LIMITS.structuredLogArrayItems)
-      .map((item) => sanitizeField(item, key, depth + 1));
-    if (value.length > items.length) items.push(`[TRUNCATED:${value.length - items.length}]`);
+    const items = (full ? value : value.slice(0, RESOURCE_LIMITS.structuredLogArrayItems))
+      .map((item) => sanitizeField(item, key, depth + 1, full));
+    if (!full && value.length > items.length) items.push(`[TRUNCATED:${value.length - items.length}]`);
     return items;
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>);
     const out: Record<string, unknown> = {};
-    for (const [childKey, childValue] of entries.slice(0, RESOURCE_LIMITS.structuredLogObjectKeys)) {
-      out[childKey] = sanitizeField(childValue, childKey, depth + 1);
+    for (const [childKey, childValue] of (full ? entries : entries.slice(0, RESOURCE_LIMITS.structuredLogObjectKeys))) {
+      out[childKey] = sanitizeField(childValue, childKey, depth + 1, full);
     }
-    if (entries.length > RESOURCE_LIMITS.structuredLogObjectKeys) {
+    if (!full && entries.length > RESOURCE_LIMITS.structuredLogObjectKeys) {
       out.__truncated__ = entries.length - RESOURCE_LIMITS.structuredLogObjectKeys;
     }
     return out;
@@ -63,27 +68,53 @@ function sanitizeField(value: unknown, key: string, depth: number): unknown {
   return sanitizeLogMessage(String(value));
 }
 
-function sanitizeFields(fields: Record<string, unknown>): Record<string, unknown> {
+function sanitizeFields(fields: Record<string, unknown>, full = false): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (RESERVED_FIELDS.has(key)) continue;
-    out[key] = sanitizeField(value, key, 0);
+    out[key] = sanitizeField(value, key, 0, full);
   }
   return out;
 }
 
-export function configureLogger(options: { format?: LogFormat; sink?: LogSink }): void {
+export function configureLogger(options: {
+  format?: LogFormat;
+  sink?: LogSink;
+  level?: LogLevel;
+  file?: string | undefined;
+}): void {
   if (options.format) format = options.format;
   if (options.sink) sink = options.sink;
+  if (options.level !== undefined) verbosity = options.level;
+  if (options.file !== undefined) {
+    filePath = options.file || undefined;
+    if (filePath) mkdirSync(dirname(filePath), { recursive: true });
+  }
 }
 
-function write(level: string, event: string, message: string, fields: Record<string, unknown> = {}): void {
-  const context = getRequestContext();
+export function currentLogLevel(): LogLevel {
+  return verbosity;
+}
+
+function emit(rendered: string): void {
   const output = sink === 'stderr' ? console.error : console.log;
+  output(rendered);
+  if (filePath) appendFileSync(filePath, rendered + '\n', { encoding: 'utf8' });
+}
+
+function write(
+  level: string,
+  event: string,
+  message: string,
+  fields: Record<string, unknown> = {},
+  full = false
+): void {
+  const context = getRequestContext();
   const cleaned = sanitizeLogMessage(message);
+  const safeFields = sanitizeFields(fields, full);
   if (format === 'json') {
-    output(JSON.stringify({
-      ...sanitizeFields(fields),
+    emit(JSON.stringify({
+      ...safeFields,
       timestamp: new Date().toISOString(),
       level,
       request_id: context?.requestId ?? null,
@@ -95,8 +126,9 @@ function write(level: string, event: string, message: string, fields: Record<str
     }));
     return;
   }
-  const prefix = level === 'error' ? '[-]' : level === 'warn' ? '[!]' : level === 'success' ? '[+]' : '[i]';
-  output(`${prefix} ${cleaned}`);
+  const prefix = level === 'error' ? '[-]' : level === 'warn' ? '[!]' : level === 'success' ? '[+]' : level === 'debug' ? '[d]' : level === 'trace' ? '[t]' : '[i]';
+  const details = Object.keys(safeFields).length ? ` ${JSON.stringify(safeFields)}` : '';
+  emit(`${prefix} ${cleaned}${details}`);
 }
 
 export const logger = Object.freeze({
@@ -110,5 +142,13 @@ export const logger = Object.freeze({
   error(message: string): void { write('error', 'error', message); },
   event(level: 'info' | 'warn' | 'error', event: string, fields: Record<string, unknown> = {}): void {
     write(level, event, typeof fields.message === 'string' ? fields.message : event, fields);
+  },
+  debug(event: string, fields: Record<string, unknown> = {}): void {
+    if (verbosity < 1) return;
+    write('debug', event, typeof fields.message === 'string' ? fields.message : event, fields);
+  },
+  trace(event: string, fields: Record<string, unknown> = {}): void {
+    if (verbosity < 2) return;
+    write('trace', event, typeof fields.message === 'string' ? fields.message : event, fields, true);
   }
 });
