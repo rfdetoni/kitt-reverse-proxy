@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { availableParallelism, cpus } from 'node:os';
 import { readdir, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -7,9 +6,6 @@ import process from 'node:process';
 const root = process.cwd();
 const srcDir = resolve(root, 'src');
 const outDir = resolve(root, 'dist');
-const cpuCount = availableParallelism?.() || cpus().length || 1;
-const configuredJobs = Number.parseInt(process.env.GOMAXPROCS || '', 10);
-const parallelism = Number.isFinite(configuredJobs) && configuredJobs > 0 ? Math.min(configuredJobs, cpuCount) : cpuCount;
 
 async function collectTypeScriptFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -55,4 +51,4 @@ await esbuild({
 });
 
 const elapsed = Math.round(performance.now() - startedAt);
-console.log(`Fast multicore build: ${entryPoints.length} modules in ${elapsed}ms using up to ${parallelism} logical CPUs.`);
+console.log(`Fast esbuild compile: ${entryPoints.length} modules in ${elapsed}ms.`);
