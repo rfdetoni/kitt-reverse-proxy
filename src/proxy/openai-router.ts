@@ -156,6 +156,7 @@ export function buildAgentContractSerializationRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the intended action, but emit exactly one syntactically valid JSON object matching the output contract.',
       'Escape every newline, tab, backslash, quote, and control character inside string values using JSON escapes. Never place literal newlines inside a JSON string.',
+      'When serializing repo.write_file or patch content, preserve the original file indentation and line breaks exactly inside the escaped string. Never flatten or minify file content to make the outer JSON easier to serialize.',
       'Do not use markdown fences, prose, comments, or trailing text.',
       'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string.',
       ...constraints,
