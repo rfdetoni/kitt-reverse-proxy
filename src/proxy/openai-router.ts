@@ -197,7 +197,13 @@ async function executeAgentContract(
   const retry = await manager.execute(
     plan.sessionId,
     buildAgentContractRepairBody(plan, firstValidationError),
-    options
+    {
+      ...options,
+      // The repair prompt is an internal transport control message. Persist
+      // the repaired answer against the original logical API request so the
+      // next caller turn does not appear to rewind or fork the conversation.
+      logicalHistoryBody: plan.body
+    }
   );
   try {
     const transformed = transform(retry);
