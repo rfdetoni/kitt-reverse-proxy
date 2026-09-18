@@ -110,6 +110,8 @@ test('serialization repair explicitly requires escaped JSON strings', () => {
   assert.match(repair, /KITT CONTRACT SERIALIZATION REPAIR/);
   assert.match(repair, /Escape every newline, tab, backslash, quote/);
   assert.match(repair, /Never place literal newlines inside a JSON string/);
+  assert.match(repair, /preserve the original file indentation and line breaks exactly/);
+  assert.match(repair, /Never flatten or minify file content/);
   assert.match(repair, /tool_input must remain a JSON object/);
   assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
 });
