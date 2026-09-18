@@ -166,7 +166,7 @@ function validateDefaults(config: AppConfig): void {
   config.maxSessions = integer(config.maxSessions, 'PROXY_MAX_SESSIONS');
   config.sessionIdleTimeoutMs = integer(config.sessionIdleTimeoutMs, 'PROXY_SESSION_IDLE_TIMEOUT_MS');
   config.logFormat = logFormat(config.logFormat);
-  config.logLevel = logLevel(config.logLevel);
+  config.logLevel = logLevel(config.logLevel ?? 0);
   config.toolEnforcement = toolEnforcement(config.toolEnforcement ?? 'explore-first');
   config.provider = provider(config.provider);
   config.transport = transport(config.transport);
