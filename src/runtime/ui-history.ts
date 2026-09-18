@@ -19,6 +19,18 @@ export function canonicalMessages(body: JsonObject): CanonicalMessage[] {
   })).filter((message) => message.text || ['system', 'developer'].includes(message.role));
 }
 
+/**
+ * Resolve the caller-visible history for a UI execution. Internal control
+ * prompts (contract repair, future transport recovery prompts) may be sent to
+ * the browser without becoming part of the API conversation history.
+ */
+export function canonicalLogicalMessages(
+  body: JsonObject,
+  logicalHistoryBody?: JsonObject
+): CanonicalMessage[] {
+  return canonicalMessages(logicalHistoryBody ?? body);
+}
+
 export function sameMessage(left: CanonicalMessage, right: CanonicalMessage): boolean {
   return left.role === right.role && left.text === right.text;
 }
