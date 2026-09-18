@@ -163,6 +163,39 @@ test('normalizes a kitt tool envelope into the contract tool call', () => {
   assert.match(args.arguments.content, /MeuFazTudo/);
 });
 
+test('recovers malformed repo.write_file contract when file JSON quotes are not escaped', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'normalize-write-file-json-content' }
+  );
+  const source = '{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.write_file","arguments":{"path":"frontend/angular.json","content":"{\\n "$schema": "./node_modules/@angular/cli/lib/config/schema.json",\\n "version": 1,\\n "projects": {"meufaztudo-frontend": {"projectType": "application"}}\\n}\\n"}},"content":null,"reasoning_summary":"Configuração Angular criada."}';
+
+  const result = transformAgentContractCompletion(completion(source), plan);
+  const call = result.choices[0]?.message.tool_calls?.[0];
+  assert.equal(call?.function.name, 'kitt_runtime');
+
+  const args = JSON.parse(call?.function.arguments || '{}');
+  assert.equal(args.operation, 'repo.write_file');
+  assert.equal(args.arguments.path, 'frontend/angular.json');
+  assert.equal(
+    args.arguments.content,
+    '{\n "$schema": "./node_modules/@angular/cli/lib/config/schema.json",\n "version": 1,\n "projects": {"meufaztudo-frontend": {"projectType": "application"}}\n}\n'
+  );
+});
+
+test('malformed non-write contract remains fail-closed', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'normalize-non-write-malformed' }
+  );
+  const source = '{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.read","arguments":{"path":"a"b.txt"}},"content":null,"reasoning_summary":"read"}';
+
+  assert.throws(
+    () => transformAgentContractCompletion(completion(source), plan),
+    AgentContractValidationError
+  );
+});
+
 test('mutation routes keep rejecting unstructured prose', () => {
   const plan = prepareAgentContractRequest(body('code-edit'), { sessionId: 'normalize-mutation-strict' });
   assert.throws(
