@@ -684,7 +684,7 @@ function recoverMalformedRepoWriteFileContract(text: string): AgentContractRespo
   }
   if (typeof pathValue !== 'string' || !pathValue.trim()) return undefined;
 
-  const suffix = /,\s*"content"\s*:\s*null\s*,\s*"reasoning_summary"\s*:\s*("(?:\\.|[^"\\])*")\s*}\s*$/u.exec(source);
+  const suffix = /,\s*"content"\s*:\s*null\s*,\s*"reasoning_summary"\s*:\s*("(?:\\.|[^"\\])*")\s*\}\s*$/u.exec(source);
   if (!suffix?.index) return undefined;
 
   let cursor = suffix.index - 1;
