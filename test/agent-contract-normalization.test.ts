@@ -47,6 +47,27 @@ function finalContract(content = 'ok'): string {
   });
 }
 
+function bodyWithRuntimeTool(route: string): JsonObject {
+  const source = body(route);
+  source.tools = [{
+    type: 'function',
+    function: {
+      name: 'kitt_runtime',
+      description: 'Execute KITT runtime operations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          operation: { type: 'string' },
+          arguments: { type: 'object' }
+        },
+        required: ['operation', 'arguments'],
+        additionalProperties: false
+      }
+    }
+  }];
+  return source;
+}
+
 test('recovers a single contract object wrapped in markdown or prose', () => {
   const plan = prepareAgentContractRequest(body('code-edit'), { sessionId: 'normalize-wrapped' });
 
@@ -86,6 +107,60 @@ test('validate-diff does not downgrade malformed contract intent to text fallbac
     ),
     AgentContractValidationError
   );
+});
+
+test('repairs literal newlines inside contract string values locally', () => {
+  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'normalize-literal-newline' });
+  const malformed = [
+    '{',
+    '"action":"final_response",',
+    '"tool":null,',
+    '"tool_input":null,',
+    '"content":"linha 1',
+    'linha 2",',
+    '"reasoning_summary":"ok"',
+    '}'
+  ].join('\n');
+
+  const result = transformAgentContractCompletion(completion(malformed), plan);
+  assert.equal(result.choices[0]?.message.content, 'linha 1\nlinha 2');
+});
+
+test('normalizes a kitt tool envelope into the contract tool call', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'normalize-kitt-envelope' }
+  );
+  const source = [
+    '<kitt-tool>',
+    '{',
+    '"id":"call_1",',
+    '"name":"kitt_runtime",',
+    '"arguments":{',
+    '  "operation":"repo.write_file",',
+    '  "arguments":{',
+    '    "path":"frontend/src/app/app.component.ts",',
+    '    "content":"import { Component } from \'@angular/core\';',
+    '',
+    '@Component({',
+    '  selector: "app-root",',
+    '  template: "<h1>MeuFazTudo</h1>"',
+    '})',
+    'export class AppComponent {}"',
+    '  }',
+    '}',
+    '}',
+    '</kitt-tool>'
+  ].join('\n');
+
+  const result = transformAgentContractCompletion(completion(source), plan);
+  const call = result.choices[0]?.message.tool_calls?.[0];
+  assert.equal(call?.function.name, 'kitt_runtime');
+  const args = JSON.parse(call?.function.arguments || '{}');
+  assert.equal(args.operation, 'repo.write_file');
+  assert.equal(args.arguments.path, 'frontend/src/app/app.component.ts');
+  assert.match(args.arguments.content, /selector: "app-root"/);
+  assert.match(args.arguments.content, /MeuFazTudo/);
 });
 
 test('mutation routes keep rejecting unstructured prose', () => {
