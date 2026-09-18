@@ -183,9 +183,16 @@ async function executeAgentContract(
   plan: AgentContractPlan,
   options: ChatExecutionOptions
 ): Promise<ChatExecutionResult> {
-  const transform = (result: ChatExecutionResult): ChatExecutionResult => ({
+  const transform = (
+    result: ChatExecutionResult,
+    finalTextRescue = false
+  ): ChatExecutionResult => ({
     ...result,
-    completion: transformAgentContractCompletion(result.completion, plan),
+    completion: transformAgentContractCompletion(
+      result.completion,
+      plan,
+      finalTextRescue ? { finalTextRescue: true } : {}
+    ),
     deltas: []
   });
 
@@ -212,7 +219,7 @@ async function executeAgentContract(
     contractRepairExecutionOptions(plan, options)
   );
   try {
-    const transformed = transform(retry);
+    const transformed = transform(retry, true);
     recordAgentContractValidation(plan.sessionId, true);
     recordContractAttempt(plan, 'repair', retry);
     return transformed;

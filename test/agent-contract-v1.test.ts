@@ -224,3 +224,60 @@ test('returns a structured orchestration error when workspace is explicitly requ
     (error: unknown) => error instanceof AgentContractError && error.code === 'workspace_context_required' && error.status === 409
   );
 });
+
+
+test('validate-diff final repair rescues malformed contract text instead of returning 502', () => {
+  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionRepairRescue' });
+  const malformed = '```json\n{"action":"final_response","tool":null,"tool_input":null,"content":"tests ok"\n```';
+
+  assert.throws(
+    () => transformAgentContractCompletion(completion(malformed), plan),
+    AgentContractValidationError
+  );
+
+  const rescued = transformAgentContractCompletion(
+    completion(malformed),
+    plan,
+    { finalTextRescue: true }
+  );
+  assert.equal(rescued.choices[0]?.message.content, malformed);
+  assert.equal(rescued.choices[0]?.finish_reason, 'stop');
+});
+
+test('mutation route accepts plain final text only after a mutation round trip', () => {
+  const followUp = body('code-edit');
+  followUp.messages = [
+    ...(followUp.messages as any[]),
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{
+        id: 'call_mutation',
+        type: 'function',
+        function: {
+          name: 'kitt_runtime',
+          arguments: JSON.stringify({
+            operation: 'repo.write_file',
+            arguments: { path: 'src/example.ts', content: 'export const ok = true;' }
+          })
+        }
+      }]
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'call_mutation',
+      name: 'kitt_runtime',
+      content: 'write completed'
+    }
+  ];
+
+  const plan = prepareAgentContractRequest(followUp, { sessionId: 'sessionMutationTextFallback' });
+  assert.equal(plan.mutationRoundTripObserved, true);
+
+  const result = transformAgentContractCompletion(
+    completion('Alteração aplicada e validada.'),
+    plan
+  );
+  assert.equal(result.choices[0]?.message.content, 'Alteração aplicada e validada.');
+  assert.equal(result.choices[0]?.finish_reason, 'stop');
+});
