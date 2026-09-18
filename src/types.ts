@@ -39,7 +39,7 @@ export interface AppConfig {
   maxSessions: number;
   sessionIdleTimeoutMs: number;
   logFormat: 'text' | 'json';
-  logLevel: 0 | 1 | 2;
+  logLevel?: 0 | 1 | 2;
   logFile?: string;
   toolEnforcement?: 'auto' | 'explore-first' | 'required';
   provider: ProviderId;
