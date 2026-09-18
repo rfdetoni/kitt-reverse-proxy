@@ -50,3 +50,21 @@ test('cdp-url flag configures remote debugging endpoint', () => {
   if ('help' in config) throw new Error('unexpected help');
   assert.equal(config.cdpUrl, 'http://127.0.0.1:9222/');
 });
+
+test('log level 2 and log file are parsed explicitly', () => {
+  const config = parseCliArgs([
+    'chatgpt',
+    '--log-level', '2',
+    '--log-file', '/tmp/kitt-reverse-proxy-trace.log'
+  ]);
+  if ('help' in config) throw new Error('unexpected help');
+  assert.equal(config.logLevel, 2);
+  assert.equal(config.logFile, '/tmp/kitt-reverse-proxy-trace.log');
+});
+
+test('invalid log level is rejected', () => {
+  assert.throws(
+    () => parseCliArgs(['chatgpt', '--log-level', '3']),
+    /Log level inválido/
+  );
+});
