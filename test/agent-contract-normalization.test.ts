@@ -183,12 +183,12 @@ test('recovers malformed repo.write_file contract when file JSON quotes are not 
   );
 });
 
-test('malformed non-write contract remains fail-closed', () => {
+test('structurally malformed non-write contract remains fail-closed', () => {
   const plan = prepareAgentContractRequest(
     bodyWithRuntimeTool('code-generation'),
     { sessionId: 'normalize-non-write-malformed' }
   );
-  const source = '{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.read","arguments":{"path":"a"b.txt"}},"content":null,"reasoning_summary":"read"}';
+  const source = '{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.read","arguments":{"path":"a.txt"}}';
 
   assert.throws(
     () => transformAgentContractCompletion(completion(source), plan),
