@@ -133,6 +133,11 @@ export class SessionManager {
 
   async execute(requestedId: string | undefined, body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
     const requestStartedAt = Date.now();
+    logger.trace('session.execute.request', {
+      requested_session_id: requestedId ?? null,
+      body,
+      options: options ?? null
+    });
     const session = await this.resolve(requestedId);
     const resolvedAt = Date.now();
     updateRequestContext({ sessionId: session.id, provider: session.provider });
@@ -147,6 +152,12 @@ export class SessionManager {
       const executorStartedAt = Date.now();
       try {
         const result = await session.executor.execute(body, options);
+        logger.trace('session.execute.response', {
+          session_id: session.id,
+          provider: session.provider,
+          transport: session.executor.transport,
+          result
+        });
         const completedAt = Date.now();
         const timing: JsonObject = {
           session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
@@ -159,6 +170,12 @@ export class SessionManager {
         logger.event('info', 'chat.timing', timing);
         return { ...result, metadata: { ...(result.metadata ?? {}), timing } };
       } catch (error) {
+        logger.trace('session.execute.error', {
+          session_id: session.id,
+          provider: session.provider,
+          transport: session.executor.transport,
+          error
+        });
         const failedAt = Date.now();
         logger.event('warn', 'chat.timing', {
           session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
