@@ -625,14 +625,9 @@ function looksLikeContractAttempt(source: string): boolean {
   return /"(?:action|tool|tool_input|reasoning_summary)"\s*:/.test(text);
 }
 
-export interface AgentContractTransformOptions {
-  finalTextRescue?: boolean;
-}
-
 export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
-  plan: AgentContractPlan,
-  options: AgentContractTransformOptions = {}
+  plan: AgentContractPlan
 ): OpenAiCompletion {
   const source = completion.choices[0]?.message.content;
   if (typeof source !== 'string') throw new AgentContractValidationError('Resposta do modelo sem conteúdo JSON textual.');
@@ -642,8 +637,7 @@ export function transformAgentContractCompletion(
     response = parseStrictContract(source);
   } catch (error) {
     const contractAttempt = looksLikeContractAttempt(source);
-    const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route)
-      && (!contractAttempt || options.finalTextRescue === true);
+    const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route) && !contractAttempt;
     const completedMutationFallback = MUTATION_ROUTES.has(plan.route)
       && plan.mutationRoundTripObserved
       && !contractAttempt;
@@ -664,8 +658,7 @@ export function transformAgentContractCompletion(
         contract_session_id: plan.sessionId,
         route: plan.route,
         response_bytes: Buffer.byteLength(source, 'utf8'),
-        contract_attempt: contractAttempt,
-        final_text_rescue: options.finalTextRescue === true
+        contract_attempt: contractAttempt
       });
     } else {
       throw error;

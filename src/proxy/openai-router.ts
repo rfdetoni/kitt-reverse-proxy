@@ -142,6 +142,28 @@ export function buildAgentContractRepairBody(
   return { ...plan.body, messages };
 }
 
+export function buildAgentContractSerializationRepairBody(
+  plan: AgentContractPlan,
+  validationError: AgentContractValidationError
+): JsonObject {
+  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+  const constraints = actionConstraints(plan);
+  messages.push({
+    role: 'user',
+    content: [
+      '[KITT CONTRACT SERIALIZATION REPAIR]',
+      `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
+      'SERIALIZATION_INSTRUCTION: Preserve the intended action, but emit exactly one syntactically valid JSON object matching the output contract.',
+      'Escape every newline, tab, backslash, quote, and control character inside string values using JSON escapes. Never place literal newlines inside a JSON string.',
+      'Do not use markdown fences, prose, comments, or trailing text.',
+      'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string.',
+      ...constraints,
+      '[END KITT CONTRACT SERIALIZATION REPAIR]'
+    ].join('\n')
+  });
+  return { ...plan.body, messages };
+}
+
 export function contractRepairExecutionOptions(
   plan: AgentContractPlan,
   options: ChatExecutionOptions
@@ -164,7 +186,7 @@ function contractResponseDigest(result: ChatExecutionResult): { response_sha256:
 
 function recordContractAttempt(
   plan: AgentContractPlan,
-  attempt: 'initial' | 'repair',
+  attempt: 'initial' | 'repair' | 'serialization-repair',
   result: ChatExecutionResult,
   validationError?: AgentContractValidationError
 ): void {
@@ -183,16 +205,9 @@ async function executeAgentContract(
   plan: AgentContractPlan,
   options: ChatExecutionOptions
 ): Promise<ChatExecutionResult> {
-  const transform = (
-    result: ChatExecutionResult,
-    finalTextRescue = false
-  ): ChatExecutionResult => ({
+  const transform = (result: ChatExecutionResult): ChatExecutionResult => ({
     ...result,
-    completion: transformAgentContractCompletion(
-      result.completion,
-      plan,
-      finalTextRescue ? { finalTextRescue: true } : {}
-    ),
+    completion: transformAgentContractCompletion(result.completion, plan),
     deltas: []
   });
 
@@ -218,8 +233,9 @@ async function executeAgentContract(
     buildAgentContractRepairBody(plan, firstValidationError),
     contractRepairExecutionOptions(plan, options)
   );
+  let repairValidationError: AgentContractValidationError | undefined;
   try {
-    const transformed = transform(retry, true);
+    const transformed = transform(retry);
     recordAgentContractValidation(plan.sessionId, true);
     recordContractAttempt(plan, 'repair', retry);
     return transformed;
@@ -230,10 +246,30 @@ async function executeAgentContract(
     }
     recordAgentContractValidation(plan.sessionId, false);
     recordContractAttempt(plan, 'repair', retry, error);
+    repairValidationError = error;
+  }
+
+  const serializationRetry = await manager.execute(
+    plan.sessionId,
+    buildAgentContractSerializationRepairBody(plan, repairValidationError),
+    contractRepairExecutionOptions(plan, options)
+  );
+  try {
+    const transformed = transform(serializationRetry);
+    recordAgentContractValidation(plan.sessionId, true);
+    recordContractAttempt(plan, 'serialization-repair', serializationRetry);
+    return transformed;
+  } catch (error) {
+    if (!(error instanceof AgentContractValidationError)) {
+      recordAgentContractValidation(plan.sessionId, true);
+      throw error;
+    }
+    recordAgentContractValidation(plan.sessionId, false);
+    recordContractAttempt(plan, 'serialization-repair', serializationRetry, error);
     throw new AgentContractError(
       502,
       'agent_contract_invalid',
-      `O modelo violou o contrato de saída após 1 retry semântico automático: ${error.message}`
+      `O modelo violou o contrato de saída após 2 retries automáticos: ${error.message}`
     );
   }
 }

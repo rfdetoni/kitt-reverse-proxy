@@ -226,7 +226,7 @@ test('returns a structured orchestration error when workspace is explicitly requ
 });
 
 
-test('validate-diff final repair rescues malformed contract text instead of returning 502', () => {
+test('validate-diff never exposes a malformed contract attempt as final text', () => {
   const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionRepairRescue' });
   const malformed = '```json\n{"action":"final_response","tool":null,"tool_input":null,"content":"tests ok"\n```';
 
@@ -234,14 +234,6 @@ test('validate-diff final repair rescues malformed contract text instead of retu
     () => transformAgentContractCompletion(completion(malformed), plan),
     AgentContractValidationError
   );
-
-  const rescued = transformAgentContractCompletion(
-    completion(malformed),
-    plan,
-    { finalTextRescue: true }
-  );
-  assert.equal(rescued.choices[0]?.message.content, malformed);
-  assert.equal(rescued.choices[0]?.finish_reason, 'stop');
 });
 
 test('mutation route accepts plain final text only after a mutation round trip', () => {

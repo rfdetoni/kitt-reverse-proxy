@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildAgentContractRepairBody,
+  buildAgentContractSerializationRepairBody,
   contractRepairExecutionOptions,
   reinforceAgentContractPlan
 } from '../src/proxy/openai-router.js';
@@ -92,4 +93,23 @@ test('semantic repair preserves the original caller-visible history', () => {
     messages.some((message) => message.content?.includes('[KITT CONTRACT REPAIR]')),
     false
   );
+});
+
+
+test('serialization repair explicitly requires escaped JSON strings', () => {
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId: 'serialization-repair' })
+  );
+  const retry = buildAgentContractSerializationRepairBody(
+    plan,
+    new AgentContractValidationError('A resposta do modelo não é um objeto JSON puro.')
+  );
+  const messages = retry.messages as Array<{ role?: string; content?: string }>;
+  const repair = messages.at(-1)?.content ?? '';
+
+  assert.match(repair, /KITT CONTRACT SERIALIZATION REPAIR/);
+  assert.match(repair, /Escape every newline, tab, backslash, quote/);
+  assert.match(repair, /Never place literal newlines inside a JSON string/);
+  assert.match(repair, /tool_input must remain a JSON object/);
+  assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
 });
