@@ -135,12 +135,12 @@ function logFormat(value: string): AppConfig['logFormat'] {
   return normalized;
 }
 
-function logLevel(value: string | number): AppConfig['logLevel'] {
+function logLevel(value: string | number): 0 | 1 | 2 {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 2) {
     throw new Error(`Log level inválido: ${value}. Use: 0, 1 ou 2.`);
   }
-  return parsed as AppConfig['logLevel'];
+  return parsed as 0 | 1 | 2;
 }
 
 function toolEnforcement(value: string): NonNullable<AppConfig['toolEnforcement']> {
