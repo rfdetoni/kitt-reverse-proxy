@@ -150,6 +150,59 @@ test('rejects oversized reasoning while wrapped JSON normalization is covered se
   );
 });
 
+test('mutation intent strengthens an incorrect validate-diff route from the caller', () => {
+  const request = body('validate-diff');
+  request.messages = [
+    ...(request.messages as any[]).slice(0, 2),
+    {
+      role: 'user',
+      content: 'Intent: IMPLEMENT\n\nGoal:\nCreate backend and frontend for the requested project.'
+    }
+  ];
+
+  const plan = prepareAgentContractRequest(request, {
+    sessionId: 'sessionStrengthenedImplement',
+    route: 'validate-diff'
+  });
+  const developer = String((plan.body.messages as any[])[1]?.content || '');
+
+  assert.equal(plan.route, 'code-generation');
+  assert.match(developer, /ROUTE: code-generation/);
+  assert.match(developer, /repo\.write_file/);
+  assert.match(developer, /patch\.apply/);
+  assert.match(developer, /MUTATION_REQUIRED_BEFORE_FINAL: true/);
+});
+
+test('explicit edit request strengthens validate-diff to code-edit', () => {
+  const request = body('validate-diff');
+  request.messages = [
+    ...(request.messages as any[]).slice(0, 2),
+    { role: 'user', content: 'corrija o backend do projeto e depois rode os testes' }
+  ];
+
+  const plan = prepareAgentContractRequest(request, {
+    sessionId: 'sessionStrengthenedEdit',
+    route: 'validate-diff'
+  });
+
+  assert.equal(plan.route, 'code-edit');
+});
+
+test('pure validation request remains validate-diff', () => {
+  const request = body('validate-diff');
+  request.messages = [
+    ...(request.messages as any[]).slice(0, 2),
+    { role: 'user', content: 'rode os testes e valide o diff' }
+  ];
+
+  const plan = prepareAgentContractRequest(request, {
+    sessionId: 'sessionPureValidation',
+    route: 'validate-diff'
+  });
+
+  assert.equal(plan.route, 'validate-diff');
+});
+
 test('validate-diff advertises only route-allowed runtime operations', () => {
   const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionScopedTools' });
   const messages = plan.body.messages as any[];
