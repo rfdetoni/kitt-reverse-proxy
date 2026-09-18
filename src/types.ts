@@ -215,6 +215,11 @@ export interface ChatExecutionOptions {
   onDelta?: (delta: string) => void | Promise<void>;
   reasoningEffort?: number;
   signal?: AbortSignal;
+  /**
+   * Internal canonical history to persist after executing a transient control
+   * prompt. This is intentionally not part of the public HTTP contract.
+   */
+  logicalHistoryBody?: JsonObject;
 }
 
 export interface ChatExecutionResult {
