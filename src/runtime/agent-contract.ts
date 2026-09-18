@@ -492,6 +492,167 @@ function sentenceCount(text: string): number {
   return normalized.split(/(?<=[.!?])\s+/u).filter((part) => part.trim()).length;
 }
 
+function nextNonWhitespace(text: string, start: number): number {
+  for (let index = start; index < text.length; index += 1) {
+    if (!/\s/u.test(text[index]!)) return index;
+  }
+  return -1;
+}
+
+function jsonValueStartsAt(text: string, index: number): boolean {
+  const char = text[index];
+  if (char === '"' || char === '{' || char === '[' || char === '-' || /[0-9]/u.test(char || '')) {
+    return true;
+  }
+  return text.startsWith('true', index)
+    || text.startsWith('false', index)
+    || text.startsWith('null', index);
+}
+
+function likelyStringTerminator(
+  text: string,
+  quoteIndex: number,
+  role: 'key' | 'value',
+  container: 'object' | 'array' | undefined
+): boolean {
+  const nextIndex = nextNonWhitespace(text, quoteIndex + 1);
+  if (nextIndex < 0) return true;
+  const next = text[nextIndex]!;
+
+  if (role === 'key') return next === ':';
+
+  if (next === ',') {
+    const afterComma = nextNonWhitespace(text, nextIndex + 1);
+    if (afterComma < 0) return false;
+    if (container === 'object') return text[afterComma] === '"';
+    if (container === 'array') return jsonValueStartsAt(text, afterComma);
+    return false;
+  }
+
+  if (next === '}' || next === ']') {
+    const afterClose = nextNonWhitespace(text, nextIndex + 1);
+    return afterClose < 0 || [',', '}', ']'].includes(text[afterClose]!);
+  }
+
+  return false;
+}
+
+function repairJsonSerialization(text: string): string {
+  let repaired = '';
+  let inString = false;
+  let role: 'key' | 'value' = 'value';
+  const stack: Array<'object' | 'array'> = [];
+  let lastSignificant = '';
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+
+    if (!inString) {
+      if (char === '"') {
+        const container = stack.at(-1);
+        role = container === 'object' && (lastSignificant === '{' || lastSignificant === ',')
+          ? 'key'
+          : 'value';
+        inString = true;
+        repaired += char;
+        continue;
+      }
+      if (char === '{') stack.push('object');
+      else if (char === '[') stack.push('array');
+      else if (char === '}' && stack.at(-1) === 'object') stack.pop();
+      else if (char === ']' && stack.at(-1) === 'array') stack.pop();
+
+      repaired += char;
+      if (!/\s/u.test(char)) lastSignificant = char;
+      continue;
+    }
+
+    if (char === '\\') {
+      const next = text[index + 1];
+      if (next && ['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'].includes(next)) {
+        repaired += char + next;
+        index += 1;
+      } else {
+        repaired += '\\\\';
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      if (likelyStringTerminator(text, index, role, stack.at(-1))) {
+        inString = false;
+        repaired += char;
+        lastSignificant = '"';
+      } else {
+        repaired += '\\"';
+      }
+      continue;
+    }
+
+    const code = char.charCodeAt(0);
+    if (code < 0x20) {
+      if (char === '\n') repaired += '\\n';
+      else if (char === '\r') repaired += '\\r';
+      else if (char === '\t') repaired += '\\t';
+      else if (char === '\b') repaired += '\\b';
+      else if (char === '\f') repaired += '\\f';
+      else repaired += `\\u${code.toString(16).padStart(4, '0')}`;
+      continue;
+    }
+
+    repaired += char;
+  }
+
+  return repaired;
+}
+
+function parseLooseJsonObject(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  const attempts = [trimmed];
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    attempts.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const attempt of attempts) {
+    for (const candidate of [attempt, repairJsonSerialization(attempt)]) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (isRecord(parsed)) return parsed;
+      } catch {
+        // Try the next deterministic representation.
+      }
+    }
+  }
+  return undefined;
+}
+
+function contractFromKittToolEnvelope(text: string): AgentContractResponse | undefined {
+  const tagged = text.match(/<kitt-tool>\s*([\s\S]*?)\s*<\/kitt-tool>/iu)?.[1];
+  const parsed = parseLooseJsonObject(tagged ?? text);
+  if (!parsed) return undefined;
+
+  const name = typeof parsed.name === 'string'
+    ? parsed.name
+    : (typeof parsed.tool === 'string' ? parsed.tool : undefined);
+  const input = isRecord(parsed.arguments)
+    ? parsed.arguments
+    : (isRecord(parsed.tool_input) ? parsed.tool_input : undefined);
+
+  if (!name || !input || Object.prototype.hasOwnProperty.call(parsed, 'action')) {
+    return undefined;
+  }
+
+  return {
+    action: 'use_tool',
+    tool: name,
+    tool_input: input as JsonObject,
+    content: null,
+    reasoning_summary: ''
+  };
+}
+
 function contractJsonCandidates(text: string): Record<string, unknown>[] {
   const candidates: Record<string, unknown>[] = [];
   const seen = new Set<string>();
@@ -559,6 +720,20 @@ function parseContractValue(text: string): unknown {
     if (candidates.length > 1) {
       throw new AgentContractValidationError('A resposta contém múltiplos objetos JSON compatíveis com o contrato.');
     }
+
+    const repaired = repairJsonSerialization(trimmed);
+    if (repaired !== trimmed) {
+      try {
+        return JSON.parse(repaired);
+      } catch {
+        const repairedCandidates = contractJsonCandidates(repaired);
+        if (repairedCandidates.length === 1) return repairedCandidates[0];
+        if (repairedCandidates.length > 1) {
+          throw new AgentContractValidationError('A resposta contém múltiplos objetos JSON compatíveis com o contrato.');
+        }
+      }
+    }
+
     throw new AgentContractValidationError(NON_JSON_CONTRACT_MESSAGE);
   }
 }
@@ -692,8 +867,17 @@ export function transformAgentContractCompletion(
   try {
     response = parseStrictContract(source);
   } catch (error) {
-    const contractAttempt = looksLikeContractAttempt(source);
-    const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route) && !contractAttempt;
+    const normalizedToolCall = contractFromKittToolEnvelope(source);
+    if (normalizedToolCall) {
+      response = normalizedToolCall;
+      logger.event('warn', 'agent.contract.tool_envelope_normalized', {
+        contract_session_id: plan.sessionId,
+        route: plan.route,
+        response_bytes: Buffer.byteLength(source, 'utf8')
+      });
+    } else {
+      const contractAttempt = looksLikeContractAttempt(source);
+      const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route) && !contractAttempt;
     const completedMutationFallback = MUTATION_ROUTES.has(plan.route)
       && plan.mutationRoundTripObserved
       && !contractAttempt;
@@ -716,8 +900,9 @@ export function transformAgentContractCompletion(
         response_bytes: Buffer.byteLength(source, 'utf8'),
         contract_attempt: contractAttempt
       });
-    } else {
-      throw error;
+      } else {
+        throw error;
+      }
     }
   }
 
