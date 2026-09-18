@@ -142,6 +142,18 @@ export function buildAgentContractRepairBody(
   return { ...plan.body, messages };
 }
 
+export function contractRepairExecutionOptions(
+  plan: AgentContractPlan,
+  options: ChatExecutionOptions
+): ChatExecutionOptions {
+  return {
+    ...options,
+    // The repair prompt is transport-internal. The browser still receives it,
+    // but conversation bookkeeping remains anchored to the caller-visible body.
+    logicalHistoryBody: plan.body
+  };
+}
+
 function contractResponseDigest(result: ChatExecutionResult): { response_sha256: string; response_bytes: number } {
   const raw = JSON.stringify(result.completion);
   return {
@@ -197,13 +209,7 @@ async function executeAgentContract(
   const retry = await manager.execute(
     plan.sessionId,
     buildAgentContractRepairBody(plan, firstValidationError),
-    {
-      ...options,
-      // The repair prompt is an internal transport control message. Persist
-      // the repaired answer against the original logical API request so the
-      // next caller turn does not appear to rewind or fork the conversation.
-      logicalHistoryBody: plan.body
-    }
+    contractRepairExecutionOptions(plan, options)
   );
   try {
     const transformed = transform(retry);
