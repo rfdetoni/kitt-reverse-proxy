@@ -116,8 +116,11 @@ export class NetworkChatExecutor implements ChatExecutor {
     if (parsed.tool_calls?.length) applyToolCallsToCompletion(completion, parsed.tool_calls, parsed.content);
 
     const deltas = parsed.tool_calls?.length ? [] : this.adapter.mapResponseDeltas(result.body);
+    if (options?.onDelta) {
+      for (const delta of deltas) await options.onDelta(delta);
+    }
     this.adapter.applyState(result.body);
-    return { completion, deltas };
+    return { completion, deltas: options?.onDelta ? [] : deltas };
   }
 
   describe(): JsonObject {
