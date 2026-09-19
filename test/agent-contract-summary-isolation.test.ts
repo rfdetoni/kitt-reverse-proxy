@@ -13,10 +13,9 @@ function summaryBody(): JsonObject {
     messages: [
       { role: 'system', content: 'Prepare a short technical context for another model to answer the task.' },
       {
-        role: 'developer',
-        content: `[KITT TURN CONTEXT]\n${JSON.stringify({ route: 'summarize', workspace_context: { files: ['README.md'] } })}`
-      },
-      { role: 'user', content: 'Task: create backend and frontend\n\nProject map: README.md' }
+        role: 'user',
+        content: `[KITT TURN CONTEXT]\n${JSON.stringify({ route: 'summarize', workspace_context: { files: ['README.md'] } })}\n[END KITT TURN CONTEXT]\n\nTask: create backend and frontend\n\nProject map: README.md`
+      }
     ],
     tools: [{
       type: 'function',
@@ -54,14 +53,15 @@ function completion(content: string): OpenAiCompletion {
 test('summarize advertises final-response-only behavior and no tools', () => {
   const plan = prepareAgentContractRequest(summaryBody(), { sessionId: 'summaryIsolation' });
   const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
-  const developer = messages.find((message) => message.role === 'developer')?.content ?? '';
+  const user = messages.find((message) => message.role === 'user')?.content ?? '';
 
   assert.equal(plan.route, 'summarize');
   assert.equal(plan.tools.size, 0);
-  assert.match(developer, /ROUTE_INSTRUCTION: This turn is context-summary only/);
-  assert.match(developer, /Do not use or request tools/);
-  assert.match(developer, /Return action="final_response"/);
-  assert.match(developer, /TOOLS_AVAILABLE: \[\]/);
+  assert.match(user, /ROUTE_INSTRUCTION: This turn is context-summary only/);
+  assert.match(user, /Do not use or request tools/);
+  assert.match(user, /Return action="final_response"/);
+  assert.match(user, /TOOLS_AVAILABLE: \[\]/);
+  assert.match(user, /Task: create backend and frontend/);
 });
 
 test('summarize rejects request_tools before it can become an orchestration error', () => {
