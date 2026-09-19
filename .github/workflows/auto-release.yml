@@ -134,8 +134,12 @@ jobs:
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             tagged="$(git rev-list -n1 "$tag")"
             if [[ "$tagged" != "$head" ]]; then
-              echo "Tag $tag already exists at $tagged instead of current main $head; refusing to publish an ambiguous release." >&2
-              exit 1
+              if git merge-base --is-ancestor "$tagged" "$head"; then
+                echo "Tag $tag already exists on ancestor $tagged; keeping the immutable tag and validating that release."
+              else
+                echo "Tag $tag exists at unrelated commit $tagged; refusing to publish an ambiguous release." >&2
+                exit 1
+              fi
             fi
           else
             git config user.name "github-actions[bot]"
