@@ -174,7 +174,7 @@ export class ChatStreamWriter {
   private readonly id = `chatcmpl-web-${randomUUID()}`;
   private readonly created = Math.floor(Date.now() / 1000);
   private started = false;
-  private accumulated = '';
+  private streamedChars = 0;
   private stopHeartbeat?: () => void;
 
   constructor(
@@ -200,7 +200,7 @@ export class ChatStreamWriter {
   delta(text: string): void {
     if (!text) return;
     this.begin();
-    this.accumulated += text;
+    this.streamedChars += text.length;
     this.res.write(`data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
@@ -215,19 +215,12 @@ export class ChatStreamWriter {
     const fullText = completion.choices[0]?.message.content || '';
     const toolCalls = completion.choices[0]?.message.tool_calls;
 
-    if (!this.accumulated) {
+    if (this.streamedChars === 0) {
       for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
         if (delta) this.delta(delta);
       }
-    } else if (fullText.startsWith(this.accumulated)) {
-      const remaining = fullText.slice(this.accumulated.length);
-      if (remaining) this.delta(remaining);
-    } else if (fullText.length > this.accumulated.length) {
-      let commonLen = 0;
-      while (commonLen < this.accumulated.length && commonLen < fullText.length && this.accumulated[commonLen] === fullText[commonLen]) {
-        commonLen += 1;
-      }
-      const remaining = fullText.slice(commonLen);
+    } else if (fullText.length > this.streamedChars) {
+      const remaining = fullText.slice(this.streamedChars);
       if (remaining) this.delta(remaining);
     }
 
@@ -294,7 +287,7 @@ export class ResponsesStreamWriter {
   private sequence = 0;
   private started = false;
   private messageStarted = false;
-  private accumulated = '';
+  private streamedChars = 0;
   private stopHeartbeat?: () => void;
 
   constructor(
@@ -337,7 +330,7 @@ export class ResponsesStreamWriter {
   delta(text: string): void {
     if (!text) return;
     this.beginMessage();
-    this.accumulated += text;
+    this.streamedChars += text.length;
     this.event('response.output_text.delta', {
       item_id: this.messageItemId,
       output_index: 0,
@@ -354,12 +347,12 @@ export class ResponsesStreamWriter {
     let outputIndex = 0;
 
     if (fullText) {
-      if (!this.accumulated) {
+      if (this.streamedChars === 0) {
         for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
           if (delta) this.delta(delta);
         }
-      } else if (fullText.startsWith(this.accumulated)) {
-        this.delta(fullText.slice(this.accumulated.length));
+      } else if (fullText.length > this.streamedChars) {
+        this.delta(fullText.slice(this.streamedChars));
       }
 
       const part = { type: 'output_text', text: fullText, annotations: [] };
