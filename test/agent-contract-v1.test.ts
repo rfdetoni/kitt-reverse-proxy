@@ -64,13 +64,39 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
   assert.equal(messages[0].content, AGENT_CONTRACT_SYSTEM_PROMPT);
   assert.match(messages[0].content, /preserve a formatação normal da linguagem\/projeto/);
   assert.match(messages[0].content, /Linguagens sensíveis a indentação/);
-  assert.equal(messages[1].role, 'developer');
+  assert.equal(messages[1].role, 'user');
   assert.match(messages[1].content, /TOOLS_AVAILABLE:/);
   assert.match(messages[1].content, /Execute KITT runtime operations/);
   assert.match(messages[1].content, /UNTRUSTED_WORKSPACE_DATA:/);
   assert.match(messages[1].content, /ORCHESTRATOR_CONTEXT_DATA:/);
   assert.equal(plan.body.tools, undefined);
   assert.equal(plan.workspaceProvided, true);
+});
+
+test('consumes cache-friendly user turn context without dropping the user task', () => {
+  const request = body('code-edit', { files: ['src/app.ts'] });
+  request.messages = [
+    { role: 'system', content: 'Legacy persona.' },
+    {
+      role: 'user',
+      content: `[KITT TURN CONTEXT]\n${JSON.stringify({
+        route: 'code-edit',
+        workspace_context: { files: ['src/app.ts'] }
+      })}\n[END KITT TURN CONTEXT]\n\nFix src/app.ts`
+    }
+  ];
+
+  const plan = prepareAgentContractRequest(request, { sessionId: 'cacheFriendlyContext' });
+  const messages = plan.body.messages as any[];
+  const user = messages.find((message) => message.role === 'user');
+
+  assert.ok(user);
+  assert.match(user.content, /\[KITT ORCHESTRATOR TURN DATA\]/);
+  assert.match(user.content, /WORKSPACE_CONTEXT:/);
+  assert.match(user.content, /Fix src\/app\.ts$/);
+  assert.doesNotMatch(user.content, /\[KITT TURN CONTEXT\]/);
+  assert.equal(messages.some((message) => message.role === 'developer'), false);
+  assert.equal(plan.route, 'code-edit');
 });
 
 test('converts a valid use_tool contract into a native OpenAI tool call', () => {
