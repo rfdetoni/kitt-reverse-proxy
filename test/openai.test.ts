@@ -161,6 +161,34 @@ test('OpenAI errors always use a structured SDK-compatible envelope', () => {
   assert.equal(openAiErrorType(503), 'api_error');
 });
 
+test('Chat stream completes from streamed character count without duplicating buffered text', () => {
+  let output = '';
+  const fake = {
+    writableEnded: false,
+    destroyed: false,
+    status() { return this; },
+    setHeader() { return this; },
+    flushHeaders() {},
+    write(chunk: string) { output += chunk; return true; },
+    end(chunk?: unknown) {
+      this.writableEnded = true;
+      if (typeof chunk === 'string') output += chunk;
+      return this;
+    }
+  };
+
+  const writer = new ChatStreamWriter(fake as never, 'web');
+  writer.delta('hel');
+  writer.finish({
+    id: 'c', object: 'chat.completion', created: 1, model: 'web',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
+  });
+
+  assert.match(output, /"content":"hel"/);
+  assert.match(output, /"content":"lo"/);
+  assert.doesNotMatch(output, /"content":"hello"/);
+});
+
 test('Chat stream emits SSE keepalive while a started stream is idle', async () => {
   let output = '';
   const fake = {
