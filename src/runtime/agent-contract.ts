@@ -10,6 +10,7 @@ export const AGENT_ROUTES = ['context-gather', 'summarize', 'code-generation', '
 export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o JSON do contrato, sem texto extra. Respeite ROUTE e use somente tools/operações presentes em TOOLS_AVAILABLE. Ao serializar conteúdo de arquivo, preserve exatamente indentação e quebras de linha usando escapes JSON; nunca achate ou minifique o conteúdo.';
 
 const TURN_CONTEXT_MARKER = '[KITT TURN CONTEXT]';
+const TURN_CONTEXT_END_MARKER = '[END KITT TURN CONTEXT]';
 const TOOL_RESULT_MARKER = '[KITT TOOL RESULT DATA]';
 const TOOL_RESULT_END_MARKER = '[END KITT TOOL RESULT DATA]';
 const MAX_REASONING_SUMMARY_CHARS = 400;
@@ -204,14 +205,26 @@ function boundedJson(value: unknown, label: string): string {
   return text;
 }
 
-function parseTurnContext(content: string): Record<string, unknown> | undefined {
-  const trimmed = content.trim();
+interface ParsedTurnContext {
+  context: Record<string, unknown>;
+  remainder: string;
+}
+
+function parseTurnContext(content: string): ParsedTurnContext | undefined {
+  const trimmed = content.trimStart();
   if (!trimmed.startsWith(TURN_CONTEXT_MARKER)) return undefined;
-  const raw = trimmed.slice(TURN_CONTEXT_MARKER.length).trim();
-  if (!raw) return {};
+
+  const afterMarker = trimmed.slice(TURN_CONTEXT_MARKER.length);
+  const endIndex = afterMarker.indexOf(TURN_CONTEXT_END_MARKER);
+  const raw = (endIndex >= 0 ? afterMarker.slice(0, endIndex) : afterMarker).trim();
+  const remainder = endIndex >= 0
+    ? afterMarker.slice(endIndex + TURN_CONTEXT_END_MARKER.length).trimStart()
+    : '';
+
+  if (!raw) return { context: {}, remainder };
   try {
     const value = JSON.parse(raw);
-    return isRecord(value) ? value : undefined;
+    return isRecord(value) ? { context: value, remainder } : undefined;
   } catch {
     return undefined;
   }
@@ -373,6 +386,23 @@ export function recordAgentContractValidation(sessionId: string, ok: boolean): v
   });
 }
 
+function prependDynamicUserTurn(messages: JsonValue[], dynamicContent: string): JsonValue[] {
+  const forwarded = [...messages];
+  for (let index = forwarded.length - 1; index >= 0; index -= 1) {
+    const message = forwarded[index];
+    if (messageRole(message) !== 'user' || !isRecord(message) || typeof message.content !== 'string') continue;
+    forwarded[index] = {
+      ...message,
+      content: message.content
+        ? `${dynamicContent}\n\n${message.content}`
+        : dynamicContent
+    } as JsonValue;
+    return forwarded;
+  }
+  forwarded.push({ role: 'user', content: dynamicContent } as JsonValue);
+  return forwarded;
+}
+
 export function prepareAgentContractRequest(
   originalBody: JsonObject,
   options: { sessionId?: string; route?: string } = {}
@@ -394,7 +424,13 @@ export function prepareAgentContractRequest(
     const text = messageText(message);
     const parsedTurnContext = text ? parseTurnContext(text) : undefined;
     if (parsedTurnContext) {
-      turnContext = { ...(turnContext ?? {}), ...parsedTurnContext };
+      turnContext = { ...(turnContext ?? {}), ...parsedTurnContext.context };
+      if (parsedTurnContext.remainder && isRecord(message)) {
+        forwardedMessages.push({
+          ...message,
+          content: parsedTurnContext.remainder
+        } as JsonValue);
+      }
       continue;
     }
     if (role === 'system' || role === 'developer') {
@@ -471,8 +507,7 @@ export function prepareAgentContractRequest(
   delete body.kitt_context;
   body.messages = [
     { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT },
-    { role: 'developer', content: dynamicParts.join('\n') },
-    ...forwardedMessages
+    ...prependDynamicUserTurn(forwardedMessages, dynamicParts.join('\n'))
   ] as JsonValue[];
 
   return {
