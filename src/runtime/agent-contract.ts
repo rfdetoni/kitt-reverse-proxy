@@ -459,7 +459,7 @@ export function prepareAgentContractRequest(
   }
 
   const requestedRoute = normalizeRoute(options.route ?? turnContext?.route);
-  const route = strengthenedRoute(requestedRoute, originalMessages);
+  const route = strengthenedRoute(requestedRoute, forwardedMessages);
   if (route !== requestedRoute) {
     logger.event('warn', 'agent.contract.route_strengthened', {
       contract_session_id: sessionId,
