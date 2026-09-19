@@ -1,5 +1,5 @@
 import type { DeclarativeAdapter } from '../mapping/engine.js';
-import type { AdapterProfile, AppConfig, CapturedExchange, ChatExecutionOptions, ChatExecutionResult, ChatExecutor, JsonObject, LiveBrowserSession } from '../types.js';
+import type { AdapterProfile, AppConfig, CapturedExchange, ChatExecutionOptions, ChatExecutionResult, ChatExecutor, JsonObject, JsonValue, LiveBrowserSession } from '../types.js';
 import { messageToText, normalizeMessages } from '../mapping/messages.js';
 import { BrowserUpstreamClient } from './upstream.js';
 import {
@@ -13,6 +13,29 @@ import {
   requestMayReturnToolCalls
 } from '../mapping/tool-calling.js';
 import { RequestAbortedError } from './serial-queue.js';
+
+export function prependDirectiveToLastInteractiveMessage(
+  messages: JsonValue[] | undefined,
+  directive: string
+): JsonValue[] {
+  const source = Array.isArray(messages) ? messages : [];
+  const copy = [...source];
+
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    const message = source[index];
+    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
+    const record = message as JsonObject;
+    if (!['user', 'tool'].includes(String(record.role || ''))) continue;
+
+    const content = typeof record.content === 'string'
+      ? record.content
+      : JSON.stringify(record.content ?? '');
+    copy[index] = { ...record, content: `${directive}${content}` };
+    break;
+  }
+
+  return copy;
+}
 
 export class NetworkChatExecutor implements ChatExecutor {
   readonly transport = 'network' as const;
@@ -44,11 +67,13 @@ export class NetworkChatExecutor implements ChatExecutor {
   async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
     if (options?.signal?.aborted) throw new RequestAbortedError();
     const messages = normalizeMessages(Array.isArray(body.messages) ? body.messages : undefined);
-    const systemPrompt = messages
-      .filter((message) => message.role === 'system' || message.role === 'developer')
-      .map(messageToText)
-      .filter(Boolean)
-      .join('\n\n');
+    const systemParts: string[] = [];
+    for (const message of messages) {
+      if (message.role !== 'system' && message.role !== 'developer') continue;
+      const text = messageToText(message);
+      if (text) systemParts.push(text);
+    }
+    const systemPrompt = systemParts.join('\n\n');
     const plan = buildToolProtocolPlan(body, systemPrompt || undefined);
 
     const supportsNativeTools = body.tools !== undefined && this.profile.request.bindings.some(
@@ -72,24 +97,16 @@ export class NetworkChatExecutor implements ChatExecutor {
 
     let requestBody = body;
     if (needsPolicyEmulation) {
-      const requestMessages = Array.isArray(body.messages) ? structuredClone(body.messages) : [];
-      for (let index = requestMessages.length - 1; index >= 0; index -= 1) {
-        const message = requestMessages[index];
-        if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
-        const record = message as JsonObject;
-        if (!['user', 'tool'].includes(String(record.role || ''))) continue;
-        const content = typeof record.content === 'string'
-          ? record.content
-          : JSON.stringify(record.content ?? '');
-        const promptPlan = {
-          tools: emulateTools ? plan.tools : [],
-          choice: emulateTools ? plan.choice : { mode: 'none' as const },
-          parallel: plan.parallel,
-          ...(emulateSystem && plan.systemPrompt ? { systemPrompt: plan.systemPrompt } : {})
-        };
-        record.content = `${formatApiDirective(promptPlan)}${content}`;
-        break;
-      }
+      const promptPlan = {
+        tools: emulateTools ? plan.tools : [],
+        choice: emulateTools ? plan.choice : { mode: 'none' as const },
+        parallel: plan.parallel,
+        ...(emulateSystem && plan.systemPrompt ? { systemPrompt: plan.systemPrompt } : {})
+      };
+      const requestMessages = prependDirectiveToLastInteractiveMessage(
+        Array.isArray(body.messages) ? body.messages : undefined,
+        formatApiDirective(promptPlan)
+      );
       requestBody = { ...body, messages: requestMessages };
     }
 
