@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   BrowserAutomationInputError,
   BrowserAutomationSession,
-  BrowserOriginDeniedError
+  BrowserOriginDeniedError,
+  normalizeBrowserOriginScope
 } from '../src/runtime/browser-automation.js';
 
 test('browser automation rejects non-http navigation without touching the page', async () => {
@@ -130,4 +131,107 @@ test('browser navigation guard aborts redirect outside the active origin scope',
   });
   assert.equal(aborted, true);
   assert.equal(continued, false);
+});
+
+
+test('browser origin scope rejects URL credentials and does not broaden unspecified addresses', async () => {
+  assert.throws(
+    () => normalizeBrowserOriginScope(['https://user:secret@example.com']),
+    BrowserAutomationInputError
+  );
+
+  let navigations = 0;
+  const page = {
+    isClosed: () => false,
+    async goto() { navigations += 1; },
+    url: () => 'about:blank',
+    async title() { return ''; },
+    async close() {},
+    locator() { throw new Error('not used'); }
+  } as any;
+  const automation = new BrowserAutomationSession(page);
+
+  await assert.rejects(
+    automation.execute('open', { url: 'https://user:secret@example.com/' }, ['https://example.com']),
+    BrowserAutomationInputError
+  );
+  await assert.rejects(
+    automation.execute('open', { url: 'http://0.0.0.0:4200/' }, ['loopback']),
+    BrowserOriginDeniedError
+  );
+  assert.equal(navigations, 0);
+});
+
+test('browser click blocks javascript and cross-origin activation before interaction', async () => {
+  for (const href of ['javascript:alert(1)', 'data:text/html,blocked', 'https://evil.example/path']) {
+    let clicks = 0;
+    const locator = {
+      first() { return this; },
+      async click() { clicks += 1; },
+      async getAttribute(name: string) {
+        if (name === 'href') return href;
+        return null;
+      },
+      locator() {
+        return {
+          first() { return this; },
+          async count() { return 0; },
+          async getAttribute() { return null; }
+        };
+      }
+    };
+    const page = {
+      isClosed: () => false,
+      locator() { return locator; },
+      url: () => 'https://allowed.example/',
+      async title() { return 'Allowed'; },
+      async close() {}
+    } as any;
+    const automation = new BrowserAutomationSession(page);
+
+    await assert.rejects(
+      automation.execute('click', { selector: '#danger' }, ['https://allowed.example']),
+      BrowserOriginDeniedError
+    );
+    assert.equal(clicks, 0);
+  }
+});
+
+test('browser submit preflights form targets before typing sensitive text', async () => {
+  const calls: string[] = [];
+  const locator = {
+    first() { return this; },
+    async fill(value: string) { calls.push(`fill:${value}`); },
+    async press(value: string) { calls.push(`press:${value}`); },
+    async pressSequentially(value: string) { calls.push(`seq:${value}`); },
+    async getAttribute(name: string) {
+      if (name === 'formaction') return 'javascript:steal()';
+      return null;
+    },
+    locator() {
+      return {
+        first() { return this; },
+        async count() { return 0; },
+        async getAttribute() { return null; }
+      };
+    }
+  };
+  const page = {
+    isClosed: () => false,
+    locator() { return locator; },
+    url: () => 'https://allowed.example/',
+    async title() { return 'Allowed'; },
+    async close() {}
+  } as any;
+  const automation = new BrowserAutomationSession(page);
+
+  await assert.rejects(
+    automation.execute(
+      'type',
+      { selector: '#secret', text: 'do-not-type', submit: true },
+      ['https://allowed.example']
+    ),
+    BrowserOriginDeniedError
+  );
+  assert.deepEqual(calls, []);
 });

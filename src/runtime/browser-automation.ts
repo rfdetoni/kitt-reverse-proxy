@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 import type { JsonObject, JsonValue, LiveBrowserSession } from '../types.js';
 
 export const BROWSER_AUTOMATION_ACTIONS = [
@@ -91,6 +91,9 @@ export function normalizeBrowserOriginScope(value: unknown): string[] {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new BrowserAutomationInputError('Browser origin scope only allows http/https origins.');
     }
+    if (parsed.username || parsed.password) {
+      throw new BrowserAutomationInputError('Browser origin scope must not contain URL credentials.');
+    }
     normalized.push(parsed.origin);
   }
   return [...new Set(normalized.length > 0 ? normalized : [LOOPBACK_SCOPE])];
@@ -160,6 +163,9 @@ function httpUrl(args: JsonObject): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new BrowserAutomationInputError('Browser navigation only allows http:// and https:// URLs.');
   }
+  if (parsed.username || parsed.password) {
+    throw new BrowserAutomationInputError('Browser navigation URLs must not contain credentials.');
+  }
   return parsed.href;
 }
 
@@ -181,6 +187,16 @@ function safeSelectorHint(
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact && compact.length <= 80 && !compact.includes('\n')) return `text=${compact}`;
   return undefined;
+}
+
+function safeUrlLabel(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin;
+    return parsed.protocol.replace(/:$/, '') || '<blocked>';
+  } catch {
+    return '<invalid>';
+  }
 }
 
 function actionName(value: string): BrowserAutomationAction {
@@ -247,6 +263,7 @@ export class BrowserAutomationSession {
       return false;
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
     if (this.originScope.has(parsed.origin)) return true;
     if (!this.originScope.has(LOOPBACK_SCOPE)) return false;
     const hostname = parsed.hostname.toLowerCase();
@@ -256,16 +273,57 @@ export class BrowserAutomationSession {
       || hostname === '127.0.0.1'
       || hostname === '[::1]'
       || hostname === '::1'
-      || hostname === '0.0.0.0'
     );
   }
 
   private assertAllowedUrl(value: string): void {
     if (!this.isAllowedUrl(value)) {
       throw new BrowserOriginDeniedError(
-        `Browser navigation blocked by origin scope: ${value}`
+        `Browser navigation blocked by origin scope: ${safeUrlLabel(value)}`
       );
     }
+  }
+
+  private assertSafeNavigationReference(value: string): void {
+    const raw = String(value || '').trim();
+    if (!raw || raw.startsWith('#')) return;
+    let parsed: URL;
+    try {
+      parsed = new URL(raw, this.page.url());
+    } catch {
+      throw new BrowserOriginDeniedError('Browser activation target is invalid.');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new BrowserOriginDeniedError(
+        `Browser activation target uses a blocked URL scheme: ${safeUrlLabel(parsed.href)}`
+      );
+    }
+    if (parsed.username || parsed.password) {
+      throw new BrowserOriginDeniedError('Browser activation target must not contain URL credentials.');
+    }
+    this.assertAllowedUrl(parsed.href);
+  }
+
+  private async assertSafeActivationTarget(locator: Locator): Promise<void> {
+    const candidates: string[] = [];
+    for (const attribute of ['href', 'formaction'] as const) {
+      try {
+        const value = await locator.getAttribute(attribute);
+        if (value) candidates.push(value);
+      } catch {
+        // Route-level navigation enforcement remains the fail-closed fallback.
+      }
+    }
+    try {
+      const form = locator.locator('xpath=ancestor-or-self::form[1]').first();
+      if (await form.count() > 0) {
+        const action = await form.getAttribute('action');
+        if (action) candidates.push(action);
+      }
+    } catch {
+      // Some non-DOM test doubles do not implement ancestor lookup.
+    }
+    for (const candidate of candidates) this.assertSafeNavigationReference(candidate);
   }
 
   isClosed(): boolean {
@@ -311,7 +369,9 @@ export class BrowserAutomationSession {
       if (action === 'click') {
         this.assertAllowedUrl(this.page.url());
         const selector = selectorArg(args);
-        await this.page.locator(selector).first().click({ timeout });
+        const locator = this.page.locator(selector).first();
+        await this.assertSafeActivationTarget(locator);
+        await locator.click({ timeout });
         this.assertAllowedUrl(this.page.url());
         return {
           action,
@@ -328,6 +388,7 @@ export class BrowserAutomationSession {
         const clear = booleanArg(args, 'clear', true);
         const submit = booleanArg(args, 'submit', false);
         const locator = this.page.locator(selector).first();
+        if (submit) await this.assertSafeActivationTarget(locator);
         if (clear) await locator.fill(text, { timeout });
         else await locator.pressSequentially(text, { timeout });
         if (submit) await locator.press('Enter', { timeout });
@@ -421,7 +482,7 @@ export class BrowserAutomationSession {
         const blocked = this.blockedNavigationUrl;
         this.blockedNavigationUrl = undefined;
         throw new BrowserOriginDeniedError(
-          `Browser navigation blocked by origin scope: ${blocked}`
+          `Browser navigation blocked by origin scope: ${safeUrlLabel(blocked)}`
         );
       }
       if (error instanceof Error && error.name === 'TimeoutError') {
