@@ -1,4 +1,4 @@
-import { TimeoutError as PlaywrightTimeoutError, type Page } from 'playwright';
+import type { Page } from 'playwright';
 import type { JsonObject, JsonValue, LiveBrowserSession } from '../types.js';
 
 export const BROWSER_AUTOMATION_ACTIONS = [
@@ -295,7 +295,7 @@ export class BrowserAutomationSession {
       ) {
         throw error;
       }
-      if (error instanceof PlaywrightTimeoutError) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
         throw new BrowserAutomationTimeoutError(error.message);
       }
       throw new BrowserAutomationExecutionError(

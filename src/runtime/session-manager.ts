@@ -153,7 +153,7 @@ export class SessionManager {
       try {
         if (action.trim().toLowerCase() === 'close') {
           const current = session.browserAutomation;
-          session.browserAutomation = undefined;
+          delete session.browserAutomation;
           if (current) await current.close();
           return { action: 'close', closed: Boolean(current), session_id: session.id };
         }
@@ -318,7 +318,7 @@ export class SessionManager {
     await Promise.all(snapshot.map((session) => session.queue.drain()));
     await Promise.all(snapshot.map(async (session) => {
       await session.browserAutomation?.close().catch(() => undefined);
-      session.browserAutomation = undefined;
+      delete session.browserAutomation;
     }));
     for (const session of snapshot) {
       if (!session.isDefault && this.sessions.get(session.id) === session) await this.removeSession(session);
@@ -385,7 +385,7 @@ export class SessionManager {
     session.queue.close();
     this.sessions.delete(session.id);
     await session.browserAutomation?.close().catch(() => undefined);
-    session.browserAutomation = undefined;
+    delete session.browserAutomation;
     await session.browserSession?.close().catch(() => undefined);
     telemetry.sessionEvicted();
     telemetry.setSessionsActive(this.sessions.size);
