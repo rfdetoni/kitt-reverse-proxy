@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SessionLimitExceededError, SessionManager } from '../src/runtime/session-manager.js';
-import type { AppConfig, ChatExecutor, JsonObject } from '../src/types.js';
+import type { AppConfig, ChatExecutor, JsonObject, LiveBrowserSession } from '../src/types.js';
 
 const config = {
   targetUrl: 'https://chatgpt.com/',
@@ -103,6 +103,61 @@ test('session manager attaches per-request timing metadata', async () => {
       assert.equal(typeof timing[key], 'number');
       assert.ok((timing[key] as number) >= 0);
     }
+  } finally {
+    await manager.close();
+  }
+});
+
+
+test('browser automation uses a separate tab and never navigates the provider chat page', async () => {
+  let providerNavigations = 0;
+  let automationNavigations = 0;
+  let automationClosed = 0;
+  let createdPages = 0;
+
+  const automationPage = {
+    isClosed: () => false,
+    async goto() { automationNavigations += 1; },
+    url: () => 'http://127.0.0.1:4200/',
+    async title() { return 'App'; },
+    async close() { automationClosed += 1; },
+    locator() { throw new Error('not used'); }
+  } as any;
+
+  const browserSession: LiveBrowserSession = {
+    context: {
+      async newPage() {
+        createdPages += 1;
+        return automationPage;
+      }
+    } as any,
+    page: {
+      async goto() { providerNavigations += 1; }
+    } as any,
+    persistent: true,
+    async close() {}
+  };
+
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    defaultBrowserSession: browserSession,
+    provider: 'chatgpt',
+    config
+  });
+  try {
+    assert.equal(manager.browserAutomationSupported(), true);
+    const opened = await manager.browserAction(undefined, 'open', {
+      url: 'http://127.0.0.1:4200/'
+    });
+    assert.equal(opened.action, 'open');
+    assert.equal(opened.session_id, 'default');
+    assert.equal(createdPages, 1);
+    assert.equal(automationNavigations, 1);
+    assert.equal(providerNavigations, 0);
+
+    const closed = await manager.browserAction(undefined, 'close', {});
+    assert.equal(closed.closed, true);
+    assert.equal(automationClosed, 1);
   } finally {
     await manager.close();
   }

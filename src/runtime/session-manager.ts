@@ -7,6 +7,10 @@ import type {
   LiveBrowserSession
 } from '../types.js';
 import { SerialQueue } from './serial-queue.js';
+import {
+  BrowserAutomationSession,
+  BrowserAutomationUnavailableError
+} from './browser-automation.js';
 import { ResilientChatExecutor } from './resilient-executor.js';
 import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
@@ -77,6 +81,7 @@ interface ManagedSession {
   provider: string;
   executor: ChatExecutor;
   browserSession?: LiveBrowserSession;
+  browserAutomation?: BrowserAutomationSession;
   queue: SerialQueue;
   createdAt: number;
   lastActivity: number;
@@ -124,6 +129,45 @@ export class SessionManager {
   get providerId(): string { return this.options.provider; }
 
   describe(): JsonObject { return this.defaultSession.executor.describe(); }
+
+  browserAutomationSupported(): boolean {
+    return Boolean(this.defaultSession.browserSession);
+  }
+
+  async browserAction(
+    requestedId: string | undefined,
+    action: string,
+    args: JsonObject = {},
+    signal?: AbortSignal
+  ): Promise<JsonObject> {
+    const session = await this.resolve(requestedId);
+    if (!session.browserSession) {
+      throw new BrowserAutomationUnavailableError(
+        'Browser automation requires a UI transport with a live browser session.'
+      );
+    }
+    session.lastActivity = Date.now();
+    return session.queue.run(async () => {
+      session.status = 'busy';
+      session.lastActivity = Date.now();
+      try {
+        if (action.trim().toLowerCase() === 'close') {
+          const current = session.browserAutomation;
+          session.browserAutomation = undefined;
+          if (current) await current.close();
+          return { action: 'close', closed: Boolean(current), session_id: session.id };
+        }
+        if (!session.browserAutomation || session.browserAutomation.isClosed()) {
+          session.browserAutomation = await BrowserAutomationSession.create(session.browserSession!);
+        }
+        const result = await session.browserAutomation.execute(action, args);
+        return { ...result, session_id: session.id };
+      } finally {
+        session.lastActivity = Date.now();
+        session.status = 'idle';
+      }
+    }, signal);
+  }
 
   normalizeSessionId(value: string | undefined): string {
     if (value === undefined || value === '' || value === 'default') return 'default';
@@ -272,6 +316,10 @@ export class SessionManager {
     await Promise.allSettled([...this.creating.values()]);
     const snapshot = [...this.sessions.values()];
     await Promise.all(snapshot.map((session) => session.queue.drain()));
+    await Promise.all(snapshot.map(async (session) => {
+      await session.browserAutomation?.close().catch(() => undefined);
+      session.browserAutomation = undefined;
+    }));
     for (const session of snapshot) {
       if (!session.isDefault && this.sessions.get(session.id) === session) await this.removeSession(session);
     }
@@ -336,6 +384,8 @@ export class SessionManager {
     session.status = 'closing';
     session.queue.close();
     this.sessions.delete(session.id);
+    await session.browserAutomation?.close().catch(() => undefined);
+    session.browserAutomation = undefined;
     await session.browserSession?.close().catch(() => undefined);
     telemetry.sessionEvicted();
     telemetry.setSessionsActive(this.sessions.size);

@@ -8,6 +8,7 @@ import { sendProxyError } from './http-errors.js';
 import { telemetry } from '../util/telemetry.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { logger } from '../logger.js';
+import { InvalidRequestError } from '../core/errors.js';
 
 function resilience(manager: SessionManager): JsonObject | undefined {
   const value = manager.describe().resilience;
@@ -49,6 +50,7 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
         readiness: '/readyz',
         session: '/v1/kitt/session',
         sessions: '/v1/kitt/sessions',
+        browser: '/v1/kitt/browser/:action',
         metrics: '/v1/kitt/metrics'
       },
       capabilities: runtimeCapabilities(manager, config)
@@ -174,6 +176,32 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       res.json({ status: 'ok', id, capacity: manager.capacity() });
     } catch (error) {
       logger.event('warn', 'session.delete.error', { error });
+      sendProxyError(res, error);
+    }
+  });
+
+  router.post('/v1/kitt/browser/:action', async (req: Request, res: Response) => {
+    try {
+      const action = Array.isArray(req.params.action) ? req.params.action[0] : req.params.action;
+      if (!action) throw new InvalidRequestError('Browser action is required.');
+      const body = req.body;
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        throw new InvalidRequestError('Browser request body must be a JSON object.');
+      }
+      await withRequestLifecycle(req, res, async (signal) => {
+        const result = await manager.browserAction(
+          req.get('x-kitt-session-id'),
+          action,
+          body as JsonObject,
+          signal
+        );
+        res.json(result);
+      });
+    } catch (error) {
+      logger.event('warn', 'browser.action.error', {
+        action: req.params.action,
+        error
+      });
       sendProxyError(res, error);
     }
   });

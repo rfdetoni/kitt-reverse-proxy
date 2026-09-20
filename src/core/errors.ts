@@ -14,6 +14,13 @@ import {
 } from '../runtime/session-manager.js';
 import { ProviderCircuitOpenError } from '../runtime/resilient-executor.js';
 import {
+  BrowserAutomationExecutionError,
+  BrowserAutomationInputError,
+  BrowserAutomationResponseTooLargeError,
+  BrowserAutomationTimeoutError,
+  BrowserAutomationUnavailableError
+} from '../runtime/browser-automation.js';
+import {
   AttachmentInputError,
   ImageInputError,
   ProviderNoAttachmentSupportError,
@@ -55,6 +62,11 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof SessionBusyError) return { status: 409, code: 'session_busy', message };
   if (error instanceof InvalidSessionIdError) return { status: 400, code: 'invalid_session_id', message };
   if (error instanceof SessionNotSupportedError) return { status: 400, code: 'session_not_supported', message };
+  if (error instanceof BrowserAutomationInputError) return { status: 400, code: 'invalid_browser_request', message };
+  if (error instanceof BrowserAutomationUnavailableError) return { status: 409, code: 'browser_unavailable', message };
+  if (error instanceof BrowserAutomationTimeoutError) return { status: 504, code: 'browser_timeout', message };
+  if (error instanceof BrowserAutomationResponseTooLargeError) return { status: 413, code: 'browser_response_too_large', message };
+  if (error instanceof BrowserAutomationExecutionError) return { status: 502, code: 'browser_automation_error', message };
   if (error instanceof ProviderCircuitOpenError) return { status: 503, code: 'provider_circuit_open', message };
   if (error instanceof ProviderNoImageSupportError) return { status: 400, code: 'provider_no_image_support', message };
   if (error instanceof ProviderNoAttachmentSupportError) return { status: 400, code: 'provider_no_attachment_support', message };

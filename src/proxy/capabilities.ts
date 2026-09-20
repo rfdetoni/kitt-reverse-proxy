@@ -3,6 +3,7 @@ import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
 import { AGENT_CONTRACT_HEADER, AGENT_CONTRACT_VERSION, AGENT_ROUTE_HEADER, AGENT_ROUTES } from '../runtime/agent-contract.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
+import { BROWSER_AUTOMATION_ACTIONS } from '../runtime/browser-automation.js';
 
 function asObject(value: JsonValue | undefined): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -21,6 +22,18 @@ function sessionManagementContract(manager: SessionManager): JsonObject {
     reset_endpoint: '/v1/kitt/reset',
     delete_endpoint_template: '/v1/kitt/sessions/:id',
     ...manager.capacity()
+  };
+}
+
+function browserAutomationContract(manager: SessionManager): JsonObject {
+  return {
+    supported: manager.browserAutomationSupported(),
+    endpoint_template: '/v1/kitt/browser/:action',
+    session_header: 'X-Kitt-Session-Id',
+    isolated_tab: true,
+    javascript_eval: false,
+    actions: [...BROWSER_AUTOMATION_ACTIONS],
+    screenshot_formats: ['jpeg', 'png']
   };
 }
 
@@ -73,6 +86,7 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
     reasoning_supported: false,
     reasoning: reasoningContract(),
     session_management: sessions,
+    browser_automation: browserAutomationContract(manager),
     parallel_tool_calls_recommended: false
   };
 }
@@ -104,6 +118,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       supported: imageInput,
       provider: manager.providerId
     },
+    browser_automation: browserAutomationContract(manager),
     reasoning: reasoningContract(),
     resilience: resilience ?? { circuit: 'closed' },
     provider_discovery: {
