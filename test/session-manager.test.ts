@@ -121,6 +121,9 @@ test('browser automation uses a separate tab and never navigates the provider ch
     url: () => 'http://127.0.0.1:4200/',
     async title() { return 'App'; },
     async close() { automationClosed += 1; },
+    async route() {},
+    on() {},
+    mainFrame() { return {}; },
     locator() { throw new Error('not used'); }
   } as any;
 

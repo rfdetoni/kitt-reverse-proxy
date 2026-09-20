@@ -19,6 +19,8 @@ const MAX_BODY_CHARS = 20_000;
 const MAX_ELEMENT_TEXT_CHARS = 500;
 const MAX_ELEMENTS = 100;
 const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024;
+const MAX_ORIGIN_SCOPE_ENTRIES = 16;
+const LOOPBACK_SCOPE = 'loopback';
 
 export class BrowserAutomationInputError extends Error {
   constructor(message: string) {
@@ -53,6 +55,45 @@ export class BrowserAutomationResponseTooLargeError extends Error {
     super(message);
     this.name = 'BrowserAutomationResponseTooLargeError';
   }
+}
+
+export class BrowserOriginDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrowserOriginDeniedError';
+  }
+}
+
+export function normalizeBrowserOriginScope(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) return [LOOPBACK_SCOPE];
+  if (value.length > MAX_ORIGIN_SCOPE_ENTRIES) {
+    throw new BrowserAutomationInputError(
+      `Browser origin scope exceeds ${MAX_ORIGIN_SCOPE_ENTRIES} entries.`
+    );
+  }
+  const normalized: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length > 512) {
+      throw new BrowserAutomationInputError('Browser origin scope entries must be bounded strings.');
+    }
+    const raw = item.trim();
+    if (!raw) continue;
+    if (raw === LOOPBACK_SCOPE) {
+      normalized.push(LOOPBACK_SCOPE);
+      continue;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      throw new BrowserAutomationInputError(`Invalid browser origin scope entry: ${raw}`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new BrowserAutomationInputError('Browser origin scope only allows http/https origins.');
+    }
+    normalized.push(parsed.origin);
+  }
+  return [...new Set(normalized.length > 0 ? normalized : [LOOPBACK_SCOPE])];
 }
 
 function stringArg(
@@ -153,11 +194,78 @@ function actionName(value: string): BrowserAutomationAction {
 }
 
 export class BrowserAutomationSession {
+  private originScope = new Set<string>([LOOPBACK_SCOPE]);
+  private blockedNavigationUrl: string | undefined;
+
   constructor(private readonly page: Page) {}
 
-  static async create(base: LiveBrowserSession): Promise<BrowserAutomationSession> {
+  static async create(
+    base: LiveBrowserSession,
+    originScope: readonly string[] = [LOOPBACK_SCOPE]
+  ): Promise<BrowserAutomationSession> {
     const page = await base.context.newPage();
-    return new BrowserAutomationSession(page);
+    const session = new BrowserAutomationSession(page);
+    session.setOriginScope(originScope);
+    const pageWithRouting = page as Page & {
+      route?: Page['route'];
+      on?: Page['on'];
+    };
+    if (typeof pageWithRouting.route === 'function') {
+      await page.route('**/*', async (route) => {
+        const request = route.request();
+        if (
+          request.isNavigationRequest()
+          && request.frame() === page.mainFrame()
+          && !session.isAllowedUrl(request.url())
+        ) {
+          session.blockedNavigationUrl = request.url();
+          await route.abort('blockedbyclient');
+          return;
+        }
+        await route.continue();
+      });
+    }
+    if (typeof pageWithRouting.on === 'function') {
+      page.on('popup', (popup) => {
+        void popup.close().catch(() => undefined);
+      });
+    }
+    return session;
+  }
+
+  private setOriginScope(originScope: readonly string[]): void {
+    this.originScope = new Set(normalizeBrowserOriginScope([...originScope]));
+    this.blockedNavigationUrl = undefined;
+  }
+
+  private isAllowedUrl(value: string): boolean {
+    if (value === 'about:blank') return true;
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (this.originScope.has(parsed.origin)) return true;
+    if (!this.originScope.has(LOOPBACK_SCOPE)) return false;
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      hostname === 'localhost'
+      || hostname.endsWith('.localhost')
+      || hostname === '127.0.0.1'
+      || hostname === '[::1]'
+      || hostname === '::1'
+      || hostname === '0.0.0.0'
+    );
+  }
+
+  private assertAllowedUrl(value: string): void {
+    if (!this.isAllowedUrl(value)) {
+      throw new BrowserOriginDeniedError(
+        `Browser navigation blocked by origin scope: ${value}`
+      );
+    }
   }
 
   isClosed(): boolean {
@@ -168,7 +276,12 @@ export class BrowserAutomationSession {
     await this.page.close().catch(() => undefined);
   }
 
-  async execute(actionValue: string, args: JsonObject = {}): Promise<JsonObject> {
+  async execute(
+    actionValue: string,
+    args: JsonObject = {},
+    originScope: readonly string[] = [LOOPBACK_SCOPE]
+  ): Promise<JsonObject> {
+    this.setOriginScope(originScope);
     const action = actionName(actionValue);
     if (action === 'close') {
       await this.close();
@@ -182,10 +295,12 @@ export class BrowserAutomationSession {
     try {
       if (action === 'open') {
         const url = httpUrl(args);
+        this.assertAllowedUrl(url);
         await this.page.goto(url, {
           waitUntil: 'domcontentloaded',
           timeout
         });
+        this.assertAllowedUrl(this.page.url());
         return {
           action,
           url: this.page.url(),
@@ -194,8 +309,10 @@ export class BrowserAutomationSession {
       }
 
       if (action === 'click') {
+        this.assertAllowedUrl(this.page.url());
         const selector = selectorArg(args);
         await this.page.locator(selector).first().click({ timeout });
+        this.assertAllowedUrl(this.page.url());
         return {
           action,
           selector,
@@ -205,6 +322,7 @@ export class BrowserAutomationSession {
       }
 
       if (action === 'type') {
+        this.assertAllowedUrl(this.page.url());
         const selector = selectorArg(args);
         const text = stringArg(args, 'text', { max: MAX_TEXT_CHARS });
         const clear = booleanArg(args, 'clear', true);
@@ -213,6 +331,7 @@ export class BrowserAutomationSession {
         if (clear) await locator.fill(text, { timeout });
         else await locator.pressSequentially(text, { timeout });
         if (submit) await locator.press('Enter', { timeout });
+        this.assertAllowedUrl(this.page.url());
         return {
           action,
           selector,
@@ -223,6 +342,7 @@ export class BrowserAutomationSession {
       }
 
       if (action === 'screenshot') {
+        this.assertAllowedUrl(this.page.url());
         const fullPage = booleanArg(args, 'full_page', false);
         const formatRaw = stringArg(args, 'format', { max: 8 }).toLowerCase();
         const format = formatRaw === 'png' ? 'png' : 'jpeg';
@@ -247,6 +367,7 @@ export class BrowserAutomationSession {
         };
       }
 
+      this.assertAllowedUrl(this.page.url());
       const body = await this.page.locator('body').innerText({ timeout }).catch(() => '');
       const interactive = this.page.locator(
         'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]'
@@ -291,9 +412,17 @@ export class BrowserAutomationSession {
       if (
         error instanceof BrowserAutomationInputError ||
         error instanceof BrowserAutomationUnavailableError ||
-        error instanceof BrowserAutomationResponseTooLargeError
+        error instanceof BrowserAutomationResponseTooLargeError ||
+        error instanceof BrowserOriginDeniedError
       ) {
         throw error;
+      }
+      if (this.blockedNavigationUrl) {
+        const blocked = this.blockedNavigationUrl;
+        this.blockedNavigationUrl = undefined;
+        throw new BrowserOriginDeniedError(
+          `Browser navigation blocked by origin scope: ${blocked}`
+        );
       }
       if (error instanceof Error && error.name === 'TimeoutError') {
         throw new BrowserAutomationTimeoutError(error.message);

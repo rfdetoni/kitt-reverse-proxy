@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BrowserAutomationInputError,
-  BrowserAutomationSession
+  BrowserAutomationSession,
+  BrowserOriginDeniedError
 } from '../src/runtime/browser-automation.js';
 
 test('browser automation rejects non-http navigation without touching the page', async () => {
@@ -42,14 +43,91 @@ test('browser automation click and type expose bounded declarative actions', asy
   } as any;
   const automation = new BrowserAutomationSession(page);
 
-  const clicked = await automation.execute('click', { selector: '#save' });
+  const clicked = await automation.execute(
+    'click',
+    { selector: '#save' },
+    ['https://example.com']
+  );
   assert.equal(clicked.action, 'click');
 
-  const typed = await automation.execute('type', {
-    selector: '#name',
-    text: 'KITT',
-    submit: true
-  });
+  const typed = await automation.execute(
+    'type',
+    {
+      selector: '#name',
+      text: 'KITT',
+      submit: true
+    },
+    ['https://example.com']
+  );
   assert.equal(typed.text_length, 4);
   assert.deepEqual(calls, ['click', 'fill:KITT', 'press:Enter']);
+});
+
+
+test('browser automation defaults to loopback and rejects external origins', async () => {
+  let navigations = 0;
+  const page = {
+    isClosed: () => false,
+    async goto() { navigations += 1; },
+    url: () => 'about:blank',
+    async title() { return ''; },
+    async close() {},
+    locator() { throw new Error('not used'); }
+  } as any;
+  const automation = new BrowserAutomationSession(page);
+
+  await assert.rejects(
+    automation.execute('open', { url: 'https://example.com/' }),
+    BrowserOriginDeniedError
+  );
+  assert.equal(navigations, 0);
+
+  await automation.execute('open', { url: 'http://127.0.0.1:4200/' });
+  assert.equal(navigations, 1);
+});
+
+test('browser navigation guard aborts redirect outside the active origin scope', async () => {
+  let routeHandler: any;
+  const frame = {};
+  let currentUrl = 'https://allowed.example/';
+  const page = {
+    isClosed: () => false,
+    async route(_pattern: string, handler: any) { routeHandler = handler; },
+    on() {},
+    mainFrame: () => frame,
+    async goto(url: string) { currentUrl = url; },
+    url: () => currentUrl,
+    async title() { return 'Allowed'; },
+    async close() {},
+    locator() { throw new Error('not used'); }
+  } as any;
+  const base = {
+    context: { async newPage() { return page; } },
+    page: {} as any,
+    persistent: true,
+    async close() {}
+  } as any;
+  const automation = await BrowserAutomationSession.create(
+    base,
+    ['https://allowed.example']
+  );
+  await automation.execute(
+    'open',
+    { url: 'https://allowed.example/' },
+    ['https://allowed.example']
+  );
+
+  let aborted = false;
+  let continued = false;
+  await routeHandler({
+    request: () => ({
+      isNavigationRequest: () => true,
+      frame: () => frame,
+      url: () => 'https://evil.example/redirect'
+    }),
+    abort: async () => { aborted = true; },
+    continue: async () => { continued = true; }
+  });
+  assert.equal(aborted, true);
+  assert.equal(continued, false);
 });

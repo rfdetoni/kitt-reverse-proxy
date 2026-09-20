@@ -17,6 +17,7 @@ import {
   BrowserAutomationExecutionError,
   BrowserAutomationInputError,
   BrowserAutomationResponseTooLargeError,
+  BrowserOriginDeniedError,
   BrowserAutomationTimeoutError,
   BrowserAutomationUnavailableError
 } from '../runtime/browser-automation.js';
@@ -63,6 +64,7 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof InvalidSessionIdError) return { status: 400, code: 'invalid_session_id', message };
   if (error instanceof SessionNotSupportedError) return { status: 400, code: 'session_not_supported', message };
   if (error instanceof BrowserAutomationInputError) return { status: 400, code: 'invalid_browser_request', message };
+  if (error instanceof BrowserOriginDeniedError) return { status: 403, code: 'browser_origin_denied', message };
   if (error instanceof BrowserAutomationUnavailableError) return { status: 409, code: 'browser_unavailable', message };
   if (error instanceof BrowserAutomationTimeoutError) return { status: 504, code: 'browser_timeout', message };
   if (error instanceof BrowserAutomationResponseTooLargeError) return { status: 413, code: 'browser_response_too_large', message };

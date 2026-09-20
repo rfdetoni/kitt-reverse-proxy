@@ -138,7 +138,8 @@ export class SessionManager {
     requestedId: string | undefined,
     action: string,
     args: JsonObject = {},
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    originScope: readonly string[] = ['loopback']
   ): Promise<JsonObject> {
     const session = await this.resolve(requestedId);
     if (!session.browserSession) {
@@ -158,9 +159,12 @@ export class SessionManager {
           return { action: 'close', closed: Boolean(current), session_id: session.id };
         }
         if (!session.browserAutomation || session.browserAutomation.isClosed()) {
-          session.browserAutomation = await BrowserAutomationSession.create(session.browserSession!);
+          session.browserAutomation = await BrowserAutomationSession.create(
+            session.browserSession!,
+            originScope
+          );
         }
-        const result = await session.browserAutomation.execute(action, args);
+        const result = await session.browserAutomation.execute(action, args, originScope);
         return { ...result, session_id: session.id };
       } finally {
         session.lastActivity = Date.now();

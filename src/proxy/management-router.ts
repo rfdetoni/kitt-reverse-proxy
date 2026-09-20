@@ -9,6 +9,26 @@ import { telemetry } from '../util/telemetry.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { logger } from '../logger.js';
 import { InvalidRequestError } from '../core/errors.js';
+import { normalizeBrowserOriginScope } from '../runtime/browser-automation.js';
+
+const BROWSER_ORIGIN_SCOPE_HEADER = 'X-Kitt-Browser-Origin-Scope';
+const MAX_BROWSER_SCOPE_HEADER_CHARS = 4096;
+
+function browserOriginScope(req: Request): string[] {
+  const encoded = req.get(BROWSER_ORIGIN_SCOPE_HEADER);
+  if (!encoded) return ['loopback'];
+  if (encoded.length > MAX_BROWSER_SCOPE_HEADER_CHARS) {
+    throw new InvalidRequestError('Browser origin scope header is too large.');
+  }
+  let decoded: unknown;
+  try {
+    const raw = Buffer.from(encoded, 'base64url').toString('utf8');
+    decoded = JSON.parse(raw);
+  } catch {
+    throw new InvalidRequestError('Browser origin scope header is invalid.');
+  }
+  return normalizeBrowserOriginScope(decoded);
+}
 
 function resilience(manager: SessionManager): JsonObject | undefined {
   const value = manager.describe().resilience;
@@ -193,7 +213,8 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
           req.get('x-kitt-session-id'),
           action,
           body as JsonObject,
-          signal
+          signal,
+          browserOriginScope(req)
         );
         res.json(result);
       });

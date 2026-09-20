@@ -32,6 +32,12 @@ function browserAutomationContract(manager: SessionManager): JsonObject {
     session_header: 'X-Kitt-Session-Id',
     isolated_tab: true,
     javascript_eval: false,
+    origin_scope_enforced: true,
+    origin_scope_header: 'X-Kitt-Browser-Origin-Scope',
+    origin_scope_encoding: 'base64url-json-array',
+    default_origin_scope: 'loopback',
+    top_level_navigation_enforced: true,
+    popups_blocked: true,
     actions: [...BROWSER_AUTOMATION_ACTIONS],
     screenshot_formats: ['jpeg', 'png']
   };
