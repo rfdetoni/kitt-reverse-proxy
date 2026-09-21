@@ -9,6 +9,7 @@ import {
   AgentContractError,
   AgentContractValidationError,
   prepareAgentContractRequest,
+  normalizeAgentContractLogicalHistory,
   recordAgentContractValidation,
   transformAgentContractCompletion,
   type AgentContractPlan
@@ -185,7 +186,7 @@ export function contractExecutionOptions(
     // Contract prompts, action constraints and synthetic tool-result turns are
     // transport-internal. Session continuity must track only the API caller's
     // original history so equivalent round trips keep a stable user timeline.
-    logicalHistoryBody: plan.originalBody
+    logicalHistoryBody: normalizeAgentContractLogicalHistory(plan.originalBody)
   };
 }
 

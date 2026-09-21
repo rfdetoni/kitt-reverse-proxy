@@ -230,6 +230,29 @@ function parseTurnContext(content: string): ParsedTurnContext | undefined {
   }
 }
 
+export function normalizeAgentContractLogicalHistory(originalBody: JsonObject): JsonObject {
+  const source = Array.isArray(originalBody.messages) ? originalBody.messages : [];
+  const messages: JsonValue[] = [];
+
+  for (const message of source) {
+    if (!isRecord(message)) {
+      messages.push(message);
+      continue;
+    }
+    const text = messageText(message);
+    const parsed = text ? parseTurnContext(text) : undefined;
+    if (!parsed) {
+      messages.push(message);
+      continue;
+    }
+    if (parsed.remainder) {
+      messages.push({ ...message, content: parsed.remainder } as JsonValue);
+    }
+  }
+
+  return { ...originalBody, messages };
+}
+
 function normalizeRoute(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) return 'chat';
   const route = value.trim();
@@ -425,11 +448,25 @@ export function prepareAgentContractRequest(
     const parsedTurnContext = text ? parseTurnContext(text) : undefined;
     if (parsedTurnContext) {
       turnContext = { ...(turnContext ?? {}), ...parsedTurnContext.context };
-      if (parsedTurnContext.remainder && isRecord(message)) {
-        forwardedMessages.push({
-          ...message,
-          content: parsedTurnContext.remainder
-        } as JsonValue);
+      if (parsedTurnContext.remainder) {
+        if (role === 'user' && syntheticToolCalls.size === 1) {
+          const pending = syntheticToolCalls.entries().next().value as [string, SyntheticToolCall] | undefined;
+          if (pending) {
+            const [callId, toolCall] = pending;
+            if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+            forwardedMessages.push(contractToolResultMessage(
+              toolCall.name,
+              callId,
+              parsedTurnContext.remainder
+            ));
+            syntheticToolCalls.delete(callId);
+          }
+        } else if (isRecord(message)) {
+          forwardedMessages.push({
+            ...message,
+            content: parsedTurnContext.remainder
+          } as JsonValue);
+        }
       }
       continue;
     }
