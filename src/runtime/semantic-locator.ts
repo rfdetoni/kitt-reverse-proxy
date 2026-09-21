@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import type { JsonObject } from '../types.js';
 
 export type SemanticTarget = 'composer' | 'send' | 'streaming' | 'response';
 
@@ -90,7 +91,7 @@ export async function resolveVisibleLocator(
   return undefined;
 }
 
-export function semanticLocatorContract(): Record<string, unknown> {
+export function semanticLocatorContract(): JsonObject {
   return {
     version: 1,
     strategy_order: ['provider', 'semantic'],
