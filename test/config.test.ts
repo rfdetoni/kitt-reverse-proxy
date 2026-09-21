@@ -55,10 +55,12 @@ test('log level 2 and log file are parsed explicitly', () => {
   const config = parseCliArgs([
     'chatgpt',
     '--log-level', '2',
+    '--log-content', 'full',
     '--log-file', '/tmp/kitt-reverse-proxy-trace.log'
   ]);
   if ('help' in config) throw new Error('unexpected help');
   assert.equal(config.logLevel, 2);
+  assert.equal(config.logContent, 'full');
   assert.equal(config.logFile, '/tmp/kitt-reverse-proxy-trace.log');
 });
 
@@ -66,5 +68,13 @@ test('invalid log level is rejected', () => {
   assert.throws(
     () => parseCliArgs(['chatgpt', '--log-level', '3']),
     /Log level inválido/
+  );
+});
+
+
+test('invalid log content policy is rejected', () => {
+  assert.throws(
+    () => parseCliArgs(['chatgpt', '--log-content', 'everything']),
+    /Log content inválido/
   );
 });
