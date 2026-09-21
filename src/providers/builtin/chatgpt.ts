@@ -1,7 +1,7 @@
 import type { ProviderPreset } from '../types.js';
 import { BASE_CAPABILITIES, model } from '../shared.js';
 
-export const CHATGPT_PROVIDER: ProviderPreset = Object.freeze({
+export const CHATGPT_PROVIDER = Object.freeze({
   id: 'chatgpt',
   name: 'ChatGPT Web',
   hosts: ['chatgpt.com', 'chat.openai.com'],
@@ -55,4 +55,4 @@ export const CHATGPT_PROVIDER: ProviderPreset = Object.freeze({
     uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
     supportsImageUpload: true
   }
-});
+} satisfies ProviderPreset);
