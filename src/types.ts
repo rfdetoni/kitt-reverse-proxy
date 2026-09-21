@@ -40,6 +40,7 @@ export interface AppConfig {
   sessionIdleTimeoutMs: number;
   logFormat: 'text' | 'json';
   logLevel?: 0 | 1 | 2;
+  logContent?: 'none' | 'metadata' | 'full';
   logFile?: string;
   toolEnforcement?: 'auto' | 'explore-first' | 'required';
   provider: ProviderId;
