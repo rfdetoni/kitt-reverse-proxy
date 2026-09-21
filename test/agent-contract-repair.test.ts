@@ -67,9 +67,14 @@ test('turn constraints preserve the final actionable UI turn', () => {
   const constraintIndex = messages.findIndex((message) =>
     message.role === 'developer' && message.content?.includes('[KITT ACTION CONSTRAINTS]')
   );
-  const lastActionableIndex = messages.findLastIndex((message) =>
-    message.role === 'user' || message.role === 'tool'
-  );
+  let lastActionableIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const role = messages[index]?.role;
+    if (role === 'user' || role === 'tool') {
+      lastActionableIndex = index;
+      break;
+    }
+  }
 
   assert.ok(constraintIndex >= 0);
   assert.ok(lastActionableIndex > constraintIndex);

@@ -108,11 +108,16 @@ export function reinforceAgentContractPlan(plan: AgentContractPlan): AgentContra
     role: 'developer',
     content: ['[KITT ACTION CONSTRAINTS]', ...constraints, '[END KITT ACTION CONSTRAINTS]'].join('\n')
   };
-  const lastActionableIndex = messages.findLastIndex((message) => {
-    if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+  let lastActionableIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
     const role = (message as Record<string, unknown>).role;
-    return role === 'user' || role === 'tool';
-  });
+    if (role === 'user' || role === 'tool') {
+      lastActionableIndex = index;
+      break;
+    }
+  }
   const insertAt = lastActionableIndex >= 0 ? lastActionableIndex : messages.length;
   messages.splice(insertAt, 0, constraintMessage);
   return { ...plan, body: { ...plan.body, messages } };
