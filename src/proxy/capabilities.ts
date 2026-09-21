@@ -4,6 +4,9 @@ import type { SessionManager } from '../runtime/session-manager.js';
 import { AGENT_CONTRACT_HEADER, AGENT_CONTRACT_VERSION, AGENT_ROUTE_HEADER, AGENT_ROUTES } from '../runtime/agent-contract.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
 import { BROWSER_AUTOMATION_ACTIONS } from '../runtime/browser-automation.js';
+import { tracingContract } from '../observability/tracing.js';
+import { semanticLocatorContract } from '../runtime/semantic-locator.js';
+import { currentLogContentPolicy } from '../logger.js';
 
 function asObject(value: JsonValue | undefined): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -71,6 +74,10 @@ export function providerRecord(provider: ProviderPreset, manager?: SessionManage
       reasoning: provider.capabilities.reasoning,
       image_input: provider.ui.supportsImageUpload
     },
+    ui: {
+      selector_version: provider.ui.selectorVersion,
+      semantic_locator: semanticLocatorContract()
+    },
     health: active ? (resilience ?? { circuit: 'closed' }) : { circuit: 'unknown' }
   };
 }
@@ -78,6 +85,7 @@ export function providerRecord(provider: ProviderPreset, manager?: SessionManage
 export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
   const sessions = sessionManagementContract(manager);
   return {
+    proxy_contract_version: 2,
     protocol: 'openai-chat-completions',
     native_tool_roundtrip: true,
     agent_contract: {
@@ -106,6 +114,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
 
   return {
     status: 'ok',
+    contract_version: 2,
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     provider: manager.providerId,
@@ -131,6 +140,32 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       list_endpoint: '/v1/providers',
       detail_endpoint_template: '/v1/providers/:provider',
       models_endpoint_template: '/v1/providers/:provider/models'
+    },
+    provider_registry: {
+      version: 2,
+      modular_manifests: true,
+      selector_pack_versioned: true,
+      conformance_required: true
+    },
+    observability: {
+      metrics: {
+        prometheus: true,
+        json: true,
+        endpoint: '/v1/kitt/metrics'
+      },
+      tracing: tracingContract(),
+      logs: {
+        structured_json: true,
+        request_correlation: true,
+        content_policy: currentLogContentPolicy()
+      }
+    },
+    control_planes: {
+      data: ['/v1/chat/completions', '/v1/responses', '/v1/messages', '/api/chat'],
+      management: ['/v1/kitt/status', '/v1/kitt/sessions', '/v1/kitt/metrics', '/v1/capabilities'],
+      browser: ['/v1/kitt/browser/:action'],
+      authentication: 'shared-api-key',
+      browser_origin_scope_enforced: true
     },
     protocols: {
       openai: {
