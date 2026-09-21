@@ -1,7 +1,7 @@
 import type { ProviderPreset } from '../types.js';
 import { BASE_CAPABILITIES, model } from '../shared.js';
 
-export const GEMINI_PROVIDER: ProviderPreset = Object.freeze({
+export const GEMINI_PROVIDER = Object.freeze({
   id: 'gemini',
   name: 'Gemini Web',
   hosts: ['gemini.google.com'],
@@ -48,4 +48,4 @@ export const GEMINI_PROVIDER: ProviderPreset = Object.freeze({
     uploadSelector: 'input[type="file"]',
     supportsImageUpload: true
   }
-});
+} satisfies ProviderPreset);
