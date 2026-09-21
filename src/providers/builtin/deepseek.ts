@@ -1,7 +1,7 @@
 import type { ProviderPreset } from '../types.js';
 import { BASE_CAPABILITIES, model } from '../shared.js';
 
-export const DEEPSEEK_PROVIDER: ProviderPreset = Object.freeze({
+export const DEEPSEEK_PROVIDER = Object.freeze({
   id: 'deepseek',
   name: 'DeepSeek Web',
   hosts: ['chat.deepseek.com', 'deepseek.com'],
@@ -42,4 +42,4 @@ export const DEEPSEEK_PROVIDER: ProviderPreset = Object.freeze({
     newChatUrl: 'https://chat.deepseek.com/',
     supportsImageUpload: false
   }
-});
+} satisfies ProviderPreset);
