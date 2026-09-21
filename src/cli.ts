@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { cliLaunchPresets, parseCliArgs, printHelp } from './config.js';
-import { configureLogger, logger, sanitizeLogMessage } from './logger.js';
+import { closeLogger, configureLogger, logger, sanitizeLogMessage } from './logger.js';
+import { flushTracing } from './observability/tracing.js';
 import { startProxyServer } from './proxy/server.js';
 import { createRuntime } from './runtime/runtime-factory.js';
 import { createIsolatedUiSession } from './runtime/isolated-ui-session.js';
+import { BrowserSessionBroker } from './runtime/browser-broker.js';
 import { SessionManager } from './runtime/session-manager.js';
 import { notifyIfUpdateAvailable } from './update-check.js';
 import { SERVICE_VERSION } from './version.js';
@@ -42,7 +44,7 @@ async function main(): Promise<void> {
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
 
-  configureLogger({ format: config.logFormat, level: config.logLevel ?? 0, file: config.logFile });
+  configureLogger({ format: config.logFormat, level: config.logLevel ?? 0, content: config.logContent ?? 'metadata', file: config.logFile });
   logger.debug('proxy.config', { config });
   logger.trace('proxy.config.full', { config, argv: args });
 
@@ -57,13 +59,16 @@ async function main(): Promise<void> {
   }
 
   const runtime = await createRuntime(config);
+  const browserBroker = runtime.transport === 'ui'
+    ? new BrowserSessionBroker(runtime.session, config)
+    : undefined;
   const manager = new SessionManager({
     defaultExecutor: runtime.executor,
     defaultBrowserSession: runtime.session,
     provider: runtime.provider.id,
     config,
-    ...(runtime.transport === 'ui'
-      ? { factory: async () => createIsolatedUiSession(runtime.session, runtime.provider, config) }
+    ...(browserBroker
+      ? { factory: async () => createIsolatedUiSession(runtime.session, runtime.provider, config, browserBroker) }
       : {})
   });
 
@@ -94,6 +99,8 @@ async function main(): Promise<void> {
       if (forced) logger.warn('Conexões HTTP remanescentes foram encerradas durante shutdown.');
       await manager.close();
       await runtime.session.close();
+      await flushTracing();
+      await closeLogger();
     };
     shutdownHandler = shutdown;
     process.once('SIGINT', () => void shutdown('SIGINT'));
@@ -102,6 +109,8 @@ async function main(): Promise<void> {
   } catch (error) {
     await manager.close();
     await runtime.session.close();
+    await flushTracing();
+    await closeLogger();
     throw error;
   }
 }

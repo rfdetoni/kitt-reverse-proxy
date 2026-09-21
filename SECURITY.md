@@ -1,4 +1,4 @@
-# Security Model — K.I.T.T. Reverse Proxy v3
+# Security Model — K.I.T.T. Reverse Proxy v4
 
 ## Intended use
 
@@ -60,6 +60,8 @@ Persistent browser profiles can contain cookies, tokens, localStorage and other 
 
 A browser supplied through `--cdp-url` is user-owned; shutdown does not intentionally terminate it.
 
+The v4 browser session broker centralizes ownership of named-session browser resources. Persistent authenticated contexts are reused only to create isolated tabs; non-persistent sessions receive isolated BrowserContexts derived from bounded storage state. Per-session serialization remains authoritative, and broker leases are idempotently released so one named conversation cannot close another conversation's authenticated context.
+
 ## Network transport and captured session material
 
 A BrowserContext may contain cookies, authorization and CSRF/XSRF state.
@@ -109,7 +111,11 @@ Structured-output validation is best-effort and explicitly reported when it fail
 
 Structured logs redact sensitive keys/values and cap depth, object keys and array elements. User-provided structured fields cannot replace the sanitized top-level log message. URLs written to logs have query strings/fragments removed where applicable.
 
+Log verbosity and payload disclosure are independent controls. `--log-content metadata` is the default and records payload shape/size without prompt or response content; `none` suppresses content-bearing fields; `full` is an explicit diagnostic opt-in and still applies secret/URL redaction. File logging uses asynchronous streams so trace diagnostics do not add synchronous filesystem I/O to the request hot path.
+
 Metrics use bounded label values and stable route labels rather than raw high-cardinality request paths, session IDs or arbitrary tool/function names.
+
+Optional OTLP tracing is activated only through an explicitly configured `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Trace attributes contain operational metadata rather than prompts/responses. Export queues and batches are bounded, export has a short timeout, failures are ignored by request execution, and W3C `traceparent` is propagated for correlation.
 
 ## Dependency and release integrity
 

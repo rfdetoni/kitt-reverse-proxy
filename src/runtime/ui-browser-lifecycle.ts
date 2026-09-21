@@ -17,6 +17,7 @@ import {
   UiChatExecutor
 } from './ui-executor.js';
 import { firstVisibleLocator } from './ui-dom.js';
+import { selectorCandidates } from './semantic-locator.js';
 
 const HEADLESS_PROBE_MS = 4_000;
 const HEADLESS_AFTER_AUTH_PROBE_MS = 6_000;
@@ -60,7 +61,7 @@ async function defaultReady(
   while (Date.now() < deadline) {
     const input = await firstVisibleLocator(
       session.page,
-      provider.ui.inputSelectors
+      selectorCandidates(provider.ui.inputSelectors, 'composer').map((item) => item.selector)
     );
     if (input) return true;
     await session.page.waitForTimeout(125).catch(() => undefined);

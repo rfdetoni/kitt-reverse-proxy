@@ -5,6 +5,7 @@ import type { ProviderPreset } from '../providers/catalog.js';
 import { detectBrowserGate, type BrowserGate } from '../security/challenge.js';
 import type { AppConfig, LiveBrowserSession } from '../types.js';
 import { anyVisible, firstVisibleLocator } from './ui-dom.js';
+import { selectorCandidates, type SelectorCandidate } from './semantic-locator.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { ManualInterventionRequiredError, UiAutomationError } from './ui-errors.js';
 
@@ -13,6 +14,11 @@ const EDITABLE_DESCENDANT_SELECTOR = [
   'input:not([type="hidden"]):not([disabled]):not([readonly])',
   '[contenteditable="true"]'
 ].join(', ');
+
+interface EditableResolution extends SelectorCandidate {
+  locator: Locator;
+  frameIndex: number;
+}
 
 function normalizeComposerText(value: string): string {
   return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
@@ -36,23 +42,21 @@ async function locatorIsEditable(input: Locator): Promise<boolean> {
   }).catch(() => false);
 }
 
-async function firstEditableLocator(page: Page, selectors: readonly string[]): Promise<Locator | undefined> {
-  for (const frame of page.frames().filter((candidate) => !candidate.isDetached())) {
-    for (const selector of selectors) {
+async function firstEditableLocator(page: Page, selectors: readonly string[]): Promise<EditableResolution | undefined> {
+  const candidates = selectorCandidates(selectors, 'composer');
+  const frames = page.frames().filter((candidate) => !candidate.isDetached());
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+    const frame = frames[frameIndex]!;
+    for (const descriptor of candidates) {
       try {
-        const candidate = frame.locator(selector).last();
+        const candidate = frame.locator(descriptor.selector).last();
         if (await candidate.count() === 0) continue;
         if (!await candidate.isVisible({ timeout: 150 }).catch(() => false)) continue;
 
-        // Selectors that themselves target native/text-editable controls are safe to
-        // accept directly. This also keeps lightweight Playwright test doubles
-        // compatible without weakening wrapper selectors such as #prompt-textarea.
-        if (selectorTargetsEditableElement(selector) || await locatorIsEditable(candidate)) {
-          return candidate;
+        if (selectorTargetsEditableElement(descriptor.selector) || await locatorIsEditable(candidate)) {
+          return { locator: candidate, frameIndex, ...descriptor };
         }
 
-        // A provider selector may point at a visible composer wrapper. Resolve the
-        // actual editable descendant instead of typing into the wrapper itself.
         const descendants = candidate.locator(EDITABLE_DESCENDANT_SELECTOR);
         const descendant = descendants.last();
         if (
@@ -60,7 +64,7 @@ async function firstEditableLocator(page: Page, selectors: readonly string[]): P
           && await descendant.isVisible({ timeout: 150 }).catch(() => false)
           && await locatorIsEditable(descendant)
         ) {
-          return descendant;
+          return { locator: descendant, frameIndex, ...descriptor };
         }
       } catch {
         // The page can re-render while locating the composer. Try the next candidate.
@@ -156,9 +160,6 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
 
   if (normalizeComposerText(await readComposerText(input)) === expected) return;
 
-  // Lexical/ProseMirror-style editors may expose a visible wrapper or ignore
-  // Playwright fill/keyboard insertion. Use the native value setter or an input
-  // event on the resolved editable node as a final, non-submitting fallback.
   await setComposerTextThroughDom(input, prompt).catch(() => undefined);
 
   const actual = normalizeComposerText(await readComposerText(input));
@@ -178,24 +179,25 @@ async function waitForSubmissionConfirmation(
   signal?: AbortSignal
 ): Promise<void> {
   const deadline = Date.now() + 5_000;
+  const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
   while (Date.now() < deadline) {
     throwIfAborted(signal);
 
     const remaining = normalizeComposerText(await readComposerText(input));
     if (!remaining) return;
 
-    const streamingNow = await anyVisible(session.page, provider.ui.streamingSelectors);
+    const streamingNow = await anyVisible(session.page, streamingSelectors);
     if (!wasStreaming && streamingNow) return;
 
     await abortableSleep(100, signal);
   }
-
-  // Some rich editors keep their text while the response starts. Response
-  // observation below remains authoritative and never resubmits the prompt.
 }
 
 export async function browserGate(page: Page, provider: ProviderPreset): Promise<BrowserGate | null> {
-  return detectBrowserGate(page, provider.ui.inputSelectors);
+  return detectBrowserGate(
+    page,
+    selectorCandidates(provider.ui.inputSelectors, 'composer').map((item) => item.selector)
+  );
 }
 
 export async function waitForUiReady(
@@ -250,21 +252,33 @@ export async function sendUiPrompt(
 
   await waitForUiReady(session, provider, config, 'envio', signal);
   throwIfAborted(signal);
-  const input = await firstEditableLocator(session.page, provider.ui.inputSelectors);
-  if (!input) throw new UiAutomationError('Campo de entrada editável do chat não foi localizado.');
+  const resolution = await firstEditableLocator(session.page, provider.ui.inputSelectors);
+  if (!resolution) throw new UiAutomationError('Campo de entrada editável do chat não foi localizado.');
+  const input = resolution.locator;
+  logger.debug('ui.locator.resolved', {
+    target: 'composer',
+    provider: provider.id,
+    selector_version: provider.ui.selectorVersion,
+    strategy: resolution.strategy,
+    confidence: resolution.confidence,
+    selector: resolution.selector,
+    frame_index: resolution.frameIndex
+  });
 
-  const wasStreaming = await anyVisible(session.page, provider.ui.streamingSelectors);
+  const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
+  const wasStreaming = await anyVisible(session.page, streamingSelectors);
   await writeComposerText(session.page, input, prompt);
 
   await abortableSleep(150, signal);
   const sendButtonDeadline = Date.now() + 2_500;
   let submitted = false;
+  const sendSelectors = selectorCandidates(provider.ui.sendSelectors, 'send').map((item) =>
+    `${item.selector}:not([aria-label*="stop" i]):not([aria-label*="parar" i]):not([aria-label*="interromper" i]):not([data-testid="stop-button"])`
+  );
 
   while (Date.now() < sendButtonDeadline) {
     throwIfAborted(signal);
-    const send = await firstVisibleLocator(session.page, provider.ui.sendSelectors.map((selector) =>
-      `${selector}:not([aria-label*="stop" i]):not([aria-label*="parar" i]):not([aria-label*="interromper" i]):not([data-testid="stop-button"])`
-    ));
+    const send = await firstVisibleLocator(session.page, sendSelectors);
     if (send && await send.isEnabled().catch(() => false)) {
       await send.click({ timeout: 2_000 });
       submitted = true;

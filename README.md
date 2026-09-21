@@ -35,6 +35,37 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 ---
 
+## Architecture v4
+
+Version 4 formalizes the reverse proxy as a **browser-backed AI gateway runtime**, while preserving the OpenAI-compatible contract consumed by K.I.T.T. Agent CLI.
+
+- Built-in providers are independent manifests behind a versioned registry rather than one hardcoded catalog.
+- UI automation uses provider selector packs first, then a bounded semantic locator cascade.
+- Named conversations keep serialization per session; a browser session broker owns tab/context allocation and authenticated-context reuse.
+- `/v1/capabilities` publishes the machine-readable proxy contract, provider-registry contract, browser controls and observability surface.
+- The compatibility contract used by K.I.T.T. Agent CLI remains `POST /v1/chat/completions`, SSE tool calls, `X-Kitt-Session-Id`, `X-Kitt-Request-Id` and `GET /v1/capabilities`.
+
+### Observability and safe diagnostics
+
+Structured logs correlate `request_id`, `session_id`, provider, trace ID and span ID. Log verbosity and payload visibility are deliberately separate:
+
+```bash
+kitt-reverse-proxy chatgpt --log-format json --log-level 2 --log-content metadata
+```
+
+`--log-content metadata` is the default and records payload shape/size without prompt or response content. `none` omits content-bearing fields. `full` is explicit opt-in and still applies secret/URL redaction.
+
+The built-in metrics endpoint remains available as JSON or Prometheus. OTLP/HTTP JSON tracing is dependency-free and activates only when configured:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+kitt-reverse-proxy chatgpt
+```
+
+The proxy propagates W3C `traceparent` and emits child spans for session resolution and transport execution. Telemetry export is bounded and never blocks request execution.
+
+---
+
 ## Quick links
 
 - **K.I.T.T. ecosystem:** https://github.com/rfdetoni/kitt
