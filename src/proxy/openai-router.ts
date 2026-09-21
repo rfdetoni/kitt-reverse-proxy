@@ -176,16 +176,24 @@ export function buildAgentContractSerializationRepairBody(
   return { ...plan.body, messages };
 }
 
-export function contractRepairExecutionOptions(
+export function contractExecutionOptions(
   plan: AgentContractPlan,
   options: ChatExecutionOptions
 ): ChatExecutionOptions {
   return {
     ...options,
-    // The repair prompt is transport-internal. The browser still receives it,
-    // but conversation bookkeeping remains anchored to the caller-visible body.
-    logicalHistoryBody: plan.body
+    // Contract prompts, action constraints and synthetic tool-result turns are
+    // transport-internal. Session continuity must track only the API caller's
+    // original history so equivalent round trips keep a stable user timeline.
+    logicalHistoryBody: plan.originalBody
   };
+}
+
+export function contractRepairExecutionOptions(
+  plan: AgentContractPlan,
+  options: ChatExecutionOptions
+): ChatExecutionOptions {
+  return contractExecutionOptions(plan, options);
 }
 
 function contractResponseDigest(result: ChatExecutionResult): { response_sha256: string; response_bytes: number } {
@@ -232,14 +240,15 @@ async function executeAgentContract(
     deltas: []
   });
 
+  const executionOptions = contractExecutionOptions(plan, options);
   logger.trace('agent.contract.request.raw', {
     contract_session_id: plan.sessionId,
     route: plan.route,
     attempt: 'initial',
     body: plan.body,
-    options
+    options: executionOptions
   });
-  const first = await manager.execute(plan.sessionId, plan.body, options);
+  const first = await manager.execute(plan.sessionId, plan.body, executionOptions);
   let firstValidationError: AgentContractValidationError | undefined;
   try {
     const transformed = transform(first);

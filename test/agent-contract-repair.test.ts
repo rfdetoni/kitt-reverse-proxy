@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildAgentContractRepairBody,
   buildAgentContractSerializationRepairBody,
+  contractExecutionOptions,
   contractRepairExecutionOptions,
   reinforceAgentContractPlan
 } from '../src/proxy/openai-router.js';
@@ -11,6 +12,11 @@ import {
   prepareAgentContractRequest
 } from '../src/runtime/agent-contract.js';
 import type { JsonObject } from '../src/types.js';
+import {
+  canonicalLogicalMessages,
+  canonicalMessages,
+  userTurnsAreCompatible
+} from '../src/runtime/ui-history.js';
 
 function body(): JsonObject {
   return {
@@ -110,12 +116,63 @@ test('semantic repair preserves the original caller-visible history', () => {
   const options = contractRepairExecutionOptions(plan, {});
   const logical = options.logicalHistoryBody as JsonObject;
 
-  assert.equal(logical, plan.body);
+  assert.equal(logical, plan.originalBody);
   const messages = logical.messages as Array<{ role?: string; content?: string }>;
-  assert.equal(
-    messages.some((message) => message.content?.includes('[KITT CONTRACT REPAIR]')),
-    false
+  const content = messages.map((message) => message.content ?? '').join('\n');
+  assert.doesNotMatch(content, /\[KITT ORCHESTRATOR TURN DATA\]/);
+  assert.doesNotMatch(content, /\[KITT ACTION CONSTRAINTS\]/);
+  assert.doesNotMatch(content, /\[KITT CONTRACT REPAIR\]/);
+});
+
+
+test('contract logical history stays caller-stable across a host tool round trip', () => {
+  const sessionId = 'caller-history-round-trip';
+  const firstPlan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId })
   );
+  const firstLogical = canonicalLogicalMessages(
+    firstPlan.body,
+    contractExecutionOptions(firstPlan, {}).logicalHistoryBody
+  );
+
+  const followUp = body();
+  const toolCall = {
+    id: 'call_list_workspace',
+    type: 'function',
+    function: {
+      name: 'kitt_runtime',
+      arguments: JSON.stringify({
+        operation: 'repo.list',
+        arguments: { path: '', recursive: true, max_depth: 5 }
+      })
+    }
+  };
+  (followUp.messages as any[]).push(
+    { role: 'assistant', content: null, tool_calls: [toolCall] },
+    {
+      role: 'tool',
+      tool_call_id: toolCall.id,
+      name: 'kitt_runtime',
+      content: '{"entries":[]}'
+    }
+  );
+
+  const secondPlan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(followUp, { sessionId })
+  );
+  const secondLogical = canonicalLogicalMessages(
+    secondPlan.body,
+    contractExecutionOptions(secondPlan, {}).logicalHistoryBody
+  );
+  const secondTransport = canonicalMessages(secondPlan.body);
+
+  assert.equal(secondTransport.filter((message) => message.role === 'user').length, 2);
+  assert.equal(secondLogical.filter((message) => message.role === 'user').length, 1);
+  assert.equal(secondLogical.find((message) => message.role === 'user')?.text, 'Create backend and frontend.');
+  assert.doesNotThrow(() => userTurnsAreCompatible(
+    [...firstLogical, { role: 'assistant', text: 'tool requested' }],
+    secondLogical
+  ));
 });
 
 
