@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { InvalidRequestError } from '../core/errors.js';
 import { logger } from '../logger.js';
+import { beginRequestTrace, traceparent } from '../observability/tracing.js';
 import { runWithRequestContext } from '../util/request-context.js';
 import { telemetry } from '../util/telemetry.js';
 import type { AppConfig, ChatExecutor } from '../types.js';
@@ -40,6 +41,10 @@ function routeLabel(req: Request): string {
   return 'unmatched';
 }
 
+function configAddress(req: Request): string {
+  return req.hostname || 'unknown';
+}
+
 function requestContextMiddleware(manager: SessionManager) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const rawRequestId = req.get('x-kitt-request-id');
@@ -48,11 +53,30 @@ function requestContextMiddleware(manager: SessionManager) {
 
     const sessionId = req.get('x-kitt-session-id') || 'default';
     const startedAt = Date.now();
-    res.on('finish', () => {
-      telemetry.recordRequest(manager.providerId, routeLabel(req), res.statusCode, Date.now() - startedAt);
-    });
+    const traceAttributes: Record<string, string | number | boolean | undefined> = {
+      'http.request.method': req.method,
+      'http.route': req.path,
+      'server.address': configAddress(req),
+      'kitt.provider': manager.providerId,
+      'kitt.session.id': sessionId
+    };
 
-    runWithRequestContext({ requestId, sessionId, provider: manager.providerId, startedAt }, () => next());
+    beginRequestTrace('kitt.http.request', req.get('traceparent'), traceAttributes, (trace, finishTrace) => {
+      res.setHeader('traceparent', traceparent(trace));
+      let completed = false;
+      const complete = (error?: unknown): void => {
+        if (completed) return;
+        completed = true;
+        traceAttributes['http.response.status_code'] = res.statusCode;
+        telemetry.recordRequest(manager.providerId, routeLabel(req), res.statusCode, Date.now() - startedAt);
+        finishTrace(error);
+      };
+      res.once('finish', () => complete());
+      res.once('close', () => {
+        if (!res.writableEnded) complete(new Error('client_connection_closed'));
+      });
+      runWithRequestContext({ requestId, sessionId, provider: manager.providerId, startedAt }, () => next());
+    });
   };
 }
 
@@ -93,9 +117,9 @@ export async function startProxyServer(input: {
       methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       allowedHeaders: [
         'content-type', 'authorization', 'x-api-key', 'x-kitt-session-id',
-        'x-kitt-request-id', 'x-kitt-reasoning-effort', 'anthropic-version'
+        'x-kitt-request-id', 'x-kitt-reasoning-effort', 'anthropic-version', 'traceparent'
       ],
-      exposedHeaders: ['x-kitt-request-id', 'x-kitt-structured-output']
+      exposedHeaders: ['x-kitt-request-id', 'x-kitt-structured-output', 'traceparent']
     }));
   }
 
