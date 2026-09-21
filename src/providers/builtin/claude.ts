@@ -1,7 +1,7 @@
 import type { ProviderPreset } from '../types.js';
 import { BASE_CAPABILITIES, model } from '../shared.js';
 
-export const CLAUDE_PROVIDER: ProviderPreset = Object.freeze({
+export const CLAUDE_PROVIDER = Object.freeze({
   id: 'claude',
   name: 'Claude Web',
   hosts: ['claude.ai'],
@@ -45,4 +45,4 @@ export const CLAUDE_PROVIDER: ProviderPreset = Object.freeze({
     uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
     supportsImageUpload: true
   }
-});
+} satisfies ProviderPreset);
