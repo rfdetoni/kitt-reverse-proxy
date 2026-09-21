@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
+import type { JsonObject } from '../types.js';
 
 type AttributeValue = string | number | boolean;
 type Attributes = Record<string, AttributeValue | undefined>;
@@ -247,7 +248,7 @@ export async function flushTracing(): Promise<void> {
   await exportPending();
 }
 
-export function tracingContract(): Record<string, unknown> {
+export function tracingContract(): JsonObject {
   return {
     enabled: Boolean(configuredEndpoint()),
     protocol: 'otlp/http-json',
