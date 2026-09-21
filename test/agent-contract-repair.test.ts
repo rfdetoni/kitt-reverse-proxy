@@ -109,16 +109,18 @@ test('semantic retry includes the validation cause and available tool names', ()
 });
 
 
-test('semantic repair preserves the original caller-visible history', () => {
+test('semantic repair preserves caller-visible history without volatile turn context', () => {
   const plan = reinforceAgentContractPlan(
     prepareAgentContractRequest(body(), { sessionId: 'repair-history-isolation' })
   );
   const options = contractRepairExecutionOptions(plan, {});
   const logical = options.logicalHistoryBody as JsonObject;
 
-  assert.equal(logical, plan.originalBody);
+  assert.notEqual(logical, plan.originalBody);
   const messages = logical.messages as Array<{ role?: string; content?: string }>;
   const content = messages.map((message) => message.content ?? '').join('\n');
+  assert.match(content, /Create backend and frontend/);
+  assert.doesNotMatch(content, /\[KITT TURN CONTEXT\]/);
   assert.doesNotMatch(content, /\[KITT ORCHESTRATOR TURN DATA\]/);
   assert.doesNotMatch(content, /\[KITT ACTION CONSTRAINTS\]/);
   assert.doesNotMatch(content, /\[KITT CONTRACT REPAIR\]/);
