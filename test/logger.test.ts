@@ -36,6 +36,7 @@ test('level 2 writes full sanitized trace payloads only when content policy is f
     assert.match(rendered, /\[REDACTED\]/);
   } finally {
     configureLogger({ format: 'text', level: 0, content: 'metadata', file: '' });
+    await flushLogger();
     console.log = originalLog;
     rmSync(dir, { recursive: true, force: true });
   }
@@ -62,6 +63,7 @@ test('metadata content policy records shape but not prompt content', async () =>
     assert.match(rendered, /"queue_wait_ms":12/);
   } finally {
     configureLogger({ format: 'text', level: 0, content: 'metadata', file: '' });
+    await flushLogger();
     console.log = originalLog;
     rmSync(dir, { recursive: true, force: true });
   }
