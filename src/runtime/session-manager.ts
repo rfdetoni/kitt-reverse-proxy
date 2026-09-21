@@ -15,6 +15,7 @@ import { ResilientChatExecutor } from './resilient-executor.js';
 import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
 import { updateRequestContext } from '../util/request-context.js';
+import { traceSpan } from '../observability/tracing.js';
 
 const SESSION_ID = /^[A-Za-z0-9]{1,64}$/;
 
@@ -186,7 +187,10 @@ export class SessionManager {
       body,
       options: options ?? null
     });
-    const session = await this.resolve(requestedId);
+    const session = await traceSpan('kitt.session.resolve', {
+      'kitt.session.requested': requestedId ?? 'default',
+      'kitt.provider': this.options.provider
+    }, () => this.resolve(requestedId));
     const resolvedAt = Date.now();
     updateRequestContext({ sessionId: session.id, provider: session.provider });
     session.lastActivity = Date.now();
@@ -199,7 +203,12 @@ export class SessionManager {
       session.lastActivity = Date.now();
       const executorStartedAt = Date.now();
       try {
-        const result = await session.executor.execute(body, options);
+        const result = await traceSpan('kitt.transport.execute', {
+          'kitt.provider': session.provider,
+          'kitt.transport': session.executor.transport,
+          'kitt.session.id': session.id,
+          'kitt.queue.wait_ms': queueWaitMs
+        }, () => session.executor.execute(body, options));
         logger.trace('session.execute.response', {
           session_id: session.id,
           provider: session.provider,
