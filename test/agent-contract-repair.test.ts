@@ -59,6 +59,24 @@ test('turn constraints forbid redundant context requests before first execution'
   assert.match(constraint.content, /request_workspace is forbidden/);
 });
 
+test('turn constraints preserve the final actionable UI turn', () => {
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId: 'repair-ui-ordering' })
+  );
+  const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
+  const constraintIndex = messages.findIndex((message) =>
+    message.role === 'developer' && message.content?.includes('[KITT ACTION CONSTRAINTS]')
+  );
+  const lastActionableIndex = messages.findLastIndex((message) =>
+    message.role === 'user' || message.role === 'tool'
+  );
+
+  assert.ok(constraintIndex >= 0);
+  assert.ok(lastActionableIndex > constraintIndex);
+  assert.equal(messages.at(-1)?.role, 'user');
+  assert.match(messages.at(-1)?.content ?? '', /Create backend and frontend/);
+});
+
 test('semantic retry includes the validation cause and available tool names', () => {
   const plan = reinforceAgentContractPlan(
     prepareAgentContractRequest(body(), { sessionId: 'repair-retry' })
