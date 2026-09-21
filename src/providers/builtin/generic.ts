@@ -1,7 +1,7 @@
 import type { ProviderPreset } from '../types.js';
 import { BASE_CAPABILITIES, GENERIC_UI, model } from '../shared.js';
 
-export const GENERIC_PROVIDER: ProviderPreset = Object.freeze({
+export const GENERIC_PROVIDER = Object.freeze({
   id: 'generic',
   name: 'Generic Web Chat',
   hosts: [],
@@ -12,4 +12,4 @@ export const GENERIC_PROVIDER: ProviderPreset = Object.freeze({
   capabilities: BASE_CAPABILITIES,
   models: [model('adaptive-web-chat', ['generic-web-chat'])],
   ui: GENERIC_UI
-});
+} satisfies ProviderPreset);
