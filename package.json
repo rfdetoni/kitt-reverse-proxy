@@ -24,7 +24,8 @@
     "test": "npm run clean:test && tsc -p tsconfig.json && node --test dist-test/test/*.test.js",
     "check": "tsc -p tsconfig.json --noEmit",
     "verify": "npm run check && npm test && npm run build",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "benchmark:core": "npm run build && node scripts/benchmark-core.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
