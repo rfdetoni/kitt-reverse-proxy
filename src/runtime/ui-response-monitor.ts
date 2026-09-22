@@ -4,6 +4,7 @@ import type { AppConfig, ChatExecutionOptions, LiveBrowserSession } from '../typ
 import {
   anyVisible,
   collectVisibleSnapshots,
+  readVisibleSnapshotSlot,
   selectChangedSnapshot,
   type UiTextSnapshot
 } from './ui-dom.js';
@@ -20,6 +21,45 @@ export interface UiResponseResult {
 }
 
 const FIRST_USEFUL_DELTA_TIMEOUT_MS = 90_000;
+
+async function waitForDomMutation(
+  session: LiveBrowserSession,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<boolean> {
+  throwIfAborted(signal);
+  const bounded = Math.max(50, Math.min(1_000, timeoutMs));
+  const mutation = session.page.evaluate((waitMs) => new Promise<boolean>((resolve) => {
+    const root = document.body || document.documentElement;
+    if (!root || typeof MutationObserver === 'undefined') {
+      window.setTimeout(() => resolve(false), waitMs);
+      return;
+    }
+    let settled = false;
+    let timer = 0;
+    const finish = (changed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      window.clearTimeout(timer);
+      resolve(changed);
+    };
+    const observer = new MutationObserver(() => finish(true));
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['aria-busy', 'data-state', 'class']
+    });
+    timer = window.setTimeout(() => finish(false), waitMs);
+  }), bounded).catch(() => false);
+  if (!signal) return mutation;
+  return Promise.race([
+    mutation,
+    abortableSleep(bounded, signal).then(() => false)
+  ]);
+}
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -81,21 +121,41 @@ export async function awaitUiResponse(
   let streamedText = '';
   let stableSince = 0;
   let observedStreaming = false;
+  let streaming = false;
+  let activeSnapshot: UiTextSnapshot | undefined;
+  let nextGateCheckAt = startedAt;
+  let nextStreamingCheckAt = startedAt;
 
   await abortableSleep(250, signal);
 
   while (Date.now() < deadline) {
     throwIfAborted(signal);
-    const gate = await browserGate(session.page, provider);
-    if (gate) {
-      if (!config.headed) throw new ManualInterventionRequiredError(`${gate.message} Requer intervenção manual.`);
-      await waitForUiReady(session, provider, config, 'desafio de segurança', signal);
+    const now = Date.now();
+    if (now >= nextGateCheckAt) {
+      const gate = await browserGate(session.page, provider);
+      nextGateCheckAt = now + (firstDeltaMs === undefined ? 750 : 2_000);
+      if (gate) {
+        if (!config.headed) throw new ManualInterventionRequiredError(`${gate.message} Requer intervenção manual.`);
+        await waitForUiReady(session, provider, config, 'desafio de segurança', signal);
+      }
     }
 
-    const streaming = await anyVisible(session.page, provider.ui.streamingSelectors);
-    observedStreaming ||= streaming;
-    const current = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
-    const active = selectChangedSnapshot(baseline, current, sentPrompt);
+    if (now >= nextStreamingCheckAt) {
+      streaming = await anyVisible(session.page, provider.ui.streamingSelectors);
+      observedStreaming ||= streaming;
+      nextStreamingCheckAt = now + (streaming ? 350 : 600);
+    }
+
+    let active: UiTextSnapshot | undefined;
+    if (activeSnapshot) {
+      active = await readVisibleSnapshotSlot(session.page, activeSnapshot);
+      if (!active) activeSnapshot = undefined;
+    }
+    if (!active) {
+      const current = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
+      active = selectChangedSnapshot(baseline, current, sentPrompt);
+      if (active) activeSnapshot = active;
+    }
     const activeText = active?.text ? cleanUiResponseText(active.text, provider) : '';
 
     if (activeText && activeText !== lastText) {
@@ -130,7 +190,8 @@ export async function awaitUiResponse(
       if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
     }
 
-    await abortableSleep(streaming ? 140 : 280, signal);
+    await abortableSleep(streaming ? 120 : 200, signal);
+    await waitForDomMutation(session, streaming ? 260 : 450, signal);
   }
 
   if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
