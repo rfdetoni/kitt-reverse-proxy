@@ -144,6 +144,59 @@ export function selectChangedSnapshot(
   return best?.snapshot;
 }
 
+export async function readVisibleSnapshotSlot(
+  page: Page,
+  snapshot: UiTextSnapshot
+): Promise<UiTextSnapshot | undefined> {
+  const pageFrames = frames(page);
+  const frame = pageFrames[snapshot.frameIndex];
+  if (!frame || frame.isDetached() || !snapshot.selector) return undefined;
+  try {
+    const raw = await frame.evaluate(
+      ({ selector, index, maxChars }) => {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        const element = nodes[index] as HTMLElement | undefined;
+        if (!element) return undefined;
+        const style = window.getComputedStyle(element);
+        if (
+          style.display === 'none'
+          || style.visibility === 'hidden'
+          || Number(style.opacity) === 0
+        ) {
+          return undefined;
+        }
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return undefined;
+        const text = (element.innerText || element.textContent || '').trim().slice(0, maxChars);
+        if (!text) return undefined;
+        const domIdentity = element.getAttribute('data-message-id')
+          || element.getAttribute('data-turn-id')
+          || element.id
+          || '';
+        return {
+          count: nodes.length,
+          text,
+          identity: domIdentity ? `${selector}|${domIdentity}` : `${selector}|index:${index}`
+        };
+      },
+      {
+        selector: snapshot.selector,
+        index: snapshot.index ?? Math.max(0, snapshot.count - 1),
+        maxChars: MAX_SNAPSHOT_CHARS
+      }
+    );
+    if (!raw) return undefined;
+    return {
+      ...snapshot,
+      count: raw.count,
+      text: raw.text,
+      identity: raw.identity
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {
   return (await collectVisibleSnapshots(page, selectors))[0] ?? EMPTY_SNAPSHOT;
 }
