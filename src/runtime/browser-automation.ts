@@ -1,5 +1,5 @@
 import type { Locator, Page } from 'playwright';
-import type { JsonObject, JsonValue, LiveBrowserSession } from '../types.js';
+import type { JsonObject, LiveBrowserSession } from '../types.js';
 
 export const BROWSER_AUTOMATION_ACTIONS = [
   'open',
@@ -429,45 +429,64 @@ export class BrowserAutomationSession {
       }
 
       this.assertAllowedUrl(this.page.url());
-      const body = await this.page.locator('body').innerText({ timeout }).catch(() => '');
-      const interactive = this.page.locator(
-        'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]'
+      const snapshot = await this.page.evaluate(
+        ({ maxBodyChars, maxElementChars, maxElements }) => {
+          const body = document.body?.innerText || '';
+          const nodes = Array.from(document.querySelectorAll(
+            'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]'
+          )).slice(0, maxElements);
+          const elements = nodes.map((node, index) => {
+            const element = node as HTMLElement;
+            const compact = (element.innerText || element.textContent || '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, maxElementChars);
+            return {
+              index,
+              text: compact,
+              ariaLabel: element.getAttribute('aria-label') || '',
+              placeholder: element.getAttribute('placeholder') || '',
+              href: element.getAttribute('href') || '',
+              name: element.getAttribute('name') || '',
+              id: element.id || '',
+              type: element.getAttribute('type') || '',
+              role: element.getAttribute('role') || ''
+            };
+          });
+          return {
+            title: document.title || '',
+            body: body.slice(0, maxBodyChars),
+            bodyLength: body.length,
+            elements
+          };
+        },
+        {
+          maxBodyChars: MAX_BODY_CHARS,
+          maxElementChars: MAX_ELEMENT_TEXT_CHARS,
+          maxElements: MAX_ELEMENTS
+        }
       );
-      const count = Math.min(await interactive.count(), MAX_ELEMENTS);
-      const elements: JsonValue[] = [];
-      for (let index = 0; index < count; index += 1) {
-        const item = interactive.nth(index);
-        const [text, ariaLabel, placeholder, href, name, id, type, role] = await Promise.all([
-          item.innerText({ timeout: Math.min(timeout, 2_000) }).catch(() => ''),
-          item.getAttribute('aria-label'),
-          item.getAttribute('placeholder'),
-          item.getAttribute('href'),
-          item.getAttribute('name'),
-          item.getAttribute('id'),
-          item.getAttribute('type'),
-          item.getAttribute('role')
-        ]);
-        const cleanText = boundedText(text.replace(/\s+/g, ' ').trim(), MAX_ELEMENT_TEXT_CHARS);
-        const record: JsonObject = { index };
-        if (cleanText) record.text = cleanText;
-        if (ariaLabel) record.aria_label = boundedText(ariaLabel, MAX_ELEMENT_TEXT_CHARS);
-        if (placeholder) record.placeholder = boundedText(placeholder, MAX_ELEMENT_TEXT_CHARS);
-        if (href) record.href = boundedText(href, 2_048);
-        if (name) record.name = boundedText(name, 256);
-        if (type) record.type = boundedText(type, 128);
-        if (role) record.role = boundedText(role, 128);
-        const hint = safeSelectorHint(id, name, cleanText || ariaLabel || '');
+      const elements = snapshot.elements.map((item) => {
+        const record: JsonObject = { index: item.index };
+        if (item.text) record.text = item.text;
+        if (item.ariaLabel) record.aria_label = boundedText(item.ariaLabel, MAX_ELEMENT_TEXT_CHARS);
+        if (item.placeholder) record.placeholder = boundedText(item.placeholder, MAX_ELEMENT_TEXT_CHARS);
+        if (item.href) record.href = boundedText(item.href, 2_048);
+        if (item.name) record.name = boundedText(item.name, 256);
+        if (item.type) record.type = boundedText(item.type, 128);
+        if (item.role) record.role = boundedText(item.role, 128);
+        const hint = safeSelectorHint(item.id, item.name, item.text || item.ariaLabel || '');
         if (hint) record.selector_hint = hint;
-        elements.push(record);
-      }
+        return record;
+      });
       return {
         action: 'inspect',
         url: this.page.url(),
-        title: await this.page.title(),
-        text: boundedText(body, MAX_BODY_CHARS),
-        text_truncated: body.length > MAX_BODY_CHARS,
+        title: snapshot.title,
+        text: snapshot.body,
+        text_truncated: snapshot.bodyLength > MAX_BODY_CHARS,
         elements,
-        element_count: count
+        element_count: elements.length
       };
     } catch (error) {
       if (
