@@ -344,8 +344,7 @@ export class SessionManager {
     for (const session of staleAutomation) {
       const current = session.browserAutomation;
       delete session.browserAutomation;
-      delete session.browserAutomationLastActivity;
-      delete session.browserAutomationLastActivity;
+    delete session.browserAutomationLastActivity;
       await current?.close().catch(() => undefined);
     }
 
