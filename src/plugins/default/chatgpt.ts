@@ -1,7 +1,10 @@
-import type { ProviderPreset } from '../types.js';
-import { BASE_CAPABILITIES, model } from '../shared.js';
+import { defineProviderPlugin } from '../sdk.js';
+import { BASE_CAPABILITIES, model } from './shared.js';
 
-export const CHATGPT_PROVIDER = Object.freeze({
+export const CHATGPT_PLUGIN = defineProviderPlugin({
+  apiVersion: 1,
+  version: '1.0.0',
+  provider: {
   id: 'chatgpt',
   name: 'ChatGPT Web',
   hosts: ['chatgpt.com', 'chat.openai.com'],
@@ -55,4 +58,5 @@ export const CHATGPT_PROVIDER = Object.freeze({
     uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
     supportsImageUpload: true
   }
-} satisfies ProviderPreset);
+  }
+});

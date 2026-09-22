@@ -1,7 +1,10 @@
-import type { ProviderPreset } from '../types.js';
-import { BASE_CAPABILITIES, model } from '../shared.js';
+import { defineProviderPlugin } from '../sdk.js';
+import { BASE_CAPABILITIES, model } from './shared.js';
 
-export const CLAUDE_PROVIDER = Object.freeze({
+export const CLAUDE_PLUGIN = defineProviderPlugin({
+  apiVersion: 1,
+  version: '1.0.0',
+  provider: {
   id: 'claude',
   name: 'Claude Web',
   hosts: ['claude.ai'],
@@ -45,4 +48,5 @@ export const CLAUDE_PROVIDER = Object.freeze({
     uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
     supportsImageUpload: true
   }
-} satisfies ProviderPreset);
+  }
+});

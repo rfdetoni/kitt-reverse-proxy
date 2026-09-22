@@ -78,3 +78,23 @@ test('invalid log content policy is rejected', () => {
     /Log content inválido/
   );
 });
+
+
+test('external provider plugins are explicit and provider ids remain extensible', () => {
+  const config = parseCliArgs([
+    'https://chat.acme.test/',
+    '--provider', 'acme',
+    '--provider-plugin', './plugins/acme.mjs',
+    '--provider-plugin', '@acme/kitt-provider'
+  ]);
+  if ('help' in config) throw new Error('unexpected help');
+  assert.equal(config.provider, 'acme');
+  assert.deepEqual(config.providerPlugins, ['./plugins/acme.mjs', '@acme/kitt-provider']);
+});
+
+test('invalid external provider ids are rejected before plugin loading', () => {
+  assert.throws(
+    () => parseCliArgs(['https://example.com/', '--provider', 'bad provider']),
+    /Provider inválido/
+  );
+});

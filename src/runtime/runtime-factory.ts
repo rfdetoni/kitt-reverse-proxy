@@ -3,6 +3,7 @@ import { captureChatExchange } from '../discovery/capture.js';
 import { createAdapter } from '../mapping/factory.js';
 import { detectProvider, transportCandidates, type ProviderPreset } from '../providers/catalog.js';
 import { telemetry } from '../util/telemetry.js';
+import { loadProviderPluginModules } from '../plugins/loader.js';
 import { NetworkChatExecutor } from './network-executor.js';
 import { createManagedUiRuntime } from './ui-browser-lifecycle.js';
 import type { AppConfig, ChatExecutor, LiveBrowserSession } from '../types.js';
@@ -48,6 +49,10 @@ async function createNetworkRuntime(config: AppConfig, provider: ProviderPreset)
 }
 
 export async function createRuntime(config: AppConfig): Promise<RuntimeBundle> {
+  const loadedPlugins = await loadProviderPluginModules(config.providerPlugins ?? []);
+  if (loadedPlugins.length > 0) {
+    logger.info(`Provider plugins carregados: ${loadedPlugins.map((plugin) => plugin.provider.id).join(', ')}.`);
+  }
   const provider = detectProvider(config.targetUrl, config.provider);
   const candidates = transportCandidates(config.transport, provider);
   logger.info(`Provider: ${provider.name}; transporte: ${candidates.join(' -> ')}.`);

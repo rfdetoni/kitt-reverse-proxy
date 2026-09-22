@@ -1,36 +1,22 @@
 import type { ProviderId, TransportMode } from '../types.js';
-import { CHATGPT_PROVIDER } from './builtin/chatgpt.js';
-import { CLAUDE_PROVIDER } from './builtin/claude.js';
-import { DEEPSEEK_PROVIDER } from './builtin/deepseek.js';
-import { GEMINI_PROVIDER } from './builtin/gemini.js';
-import { GENERIC_PROVIDER } from './builtin/generic.js';
-import { KIMI_PROVIDER } from './builtin/kimi.js';
-import type { ProviderPreset } from './types.js';
+import { providerRegistry } from '../plugins/registry.js';
+import type { ProviderPreset } from '../plugins/sdk.js';
 
 export type {
   ProviderCapabilities,
   ProviderModelDescriptor,
+  ProviderPlugin,
   ProviderPreset,
   UiProviderConfig
-} from './types.js';
+} from '../plugins/sdk.js';
 
-export const PROVIDERS: readonly ProviderPreset[] = Object.freeze([
-  CHATGPT_PROVIDER,
-  CLAUDE_PROVIDER,
-  GEMINI_PROVIDER,
-  KIMI_PROVIDER,
-  DEEPSEEK_PROVIDER,
-  GENERIC_PROVIDER
-]);
+export { PROVIDER_PLUGIN_API_VERSION, defineProviderPlugin, validateProviderPlugin } from '../plugins/sdk.js';
+export { ProviderPluginRegistry, providerRegistry } from '../plugins/registry.js';
 
-function hostMatches(hostname: string, candidate: string): boolean {
-  const host = hostname.toLowerCase();
-  const expected = candidate.toLowerCase();
-  return host === expected || host.endsWith(`.${expected}`);
-}
+export const PROVIDERS: readonly ProviderPreset[] = providerRegistry.providers;
 
 export function providerById(id: string): ProviderPreset | undefined {
-  return PROVIDERS.find((provider) => provider.id === id);
+  return providerRegistry.get(id);
 }
 
 export function providerModelIds(provider: ProviderPreset): string[] {
@@ -46,17 +32,7 @@ export function providerModelAliases(provider: ProviderPreset): Record<string, s
 }
 
 export function detectProvider(targetUrl: string, requested: ProviderId = 'auto'): ProviderPreset {
-  const hostname = new URL(targetUrl).hostname;
-  if (requested !== 'auto') {
-    const explicit = providerById(requested);
-    if (!explicit) throw new Error(`Provider não suportado: ${requested}`);
-    if (explicit.id !== 'generic' && !explicit.hosts.some((host) => hostMatches(hostname, host))) {
-      throw new Error(`Provider ${explicit.id} não corresponde ao host ${hostname}. Para UIs customizadas/mirrors use --provider generic --transport ui.`);
-    }
-    return explicit;
-  }
-  return PROVIDERS.find((provider) => provider.id !== 'generic' && provider.hosts.some((host) => hostMatches(hostname, host)))
-    ?? providerById('generic')!;
+  return providerRegistry.detect(targetUrl, requested);
 }
 
 export function resolveTransport(requested: TransportMode, provider: ProviderPreset): 'network' | 'ui' {
@@ -74,6 +50,6 @@ export function transportCandidates(requested: TransportMode, provider: Provider
   return [preferred];
 }
 
-export function providerIds(): Exclude<ProviderId, 'auto'>[] {
-  return PROVIDERS.map((provider) => provider.id);
+export function providerIds(): string[] {
+  return providerRegistry.ids();
 }

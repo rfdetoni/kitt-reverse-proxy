@@ -236,6 +236,62 @@ GET /v1/capabilities
 
 Provider records include supported transports, route-model aliases, static capabilities and live resilience state for the active runtime.
 
+### Provider plugins and SDK
+
+Default WebChat integrations are isolated from the gateway core under `src/plugins/default/`. The core resolves providers through a versioned registry, so adding a provider no longer requires editing the runtime factory or transport executors.
+
+The public development contract is exported as `kitt-reverse-proxy/plugin-sdk`:
+
+```ts
+import { defineProviderPlugin } from 'kitt-reverse-proxy/plugin-sdk';
+
+export default defineProviderPlugin({
+  apiVersion: 1,
+  version: '1.0.0',
+  provider: {
+    id: 'acme',
+    name: 'Acme Web',
+    hosts: ['chat.acme.example'],
+    defaultApiModel: 'acme-web',
+    preferredTransport: 'ui',
+    transports: ['ui'],
+    auth: 'browser-profile',
+    capabilities: {
+      streaming: true,
+      tools: 'protocol',
+      structuredOutput: 'best_effort',
+      systemMessages: 'native-or-emulated',
+      reasoning: false
+    },
+    models: [{ id: 'acme-web', aliases: ['acme'] }],
+    ui: {
+      selectorVersion: 1,
+      inputSelectors: ['textarea'],
+      sendSelectors: ['button[type="submit"]'],
+      responseSelectors: ['[data-role="assistant"]'],
+      streamingSelectors: ['[data-is-streaming="true"]'],
+      supportsImageUpload: false
+    }
+  }
+});
+```
+
+Load trusted local modules or npm packages explicitly:
+
+```bash
+kitt-reverse-proxy https://chat.acme.example/ \
+  --provider acme \
+  --provider-plugin ./plugins/acme-provider.mjs
+
+kitt-reverse-proxy https://chat.acme.example/ \
+  --provider acme \
+  --provider-plugin @acme/kitt-provider
+```
+
+`PROXY_PROVIDER_PLUGINS` accepts a comma-separated module list for managed launches. Plugins are resolved once during bootstrap; request execution keeps the same direct `ProviderPreset` hot path. Remote URL/data/node module specifiers are rejected and there is no automatic filesystem discovery.
+
+Provider modules are trusted code loaded into the proxy process. Install or load only plugins whose source you trust; see `SECURITY.md`.
+
 ---
 
 ## Reliability & performance
@@ -363,7 +419,8 @@ See [SECURITY.md](SECURITY.md) for the full trust-boundary model.
 Common options:
 
 ```text
---provider <id>              auto|generic|chatgpt|claude|gemini|kimi|deepseek
+--provider <id>              auto|default-id|<plugin-id>
+--provider-plugin <module>     trusted local/npm provider plugin (repeatable)
 --transport <mode>           auto|ui|network
 --api-model <id>             model ID exposed through the API
 --user-data-dir <dir>        persistent Chromium profile
@@ -397,7 +454,7 @@ CI validates Node 24 on Linux, Windows and macOS plus Node 26 on Linux. Producti
 
 ## Contributing
 
-Keep changes focused on deterministic gateway behavior, bounded resource use, provider compatibility and agent-facing protocol quality. New provider support should include capability metadata, tests and a clear security model rather than relying on runtime-downloaded provider code.
+Keep changes focused on deterministic gateway behavior, bounded resource use, provider compatibility and agent-facing protocol quality. New provider support should use the provider-plugin SDK, include capability metadata and conformance tests, and keep a clear security model. Provider code is loaded only from explicitly configured local/npm modules; runtime-downloaded provider code is not supported.
 
 When borrowing ideas from external projects, preserve license boundaries. K.I.T.T. is MIT and does not copy GPL-licensed provider implementations into this repository.
 

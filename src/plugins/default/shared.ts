@@ -1,4 +1,4 @@
-import type { ProviderCapabilities, ProviderModelDescriptor, UiProviderConfig } from './types.js';
+import type { ProviderCapabilities, ProviderModelDescriptor, UiProviderConfig } from '../sdk.js';
 
 export const GENERIC_UI: UiProviderConfig = {
   selectorVersion: 1,
