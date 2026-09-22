@@ -14,7 +14,7 @@ import type {
 import {
   collectVisibleSnapshots,
   extractArtifactContents,
-  filterNewArtifacts,
+  type ExtractedArtifact,
   type UiTextSnapshot
 } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
@@ -118,6 +118,10 @@ function historyChars(messages: readonly CanonicalMessage[]): number {
   return total;
 }
 
+function artifactFingerprint(artifact: Pick<ExtractedArtifact, 'filename' | 'code'>): string {
+  return `${artifact.filename || ''}\u0000${artifact.code}`;
+}
+
 export class UiChatExecutor implements ChatExecutor {
   readonly transport = 'ui' as const;
   readonly modelId: string;
@@ -135,6 +139,7 @@ export class UiChatExecutor implements ChatExecutor {
   private toolEvidence = false;
   private readonly explorationCallIds = new Set<string>();
   private readonly mutationCallIds = new Set<string>();
+  private artifactFingerprints: Set<string> | undefined;
 
   constructor(
     private readonly session: LiveBrowserSession,
@@ -181,6 +186,7 @@ export class UiChatExecutor implements ChatExecutor {
     this.toolEvidence = false;
     this.explorationCallIds.clear();
     this.mutationCallIds.clear();
+    this.artifactFingerprints = undefined;
     const destination = this.provider.ui.newChatUrl || this.config.targetUrl;
     await navigateSession(this.session, destination, this.config.manualInterventionTimeoutMs)
       .catch((error: unknown) => {
@@ -403,7 +409,10 @@ export class UiChatExecutor implements ChatExecutor {
       throw new UiAutomationError(`Prompt via UI excede ${RESOURCE_LIMITS.uiPromptChars} caracteres.`);
     }
 
-    const artifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
+    if (this.artifactFingerprints === undefined) {
+      const initialArtifacts = await extractArtifactContents(this.session.page).catch(() => []);
+      this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
+    }
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     const promptSendStartedAt = Date.now();
     await this.sendPrompt(prompt, options?.signal);
@@ -421,7 +430,12 @@ export class UiChatExecutor implements ChatExecutor {
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     let textToParse = result.text;
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
-    let artifacts = filterNewArtifacts(artifactBaseline, artifactsAfter);
+    const knownArtifacts = this.artifactFingerprints ?? new Set<string>();
+    let artifacts = artifactsAfter.filter(
+      (artifact) => !knownArtifacts.has(artifactFingerprint(artifact))
+    );
+    for (const artifact of artifactsAfter) knownArtifacts.add(artifactFingerprint(artifact));
+    this.artifactFingerprints = knownArtifacts;
     if (!protocolEnabled && artifacts.length > 0) {
       const artifactBlocks = artifacts
         .filter((artifact) => !textToParse.includes(artifact.code))
@@ -462,12 +476,16 @@ export class UiChatExecutor implements ChatExecutor {
         const retryPrompt = error instanceof ToolEnforcementError
           ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
-        const retryArtifactBaseline = await extractArtifactContents(this.session.page).catch(() => []);
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         await this.sendPrompt(retryPrompt, options?.signal);
         textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
         const retryArtifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
-        const freshArtifacts = filterNewArtifacts(retryArtifactBaseline, retryArtifactsAfter);
+        const retryKnown = this.artifactFingerprints ?? new Set<string>();
+        const freshArtifacts = retryArtifactsAfter.filter(
+          (artifact) => !retryKnown.has(artifactFingerprint(artifact))
+        );
+        for (const artifact of retryArtifactsAfter) retryKnown.add(artifactFingerprint(artifact));
+        this.artifactFingerprints = retryKnown;
         if (freshArtifacts.length) artifacts = [...artifacts, ...freshArtifacts];
       }
     }
