@@ -430,7 +430,7 @@ export class UiChatExecutor implements ChatExecutor {
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     let textToParse = result.text;
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
-    const knownArtifacts = this.artifactFingerprints ?? new Set<string>();
+    const knownArtifacts: Set<string> = this.artifactFingerprints ?? new Set<string>();
     let artifacts = artifactsAfter.filter(
       (artifact) => !knownArtifacts.has(artifactFingerprint(artifact))
     );
@@ -480,7 +480,7 @@ export class UiChatExecutor implements ChatExecutor {
         await this.sendPrompt(retryPrompt, options?.signal);
         textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
         const retryArtifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
-        const retryKnown = this.artifactFingerprints ?? new Set<string>();
+        const retryKnown: Set<string> = this.artifactFingerprints ?? new Set<string>();
         const freshArtifacts = retryArtifactsAfter.filter(
           (artifact) => !retryKnown.has(artifactFingerprint(artifact))
         );
