@@ -7,7 +7,7 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type TransportMode = 'auto' | 'network' | 'ui';
 export type BrowserMode = 'auto' | 'headed' | 'headless';
-export type ProviderId = 'auto' | 'generic' | 'chatgpt' | 'claude' | 'gemini' | 'kimi' | 'deepseek';
+export type ProviderId = string;
 
 export interface AppConfig {
   targetUrl: string;
@@ -44,6 +44,7 @@ export interface AppConfig {
   logFile?: string;
   toolEnforcement?: 'auto' | 'explore-first' | 'required';
   provider: ProviderId;
+  providerPlugins?: string[];
   transport: TransportMode;
 }
 

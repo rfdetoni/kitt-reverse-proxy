@@ -1,7 +1,10 @@
-import type { ProviderPreset } from '../types.js';
-import { BASE_CAPABILITIES, model } from '../shared.js';
+import { defineProviderPlugin } from '../sdk.js';
+import { BASE_CAPABILITIES, model } from './shared.js';
 
-export const GEMINI_PROVIDER = Object.freeze({
+export const GEMINI_PLUGIN = defineProviderPlugin({
+  apiVersion: 1,
+  version: '1.0.0',
+  provider: {
   id: 'gemini',
   name: 'Gemini Web',
   hosts: ['gemini.google.com'],
@@ -48,4 +51,5 @@ export const GEMINI_PROVIDER = Object.freeze({
     uploadSelector: 'input[type="file"]',
     supportsImageUpload: true
   }
-} satisfies ProviderPreset);
+  }
+});

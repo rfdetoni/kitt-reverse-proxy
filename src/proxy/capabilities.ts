@@ -142,8 +142,12 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       models_endpoint_template: '/v1/providers/:provider/models'
     },
     provider_registry: {
-      version: 2,
+      version: 3,
+      plugin_api_version: 1,
       modular_manifests: true,
+      default_plugins_separate: true,
+      external_plugins: true,
+      explicit_loading: true,
       selector_pack_versioned: true,
       conformance_required: true
     },

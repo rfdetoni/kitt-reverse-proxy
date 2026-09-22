@@ -1,7 +1,10 @@
-import type { ProviderPreset } from '../types.js';
-import { BASE_CAPABILITIES, model } from '../shared.js';
+import { defineProviderPlugin } from '../sdk.js';
+import { BASE_CAPABILITIES, model } from './shared.js';
 
-export const KIMI_PROVIDER = Object.freeze({
+export const KIMI_PLUGIN = defineProviderPlugin({
+  apiVersion: 1,
+  version: '1.0.0',
+  provider: {
   id: 'kimi',
   name: 'Kimi Web',
   hosts: ['kimi.com', 'www.kimi.com', 'kimi.moonshot.cn'],
@@ -39,4 +42,5 @@ export const KIMI_PROVIDER = Object.freeze({
     newChatUrl: 'https://www.kimi.com/',
     supportsImageUpload: false
   }
-} satisfies ProviderPreset);
+  }
+});

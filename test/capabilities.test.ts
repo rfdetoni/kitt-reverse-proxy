@@ -84,6 +84,10 @@ test('publishes live session capacity, provider discovery and resilience state',
     assert.equal(sessionContract.recyclable_idle_named, 1);
     assert.equal(capabilities.resilience.circuit, 'closed');
     assert.equal(capabilities.provider_discovery.list_endpoint, '/v1/providers');
+    assert.equal(capabilities.provider_registry.version, 3);
+    assert.equal(capabilities.provider_registry.plugin_api_version, 1);
+    assert.equal(capabilities.provider_registry.external_plugins, true);
+    assert.equal(capabilities.provider_registry.explicit_loading, true);
 
     const discovery = await (await fetch(`${baseUrl}/v1`)).json() as any;
     assert.deepEqual(discovery.capabilities.kitt_agent_cli.agent_contract, agentContract);

@@ -42,11 +42,11 @@ const DEFAULTS = Object.freeze({
   followRedirects: process.env.PROXY_FOLLOW_REDIRECTS ? process.env.PROXY_FOLLOW_REDIRECTS === 'true' : (boolSetting(CENTER, 'follow_redirects') ?? false),
   headed: boolSetting(CENTER, 'headed') ?? true,
   provider: (process.env.PROXY_PROVIDER || stringSetting(CENTER, 'provider') || 'auto') as ProviderId,
+  providerPlugins: (process.env.PROXY_PROVIDER_PLUGINS || '').split(',').map((item) => item.trim()).filter(Boolean),
   transport: (process.env.PROXY_TRANSPORT || stringSetting(CENTER, 'transport') || 'auto') as TransportMode
 });
 
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
-const PROVIDER_IDS = new Set<ProviderId>(['auto', ...providerIds()]);
 const LOG_FORMATS = new Set<AppConfig['logFormat']>(['text', 'json']);
 const LOG_CONTENT_POLICIES = new Set<NonNullable<AppConfig['logContent']>>(['none', 'metadata', 'full']);
 const TOOL_ENFORCEMENTS = new Set<NonNullable<AppConfig['toolEnforcement']>>(['auto', 'explore-first', 'required']);
@@ -120,8 +120,10 @@ function endpointHost(value: string): string {
 }
 
 function provider(value: string): ProviderId {
-  const normalized = value.toLowerCase() as ProviderId;
-  if (!PROVIDER_IDS.has(normalized)) throw new Error(`Provider inválido: ${value}. Use: ${[...PROVIDER_IDS].join(', ')}.`);
+  const normalized = value.trim().toLowerCase();
+  if (normalized !== 'auto' && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
+    throw new Error(`Provider inválido: ${value}. Use um id minúsculo com letras, números, ponto, hífen ou underscore.`);
+  }
   return normalized;
 }
 
@@ -180,6 +182,7 @@ function validateDefaults(config: AppConfig): void {
   config.logContent = logContent(config.logContent ?? 'metadata');
   config.toolEnforcement = toolEnforcement(config.toolEnforcement ?? 'explore-first');
   config.provider = provider(config.provider);
+  config.providerPlugins = [...new Set((config.providerPlugins ?? []).map((item) => item.trim()).filter(Boolean))];
   config.transport = transport(config.transport);
 }
 
@@ -217,6 +220,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     allowedEndpointHosts: stringListSetting(CENTER, 'allowed_endpoint_hosts') || [],
     followRedirects: DEFAULTS.followRedirects,
     provider: DEFAULTS.provider,
+    providerPlugins: [...DEFAULTS.providerPlugins],
     transport: DEFAULTS.transport,
     ...(DEFAULTS.apiKey ? { apiKey: DEFAULTS.apiKey } : {}),
     ...(DEFAULTS.apiModel ? { apiModel: DEFAULTS.apiModel } : {}),
@@ -263,6 +267,7 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--cdp-url': config.cdpUrl = readValue(args, index, arg); index += 1; break;
       case '--api-key': config.apiKey = readValue(args, index, arg); index += 1; break;
       case '--provider': config.provider = provider(readValue(args, index, arg)); index += 1; break;
+      case '--provider-plugin': config.providerPlugins ??= []; config.providerPlugins.push(readValue(args, index, arg)); index += 1; break;
       case '--transport': config.transport = transport(readValue(args, index, arg)); index += 1; break;
       case '--allow-endpoint-host': config.allowedEndpointHosts.push(endpointHost(readValue(args, index, arg))); index += 1; break;
       case '--auto-browser':
@@ -299,5 +304,5 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
 }
 
 export function printHelp(): void {
-  console.log(`\nkitt-reverse-proxy v4\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy mcp [--mcp-port <porta>] <provider>\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  chatgpt | claude | gemini | kimi | deepseek\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|generic|chatgpt|claude|gemini|kimi|deepseek\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --cdp-url <url>             Conecta a navegador já aberto com remote debugging (ex.: http://127.0.0.1:9222)\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --max-sessions <n>          Limite de sessões simultâneas (default: ${DEFAULTS.maxSessions})\n  --session-idle-timeout <seg> Timeout de inatividade de sessões (default: ${DEFAULTS.sessionIdleTimeoutMs / 1000}s)\n  --log-format <formato>      Formato de log: text|json (default: ${DEFAULTS.logFormat})\n  --log-level <0|1|2>          0=normal, 1=debug, 2=trace detalhado (default: ${DEFAULTS.logLevel})\n  --log-content <modo>          none|metadata|full (default: ${DEFAULTS.logContent}); full pode registrar prompts/respostas sanitizados\n  --log-file <arquivo>         Também grava o log sanitizado em arquivo\n  --tool-enforcement <modo>    auto|explore-first|required (default: ${DEFAULTS.toolEnforcement})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --auto-browser              UI: abre janela temporária para login/CAPTCHA e depois usa headless\n  --headless                  UI estrita: nunca abre janela; falha se autenticação manual for necessária\n  --headed                    Mantém Chromium visível durante toda a execução (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
+  console.log(`\nkitt-reverse-proxy v4\n\nUso rápido:\n  kitt-reverse-proxy chatgpt\n  kitt-reverse-proxy start claude\n  kitt-reverse-proxy presets\n  kitt-reverse-proxy mcp [--mcp-port <porta>] <provider>\n  kitt-reverse-proxy <URL-do-chat> [opções]\n\nPresets derivados do catálogo canônico:\n  ${cliLaunchPresets().map((preset) => preset.id).join(' | ')}\n  Cada preset usa UI transport e perfil Chromium dedicado quando user_data_dir não estiver configurado.\n\nTransporte automático:\n  ChatGPT / Claude / Gemini / Kimi / DeepSeek -> UI do navegador\n  Outros chats -> descoberta de rede + mapping declarativo\n\nOpções:\n  --provider <id>             auto|${providerIds().join('|')}|<plugin-id>\n  --provider-plugin <module>  Plugin declarativo local/npm confiável (repetível)\n  --transport <modo>          auto|ui|network\n  --api-model <id>            ID exposto em /v1/models\n  --model <nome>              Modelo Ollama opcional para aprender mappings de rede\n  --ollama-url <url>          Endpoint /api/generate do Ollama\n  --user-data-dir <dir>       Perfil Chromium persistente para login/sessão\n  --cdp-url <url>             Conecta a navegador já aberto com remote debugging (ex.: http://127.0.0.1:9222)\n  --host <host>               Bind (default: ${DEFAULTS.host})\n  --port <porta>              Porta local (default: ${DEFAULTS.port})\n  --max-sessions <n>          Limite de sessões simultâneas (default: ${DEFAULTS.maxSessions})\n  --session-idle-timeout <seg> Timeout de inatividade de sessões (default: ${DEFAULTS.sessionIdleTimeoutMs / 1000}s)\n  --log-format <formato>      Formato de log: text|json (default: ${DEFAULTS.logFormat})\n  --log-level <0|1|2>          0=normal, 1=debug, 2=trace detalhado (default: ${DEFAULTS.logLevel})\n  --log-content <modo>          none|metadata|full (default: ${DEFAULTS.logContent}); full pode registrar prompts/respostas sanitizados\n  --log-file <arquivo>         Também grava o log sanitizado em arquivo\n  --tool-enforcement <modo>    auto|explore-first|required (default: ${DEFAULTS.toolEnforcement})\n  --capture-timeout <seg>     Tempo para captura de rede\n  --upstream-timeout <seg>    Timeout por chamada de rede\n  --ui-response-timeout <seg> Timeout de resposta via UI\n  --ui-settle-ms <ms>         Estabilidade necessária para considerar resposta concluída\n  --manual-intervention-timeout <seg> Tempo para login/CAPTCHA manual\n  --profile <arquivo>         Reusa profile declarativo existente\n  --save-profile <arquivo>    Salva profile aprendido, sem cookies/headers\n  --api-key <chave>           Protege o proxy; obrigatório fora de loopback\n  --allow-endpoint-host <h>   Autoriza host externo em transporte network (repetível)\n  --min-interval-ms <ms>      Intervalo mínimo entre chamadas upstream\n  --max-queue <n>             Limite da fila serializada\n  --auto-browser              UI: abre janela temporária para login/CAPTCHA e depois usa headless\n  --headless                  UI estrita: nunca abre janela; falha se autenticação manual for necessária\n  --headed                    Mantém Chromium visível durante toda a execução (default)\n  --no-cors                   Desabilita CORS\n  --follow-redirects          Permite redirects no transporte network (opt-in)\n  --no-redirects              Bloqueia redirects (default)\n  -h, --help                  Ajuda\n\nSegurança:\n  CAPTCHA, login e desafios anti-bot são detectados e exigem intervenção manual.\n  O projeto não implementa stealth, solver de CAPTCHA ou bypass de controles de acesso.\n`);
 }

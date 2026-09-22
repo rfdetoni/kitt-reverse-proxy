@@ -42,6 +42,14 @@ ChatGPT, Claude, Gemini, Kimi and DeepSeek use UI transport by default. The brow
 
 UI automation remains automation and may be subject to provider terms and controls.
 
+## Provider plugins
+
+Default provider integrations live under `src/plugins/default/` and are registered through the same versioned SDK contract exposed to external plugins.
+
+External provider plugins are never auto-discovered. They must be named explicitly with `--provider-plugin` or `PROXY_PROVIDER_PLUGINS`. Remote URL, `data:` and `node:` plugin specifiers are rejected; supported inputs are local files and npm packages resolved from the launch project.
+
+A JavaScript provider module executes inside the reverse-proxy process during bootstrap and therefore belongs to the trusted computing base. The SDK validates the declarative provider contract, but it is not a JavaScript sandbox. Load only reviewed plugins from trusted sources. Provider resolution happens before request serving so plugin lookup adds no dynamic-module execution to the request hot path.
+
 ## CAPTCHA, anti-bot and login
 
 `security/challenge.ts` detects common signals for CAPTCHA, Cloudflare/security challenges, human verification and login/authentication requirements.
