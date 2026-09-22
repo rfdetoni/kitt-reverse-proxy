@@ -151,9 +151,17 @@ function emit(rendered: string): void {
   const output = sink === 'stderr' ? console.error : console.log;
   output(rendered);
   const target = fileStream;
-  if (target) {
+  if (!target) return;
+  const accepted = target.write(rendered + '\n', 'utf8');
+  if (!accepted) {
     pendingWrites = pendingWrites.then(() => new Promise<void>((resolve) => {
-      target.write(rendered + '\n', 'utf8', () => resolve());
+      const done = (): void => {
+        target.off('drain', done);
+        target.off('error', done);
+        resolve();
+      };
+      target.once('drain', done);
+      target.once('error', done);
     })).catch(() => undefined);
   }
 }
