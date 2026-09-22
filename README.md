@@ -298,6 +298,8 @@ Chat Completions streaming uses standard SSE and terminates with `[DONE]`. Nativ
 
 A single authenticated browser can host multiple logical conversations. Named `X-Kitt-Session-Id` values receive independent tabs in the same persistent browser context instead of launching one Chromium process per conversation.
 
+K.I.T.T. Agent CLI child agents use stable named session identities: sibling children map to different named sessions/tabs, while a retained child reuses the same named session when it receives another task. Distinct named session IDs are never merged into one browser conversation.
+
 Session behavior includes bounded concurrent capacity, bounded per-session queues, idle LRU eviction, explicit reset/delete endpoints, stable conversation IDs across Agent CLI turns and circuit-breaker state isolated with the session executor.
 
 ---

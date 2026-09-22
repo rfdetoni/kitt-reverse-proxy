@@ -68,6 +68,42 @@ test('session manager evicts an idle named session when capacity is reached', as
   }
 });
 
+test('named child sessions reuse their lease while sibling sessions stay isolated', async () => {
+  const created: string[] = [];
+  const closed: string[] = [];
+  const childConfig = { ...config, maxSessions: 3 };
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: childConfig,
+    factory: async (id) => {
+      created.push(id);
+      const browserSession = {
+        context: {} as any,
+        page: {} as any,
+        persistent: true,
+        async close() { closed.push(id); }
+      } as LiveBrowserSession;
+      return { executor: executor(id), browserSession };
+    }
+  });
+  try {
+    await manager.execute('child-a', { messages: [{ role: 'user', content: 'one' }] });
+    await manager.execute('child-a', { messages: [{ role: 'user', content: 'two' }] });
+    await manager.execute('child-b', { messages: [{ role: 'user', content: 'other' }] });
+
+    assert.deepEqual(created, ['child-a', 'child-b']);
+    assert.deepEqual(
+      manager.list().map((session) => session.id),
+      ['default', 'child-a', 'child-b']
+    );
+  } finally {
+    await manager.close();
+  }
+
+  assert.deepEqual(closed.sort(), ['child-a', 'child-b']);
+});
+
 test('concurrent creation reserves capacity before awaiting browser startup', async () => {
   let release!: () => void;
   const ready = new Promise<void>((resolve) => { release = resolve; });
