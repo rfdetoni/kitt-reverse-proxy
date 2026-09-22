@@ -72,6 +72,8 @@ export interface SessionCapacitySnapshot {
   recyclable_idle_named: number;
   max: number;
   idle_timeout_ms: number;
+  automation_idle_timeout_ms: number;
+  automation_pages: number;
   eviction: 'lru_idle';
   accepts_named_sessions: boolean;
   shutting_down: boolean;
@@ -83,6 +85,7 @@ interface ManagedSession {
   executor: ChatExecutor;
   browserSession?: LiveBrowserSession;
   browserAutomation?: BrowserAutomationSession;
+  browserAutomationLastActivity?: number;
   queue: SerialQueue;
   createdAt: number;
   lastActivity: number;
@@ -135,6 +138,13 @@ export class SessionManager {
     return Boolean(this.defaultSession.browserSession);
   }
 
+  private get automationIdleTimeoutMs(): number {
+    return Math.min(
+      120_000,
+      Math.max(30_000, Math.floor(this.options.config.sessionIdleTimeoutMs / 4))
+    );
+  }
+
   async browserAction(
     requestedId: string | undefined,
     action: string,
@@ -156,6 +166,7 @@ export class SessionManager {
         if (action.trim().toLowerCase() === 'close') {
           const current = session.browserAutomation;
           delete session.browserAutomation;
+          delete session.browserAutomationLastActivity;
           if (current) await current.close();
           return { action: 'close', closed: Boolean(current), session_id: session.id };
         }
@@ -165,7 +176,9 @@ export class SessionManager {
             originScope
           );
         }
+        session.browserAutomationLastActivity = Date.now();
         const result = await session.browserAutomation.execute(action, args, originScope);
+        session.browserAutomationLastActivity = Date.now();
         return { ...result, session_id: session.id };
       } finally {
         session.lastActivity = Date.now();
@@ -301,6 +314,10 @@ export class SessionManager {
       recyclable_idle_named: recyclable,
       max: this.options.config.maxSessions,
       idle_timeout_ms: this.options.config.sessionIdleTimeoutMs,
+      automation_idle_timeout_ms: this.automationIdleTimeoutMs,
+      automation_pages: values.filter((session) =>
+        Boolean(session.browserAutomation && !session.browserAutomation.isClosed())
+      ).length,
       eviction: 'lru_idle',
       accepts_named_sessions: Boolean(this.options.factory),
       shutting_down: this.closed
@@ -315,7 +332,24 @@ export class SessionManager {
   async sweepIdle(now = Date.now()): Promise<void> {
     if (this.closed) return;
     const timeout = this.options.config.sessionIdleTimeoutMs;
-    const stale = [...this.sessions.values()].filter((session) =>
+    const automationTimeout = this.automationIdleTimeoutMs;
+    const values = [...this.sessions.values()];
+    const staleAutomation = values.filter((session) =>
+      session.status === 'idle'
+      && session.queue.depth === 0
+      && session.browserAutomation
+      && !session.browserAutomation.isClosed()
+      && now - (session.browserAutomationLastActivity ?? session.lastActivity) >= automationTimeout
+    );
+    for (const session of staleAutomation) {
+      const current = session.browserAutomation;
+      delete session.browserAutomation;
+      delete session.browserAutomationLastActivity;
+      delete session.browserAutomationLastActivity;
+      await current?.close().catch(() => undefined);
+    }
+
+    const stale = values.filter((session) =>
       !session.isDefault && session.status === 'idle' && session.queue.depth === 0 && now - session.lastActivity >= timeout
     );
     for (const session of stale) await this.removeSession(session);
@@ -332,6 +366,7 @@ export class SessionManager {
     await Promise.all(snapshot.map(async (session) => {
       await session.browserAutomation?.close().catch(() => undefined);
       delete session.browserAutomation;
+      delete session.browserAutomationLastActivity;
     }));
     for (const session of snapshot) {
       if (!session.isDefault && this.sessions.get(session.id) === session) await this.removeSession(session);
@@ -399,6 +434,7 @@ export class SessionManager {
     this.sessions.delete(session.id);
     await session.browserAutomation?.close().catch(() => undefined);
     delete session.browserAutomation;
+      delete session.browserAutomationLastActivity;
     await session.browserSession?.close().catch(() => undefined);
     telemetry.sessionEvicted();
     telemetry.setSessionsActive(this.sessions.size);
