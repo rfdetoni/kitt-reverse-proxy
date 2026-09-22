@@ -200,10 +200,17 @@ function write(
 
 export async function flushLogger(): Promise<void> {
   await pendingWrites;
+  const stream = fileStream;
+  if (!stream || stream.destroyed) return;
+  // A zero-length write callback is a cheap fence for every preceding write
+  // without allocating one Promise/callback chain per log line.
+  await new Promise<void>((resolve) => {
+    stream.write('', 'utf8', () => resolve());
+  });
 }
 
 export async function closeLogger(): Promise<void> {
-  await pendingWrites;
+  await flushLogger();
   const stream = fileStream;
   fileStream = undefined;
   filePath = undefined;
