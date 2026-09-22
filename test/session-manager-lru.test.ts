@@ -187,6 +187,8 @@ test('capacity snapshot is explicit about LRU policy, pending creation and shutd
     recyclable_idle_named: 1,
     max: 3,
     idle_timeout_ms: 60_000,
+    automation_idle_timeout_ms: 30_000,
+    automation_pages: 0,
     eviction: 'lru_idle',
     accepts_named_sessions: true,
     shutting_down: false
