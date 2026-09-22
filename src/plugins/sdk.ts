@@ -89,7 +89,7 @@ export function validateProviderPlugin(value: unknown): ProviderPlugin {
   if (!Array.isArray(provider.models) || provider.models.length === 0) throw new TypeError('Provider plugin must expose at least one model.');
   for (const model of provider.models) {
     if (!model || typeof model.id !== 'string' || !model.id.trim()) throw new TypeError('Provider model id is required.');
-    if (!Array.isArray(model.aliases) || model.aliases.some((alias) => typeof alias !== 'string')) {
+    if (!Array.isArray(model.aliases) || model.aliases.some((alias: unknown) => typeof alias !== 'string')) {
       throw new TypeError(`Provider model aliases must be strings: ${model.id}.`);
     }
   }
