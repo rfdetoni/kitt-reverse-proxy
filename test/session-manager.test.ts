@@ -88,20 +88,20 @@ test('named child sessions reuse their lease while sibling sessions stay isolate
     }
   });
   try {
-    await manager.execute('child-a', { messages: [{ role: 'user', content: 'one' }] });
-    await manager.execute('child-a', { messages: [{ role: 'user', content: 'two' }] });
-    await manager.execute('child-b', { messages: [{ role: 'user', content: 'other' }] });
+    await manager.execute('childa', { messages: [{ role: 'user', content: 'one' }] });
+    await manager.execute('childa', { messages: [{ role: 'user', content: 'two' }] });
+    await manager.execute('childb', { messages: [{ role: 'user', content: 'other' }] });
 
-    assert.deepEqual(created, ['child-a', 'child-b']);
+    assert.deepEqual(created, ['childa', 'childb']);
     assert.deepEqual(
       manager.list().map((session) => session.id),
-      ['default', 'child-a', 'child-b']
+      ['default', 'childa', 'childb']
     );
   } finally {
     await manager.close();
   }
 
-  assert.deepEqual(closed.sort(), ['child-a', 'child-b']);
+  assert.deepEqual(closed.sort(), ['childa', 'childb']);
 });
 
 test('concurrent creation reserves capacity before awaiting browser startup', async () => {
