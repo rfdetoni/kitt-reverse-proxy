@@ -26,7 +26,7 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 - MCP server over stdio or loopback Streamable HTTP.
 - Authenticated browser profiles with one browser and multiple isolated conversations.
 - UI and network transports with safe automatic bootstrap fallback for generic chats.
-- Provider/model registry with capability discovery endpoints.
+- Versioned provider-plugin SDK and registry with capability discovery endpoints.
 - Per-session circuit breaker with half-open recovery and latency EWMA.
 - Progressive UI streaming without retaining cumulative DOM snapshots.
 - Native tool-call reconstruction and K.I.T.T. tool-enforcement semantics.
@@ -39,7 +39,7 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 Version 4 formalizes the reverse proxy as a **browser-backed AI gateway runtime**, while preserving the OpenAI-compatible contract consumed by K.I.T.T. Agent CLI.
 
-- Built-in providers are independent manifests behind a versioned registry rather than one hardcoded catalog.
+- Default providers are independent plugins under `src/plugins/default/` behind a versioned registry; trusted external plugins can be loaded explicitly without changing the gateway core.
 - UI automation uses provider selector packs first, then a bounded semantic locator cascade.
 - Named conversations keep serialization per session; a browser session broker owns tab/context allocation and authenticated-context reuse.
 - `/v1/capabilities` publishes the machine-readable proxy contract, provider-registry contract, browser controls and observability surface.
@@ -73,6 +73,7 @@ The proxy propagates W3C `traceparent` and emits child spans for session resolut
 - **GHCR packages:** https://github.com/rfdetoni?tab=packages
 - **Security model:** [SECURITY.md](SECURITY.md)
 - **Provider discovery:** `GET /v1/providers`
+- **Provider plugin SDK:** `kitt-reverse-proxy/plugin-sdk`
 - **Runtime capabilities:** `GET /v1/capabilities`
 - **Metrics:** `GET /v1/kitt/metrics`
 
@@ -178,7 +179,7 @@ The root ecosystem `compose.yaml` contains both official image references and so
 
 ## Running the proxy
 
-Start one of the built-in web providers:
+Start one of the default WebChat provider plugins:
 
 ```bash
 kitt-reverse-proxy start chatgpt
@@ -211,7 +212,7 @@ For generic chats, `auto` tries network discovery first and falls back to the no
 
 ## Providers & models
 
-The provider registry is deliberately small and curated rather than quantity-driven.
+The default provider-plugin set is deliberately small and curated rather than quantity-driven. The registry can be extended with explicitly loaded trusted plugins.
 
 | Provider | API model | Default transport | UI image input | Reasoning ownership |
 | --- | --- | --- | --- | --- |
@@ -420,7 +421,7 @@ Common options:
 
 ```text
 --provider <id>              auto|default-id|<plugin-id>
---provider-plugin <module>     trusted local/npm provider plugin (repeatable)
+--provider-plugin <module>   trusted local/npm provider plugin (repeatable)
 --transport <mode>           auto|ui|network
 --api-model <id>             model ID exposed through the API
 --user-data-dir <dir>        persistent Chromium profile
