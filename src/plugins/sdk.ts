@@ -11,6 +11,8 @@ export interface UiProviderConfig {
   newChatUrl?: string;
   uploadSelector?: string;
   supportsImageUpload: boolean;
+  manualAuthBrowser?: 'playwright' | 'system-chrome';
+  manualAuthUrl?: string;
 }
 
 export interface ProviderCapabilities {
@@ -103,6 +105,27 @@ export function validateProviderPlugin(value: unknown): ProviderPlugin {
   assertStringArray(provider.ui.streamingSelectors, 'provider.ui.streamingSelectors');
   if (typeof provider.ui.supportsImageUpload !== 'boolean') {
     throw new TypeError('Provider plugin ui.supportsImageUpload must be boolean.');
+  }
+  if (
+    provider.ui.manualAuthBrowser !== undefined
+    && provider.ui.manualAuthBrowser !== 'playwright'
+    && provider.ui.manualAuthBrowser !== 'system-chrome'
+  ) {
+    throw new TypeError('Provider plugin ui.manualAuthBrowser must be playwright or system-chrome.');
+  }
+  if (provider.ui.manualAuthUrl !== undefined) {
+    if (typeof provider.ui.manualAuthUrl !== 'string' || !provider.ui.manualAuthUrl.trim()) {
+      throw new TypeError('Provider plugin ui.manualAuthUrl must be a non-empty URL.');
+    }
+    let authUrl: URL;
+    try {
+      authUrl = new URL(provider.ui.manualAuthUrl);
+    } catch {
+      throw new TypeError('Provider plugin ui.manualAuthUrl must be a valid URL.');
+    }
+    if (authUrl.protocol !== 'https:') {
+      throw new TypeError('Provider plugin ui.manualAuthUrl must use https.');
+    }
   }
 
   return value as ProviderPlugin;
