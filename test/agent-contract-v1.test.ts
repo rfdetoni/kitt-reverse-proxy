@@ -76,6 +76,28 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
   assert.equal(plan.workspaceProvided, true);
 });
 
+test('keeps model instructions English while preserving user-authored language verbatim', () => {
+  const request = body('code-edit', { files: ['backend/build.gradle'] });
+  request.messages = [{
+    role: 'user',
+    content: `[KITT TURN CONTEXT]\n${JSON.stringify({
+      route: 'code-edit',
+      workspace_context: { files: ['backend/build.gradle'] }
+    })}\n[END KITT TURN CONTEXT]\n\nconverta o backend deste projeto para maven`
+  }];
+
+  const plan = prepareAgentContractRequest(request, { sessionId: 'prompt-language-policy' });
+  const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
+
+  assert.equal(messages[0]?.content, AGENT_CONTRACT_SYSTEM_PROMPT);
+  assert.match(messages[0]?.content ?? '', /OUTPUT CONTRACT \(mandatory, no exceptions\)/);
+  assert.doesNotMatch(messages[0]?.content ?? '', /Você|CONTRATO DE SAÍDA|Regras:|Responda|Retorne/u);
+  assert.match(
+    messages.find((message) => message.role === 'user')?.content ?? '',
+    /converta o backend deste projeto para maven$/
+  );
+});
+
 test('consumes cache-friendly user turn context without dropping the user task', () => {
   const request = body('code-edit', { files: ['src/app.ts'] });
   request.messages = [
