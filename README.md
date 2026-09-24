@@ -18,7 +18,11 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 ---
 
-Tool-call conversations that are waiting for a client-side tool result (including human approval in KITT Agent CLI) are pinned and are not evicted by session idle timeout until the result or explicit session reset/close arrives.\n\n## What’s included
+Tool-call conversations that are waiting for a client-side tool result (including human approval in KITT Agent CLI) are pinned and are not evicted by session idle timeout until the result or explicit session reset/close arrives.
+
+Install/update scripts stop resident KITT services before replacing runtime files, preventing an old daemon/proxy process from holding ports, browser sessions or executable files across an upgrade.
+
+## What’s included
 
 - OpenAI-compatible `Chat Completions` and `Responses` APIs.
 - Anthropic-compatible `Messages` API.
@@ -303,7 +307,7 @@ K.I.T.T. keeps resilience on the safe side of chat semantics:
 - **Circuit breaker per session/transport.** Three consecutive availability failures open the circuit for 30 seconds; the next eligible request becomes a half-open probe.
 - **Low-overhead health tracking.** Success/failure counters and an in-memory latency EWMA add constant work per request.
 - **Health-aware readiness.** `/readyz` returns `503` while the active provider circuit is open.
-- **Bounded queues and sessions.** Named sessions use serial queues, capacity limits and idle LRU eviction.
+- **Bounded queues and sessions.** Named sessions use serial queues, capacity limits and idle LRU eviction; sessions waiting for client tool results are pinned and excluded from idle/LRU eviction until continuation.
 - **Cancellation propagation.** Client disconnects flow through request lifecycle, queue and executor layers.
 - **Progressive streaming.** UI streaming emits suffix deltas instead of buffering every cumulative page snapshot.
 
