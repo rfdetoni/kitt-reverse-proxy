@@ -48,6 +48,8 @@ export const GEMINI_PLUGIN = defineProviderPlugin({
       'button[aria-label*="interromper" i]'
     ],
     newChatUrl: 'https://gemini.google.com/app',
+    manualAuthBrowser: 'system-chrome',
+    manualAuthUrl: 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp',
     uploadSelector: 'input[type="file"]',
     supportsImageUpload: true
   }
