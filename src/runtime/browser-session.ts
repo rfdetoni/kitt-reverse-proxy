@@ -18,6 +18,17 @@ export function browserLaunchArgs(): string[] {
   return [...RESOURCE_SAVING_ARGS];
 }
 
+export function browserLaunchOptions(
+  headed: boolean,
+  env: NodeJS.ProcessEnv = process.env
+): { headless: boolean; chromiumSandbox: boolean; args: string[] } {
+  return {
+    headless: !headed,
+    chromiumSandbox: env.KITT_BROWSER_SANDBOX !== '0',
+    args: browserLaunchArgs()
+  };
+}
+
 function firstUsablePage(context: BrowserContext): Page | undefined {
   return context.pages().find((page: Page) => !page.isClosed());
 }
@@ -60,9 +71,8 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
   if (config.userDataDir) {
     const userDataDir = await prepareUserDataDir(config.userDataDir);
     const launchOptions = {
-      headless: !config.headed,
-      acceptDownloads: false,
-      args: browserLaunchArgs()
+      ...browserLaunchOptions(config.headed),
+      acceptDownloads: false
     };
     const context = await chromium
       .launchPersistentContext(userDataDir, { ...launchOptions, channel: 'chrome' })
@@ -79,10 +89,7 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     };
   }
 
-  const launchOptions = {
-    headless: !config.headed,
-    args: browserLaunchArgs()
-  };
+  const launchOptions = browserLaunchOptions(config.headed);
   const browser = await chromium.launch({
     ...launchOptions,
     channel: 'chrome'
