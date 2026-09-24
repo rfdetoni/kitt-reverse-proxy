@@ -34,6 +34,13 @@ test('provider manifests satisfy the v2 registry contract', () => {
   }
 });
 
+test('Gemini declares human Chrome authentication without weakening browser security', () => {
+  const gemini = PROVIDERS.find((provider) => provider.id === 'gemini');
+  assert.ok(gemini);
+  assert.equal(gemini.ui.manualAuthBrowser, 'system-chrome');
+  assert.equal(new URL(gemini.ui.manualAuthUrl!).hostname, 'accounts.google.com');
+});
+
 test('provider selector packs do not contain duplicate selectors', () => {
   for (const provider of PROVIDERS) {
     for (const [kind, selectors] of Object.entries({
