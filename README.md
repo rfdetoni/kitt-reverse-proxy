@@ -206,6 +206,10 @@ kitt-reverse-proxy presets
 
 The browser stays visible by default, including after login. Pass `--headless` to run without a window. The optional `--auto-browser` mode probes the stored profile headlessly first; if login is required, it opens a temporary window and then retries headless.
 
+UI transport always reuses a K.I.T.T.-managed persistent browser profile unless `--cdp-url` is supplied. Known providers use `~/.kitt-reverse-proxy/<provider>`; a provider detected from a raw URL resolves to the same directory, so switching between `chatgpt` and `https://chatgpt.com/` no longer creates an ephemeral browser context. Generic sites receive a deterministic origin-isolated profile.
+
+Local Playwright launches enable the Chromium sandbox. The dedicated Docker browser boundary may explicitly disable the browser sandbox because the container supplies the isolation boundary. Do not point `--user-data-dir` at Chrome's normal/default User Data directory; use a dedicated automation profile or attach to an explicitly debug-enabled browser with `--cdp-url`.
+
 For a custom web chat:
 
 ```bash
