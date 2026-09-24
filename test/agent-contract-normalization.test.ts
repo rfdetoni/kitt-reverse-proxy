@@ -126,6 +126,26 @@ test('repairs literal newlines inside contract string values locally', () => {
   assert.equal(result.choices[0]?.message.content, 'linha 1\nlinha 2');
 });
 
+test('normalizes a bare safe-runtime operation into kitt_runtime tool call', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'normalize-bare-runtime-operation' }
+  );
+  const result = transformAgentContractCompletion(
+    completion(JSON.stringify({
+      operation: 'repo.read',
+      arguments: { path: 'backend/build.gradle' }
+    })),
+    plan
+  );
+
+  const call = result.choices[0]?.message.tool_calls?.[0];
+  assert.equal(call?.function.name, 'kitt_runtime');
+  const args = JSON.parse(call?.function.arguments || '{}');
+  assert.equal(args.operation, 'repo.read');
+  assert.equal(args.arguments.path, 'backend/build.gradle');
+});
+
 test('normalizes a kitt tool envelope into the contract tool call', () => {
   const plan = prepareAgentContractRequest(
     bodyWithRuntimeTool('code-generation'),
