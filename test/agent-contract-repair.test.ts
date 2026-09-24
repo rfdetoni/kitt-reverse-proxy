@@ -95,13 +95,13 @@ test('semantic retry includes the validation cause and available tool names', ()
   const retry = buildAgentContractRepairBody(
     plan,
     new AgentContractValidationError(
-      'request_tools é incompatível com TOOLS_AVAILABLE já fornecido.'
+      'request_tools is incompatible with TOOLS_AVAILABLE that has already been supplied.'
     )
   );
   const messages = retry.messages as Array<{ role?: string; content?: string }>;
   const repair = messages.at(-1)?.content ?? '';
 
-  assert.match(repair, /PREVIOUS_VALIDATION_ERROR: request_tools é incompatível/);
+  assert.match(repair, /PREVIOUS_VALIDATION_ERROR: request_tools is incompatible/);
   assert.match(repair, /request_tools is forbidden/);
   assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
   assert.match(repair, /request_workspace is forbidden/);
@@ -184,7 +184,7 @@ test('serialization repair explicitly requires escaped JSON strings', () => {
   );
   const retry = buildAgentContractSerializationRepairBody(
     plan,
-    new AgentContractValidationError('A resposta do modelo não é um objeto JSON puro.')
+    new AgentContractValidationError('The model response is not a pure JSON object.')
   );
   const messages = retry.messages as Array<{ role?: string; content?: string }>;
   const repair = messages.at(-1)?.content ?? '';

@@ -65,9 +65,9 @@ function contract(action: Record<string, unknown>): string {
 }
 
 test('contract explicitly defines TOOLS_AVAILABLE as remotely executable', () => {
-  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /TOOLS_AVAILABLE é a superfície executável real/i);
+  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /TOOLS_AVAILABLE is the real executable surface/i);
   assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /action="use_tool"/i);
-  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /não aparece como tool nativa/i);
+  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /does not appear as a native tool/i);
 });
 
 test('implementation route rejects final response before any mutation attempt', () => {
@@ -81,7 +81,7 @@ test('implementation route rejects final response before any mutation attempt', 
       content: 'kitt_runtime não está exposta como ferramenta executável nesta conversa.'
     })), plan),
     (error: unknown) => error instanceof AgentContractValidationError
-      && /exige tentativa de mutação antes de final_response/i.test(error.message)
+      && /requires a mutation attempt before final_response/i.test(error.message)
   );
 });
 

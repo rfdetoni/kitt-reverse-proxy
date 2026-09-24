@@ -75,6 +75,6 @@ test('summarize rejects request_tools before it can become an orchestration erro
       content: 'Preciso das tools para continuar.',
       reasoning_summary: 'Vou solicitar tools.'
     })), plan),
-    (error: unknown) => error instanceof AgentContractValidationError && /summarize exige action=final_response/.test(error.message)
+    (error: unknown) => error instanceof AgentContractValidationError && /summarize route requires action=final_response/.test(error.message)
   );
 });
