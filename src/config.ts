@@ -1,7 +1,6 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { PROVIDERS, providerIds } from './providers/catalog.js';
 import type { AppConfig, ProviderId, TransportMode } from './types.js';
+import { browserProfileDirectory } from './util/browser-profile.js';
 import {
   boolSetting,
   controlCenterSection,
@@ -68,7 +67,7 @@ export function cliLaunchPresets(): CliLaunchPreset[] {
       name: item.name,
       targetUrl: item.ui.newChatUrl!,
       apiModel: item.defaultApiModel,
-      userDataDir: join(homedir(), '.kitt-reverse-proxy', item.id)
+      userDataDir: browserProfileDirectory(item.id, item.ui.newChatUrl!)
     }));
 }
 
