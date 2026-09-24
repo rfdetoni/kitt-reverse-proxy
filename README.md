@@ -18,7 +18,7 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 ---
 
-## What’s included
+Tool-call conversations that are waiting for a client-side tool result (including human approval in KITT Agent CLI) are pinned and are not evicted by session idle timeout until the result or explicit session reset/close arrives.\n\n## What’s included
 
 - OpenAI-compatible `Chat Completions` and `Responses` APIs.
 - Anthropic-compatible `Messages` API.

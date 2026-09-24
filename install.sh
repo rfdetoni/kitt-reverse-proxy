@@ -48,6 +48,49 @@ SRC="$INSTALL_ROOT/src"
 BIN_PROXY="$BIN_DIR/kitt-reverse-proxy"
 BIN_GATEWAY="$BIN_DIR/kitt-agent-gateway"
 
+stop_kitt_services() {
+  echo "Stopping active K.I.T.T. services before install/update..."
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user stop kitt-assistant.service kitt-reverse-proxy.service kitt-agent-gateway.service >/dev/null 2>&1 || true
+  fi
+  if command -v launchctl >/dev/null 2>&1; then
+    launchctl stop com.kitt.assistant >/dev/null 2>&1 || true
+    launchctl stop com.kitt.reverse-proxy >/dev/null 2>&1 || true
+  fi
+  if command -v kittctl >/dev/null 2>&1; then
+    kittctl service stop >/dev/null 2>&1 || true
+  fi
+  if command -v kitt >/dev/null 2>&1; then
+    kitt daemon stop >/dev/null 2>&1 || true
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    local uid pattern pid kitt_pids any_alive
+    uid="$(id -u)"
+    pattern='(kittd([[:space:]]|$)|kitt[.]cli[.]main.*daemon[[:space:]]+run|kitt-reverse-proxy([[:space:]]|$)|kitt-agent-gateway([[:space:]]|$)|kitt-reverse-proxy/.*/dist/(gateway/)?cli[.]js)'
+    kitt_pids="$(pgrep -u "$uid" -f "$pattern" 2>/dev/null || true)"
+    for pid in $kitt_pids; do
+      [[ "$pid" != "$" && "$pid" != "$PPID" ]] || continue
+      kill -TERM "$pid" >/dev/null 2>&1 || true
+    done
+    for _ in {1..30}; do
+      any_alive=0
+      for pid in $kitt_pids; do
+        if kill -0 "$pid" >/dev/null 2>&1; then any_alive=1; break; fi
+      done
+      [[ $any_alive -eq 0 ]] && break
+      sleep 0.1
+    done
+    for pid in $kitt_pids; do
+      [[ "$pid" != "$" && "$pid" != "$PPID" ]] || continue
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    done
+  fi
+}
+
+stop_kitt_services
+
 if [[ $UNINSTALL -eq 1 ]]; then
   rm -rf "$INSTALL_ROOT"
   rm -f "$BIN_PROXY" "$BIN_GATEWAY"

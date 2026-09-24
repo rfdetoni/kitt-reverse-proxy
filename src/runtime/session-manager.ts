@@ -60,6 +60,7 @@ export interface SessionInfo {
   created_at: string;
   last_activity: string;
   status: 'idle' | 'busy' | 'closing';
+  awaiting_tool_result: boolean;
 }
 
 export interface SessionCapacitySnapshot {
@@ -70,6 +71,7 @@ export interface SessionCapacitySnapshot {
   idle: number;
   pending_creation: number;
   recyclable_idle_named: number;
+  awaiting_tool_results: number;
   max: number;
   idle_timeout_ms: number;
   automation_idle_timeout_ms: number;
@@ -95,6 +97,10 @@ interface ManagedSession {
 
 function resilient(executor: ChatExecutor, provider: string): ChatExecutor {
   return executor instanceof ResilientChatExecutor ? executor : new ResilientChatExecutor(executor, provider);
+}
+
+function awaitsToolResult(session: ManagedSession): boolean {
+  return session.executor.hasPendingToolCalls?.() ?? false;
 }
 
 export class SessionManager {
@@ -295,7 +301,8 @@ export class SessionManager {
         provider: session.provider,
         created_at: new Date(session.createdAt).toISOString(),
         last_activity: new Date(session.lastActivity).toISOString(),
-        status: session.status
+        status: session.status,
+        awaiting_tool_result: awaitsToolResult(session)
       }));
   }
 
@@ -303,7 +310,13 @@ export class SessionManager {
     const values = [...this.sessions.values()];
     const busy = values.filter((session) => session.status === 'busy' || session.queue.depth > 0).length;
     const idle = values.filter((session) => session.status === 'idle' && session.queue.depth === 0).length;
-    const recyclable = values.filter((session) => !session.isDefault && session.status === 'idle' && session.queue.depth === 0).length;
+    const awaitingToolResults = values.filter((session) => awaitsToolResult(session)).length;
+    const recyclable = values.filter((session) =>
+      !session.isDefault
+      && session.status === 'idle'
+      && session.queue.depth === 0
+      && !awaitsToolResult(session)
+    ).length;
     return {
       provider: this.options.provider,
       active: values.length,
@@ -312,6 +325,7 @@ export class SessionManager {
       idle,
       pending_creation: this.creating.size,
       recyclable_idle_named: recyclable,
+      awaiting_tool_results: awaitingToolResults,
       max: this.options.config.maxSessions,
       idle_timeout_ms: this.options.config.sessionIdleTimeoutMs,
       automation_idle_timeout_ms: this.automationIdleTimeoutMs,
@@ -349,7 +363,11 @@ export class SessionManager {
     }
 
     const stale = values.filter((session) =>
-      !session.isDefault && session.status === 'idle' && session.queue.depth === 0 && now - session.lastActivity >= timeout
+      !session.isDefault
+      && session.status === 'idle'
+      && session.queue.depth === 0
+      && !awaitsToolResult(session)
+      && now - session.lastActivity >= timeout
     );
     for (const session of stale) await this.removeSession(session);
   }
@@ -420,7 +438,12 @@ export class SessionManager {
   private async ensureCapacity(): Promise<void> {
     if (this.sessions.size + this.creating.size < this.options.config.maxSessions) return;
     const candidate = [...this.sessions.values()]
-      .filter((session) => !session.isDefault && session.status === 'idle' && session.queue.depth === 0)
+      .filter((session) =>
+        !session.isDefault
+        && session.status === 'idle'
+        && session.queue.depth === 0
+        && !awaitsToolResult(session)
+      )
       .sort((left, right) => left.lastActivity - right.lastActivity || left.createdAt - right.createdAt)[0];
     if (!candidate) throw new SessionLimitExceededError();
     await this.removeSession(candidate);

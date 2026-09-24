@@ -237,5 +237,7 @@ export interface ChatExecutor {
   readonly transport: 'network' | 'ui';
   execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult>;
   describe(): JsonObject;
+  /** True while a client-side tool result is still expected for this conversation. */
+  hasPendingToolCalls?(): boolean;
   reset?(): Promise<void>;
 }

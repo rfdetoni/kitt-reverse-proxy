@@ -108,6 +108,10 @@ export class ResilientChatExecutor implements ChatExecutor {
     }
   }
 
+  hasPendingToolCalls(): boolean {
+    return this.delegate.hasPendingToolCalls?.() ?? false;
+  }
+
   describe(): JsonObject {
     return {
       ...this.delegate.describe(),

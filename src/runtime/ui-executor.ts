@@ -238,6 +238,10 @@ export class UiChatExecutor implements ChatExecutor {
     return entry ? { callId: entry[0], toolName: entry[1] } : undefined;
   }
 
+  hasPendingToolCalls(): boolean {
+    return this.toolNamesByCallId.size > 0;
+  }
+
   private storeHistory(incoming: CanonicalMessage[], assistantText: string): void {
     let next: CanonicalMessage[];
     if (historyIsPrefix(this.history, incoming)) next = [...incoming, { role: 'assistant', text: assistantText }];

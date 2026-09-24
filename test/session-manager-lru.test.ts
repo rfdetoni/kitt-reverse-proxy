@@ -123,6 +123,45 @@ test('never evicts a busy session to admit a new one', async () => {
   await manager.close();
 });
 
+test('pending client tool results pin named sessions without an idle timeout', async () => {
+  const closed: string[] = [];
+  let awaitingApproval = true;
+  const pinnedExecutor = executor();
+  pinnedExecutor.hasPendingToolCalls = () => awaitingApproval;
+
+  const manager = new SessionManager({
+    defaultExecutor: executor(),
+    provider: 'chatgpt',
+    config: config(2),
+    factory: async (id) => ({
+      executor: id === 'approval' ? pinnedExecutor : executor(),
+      browserSession: browserSession(id, closed)
+    })
+  });
+
+  try {
+    await manager.execute('approval', {});
+    await manager.sweepIdle(Date.now() + 24 * 60 * 60 * 1000);
+
+    assert.deepEqual(manager.list().map((session) => session.id).sort(), ['approval', 'default']);
+    assert.equal(manager.list().find((session) => session.id === 'approval')?.awaiting_tool_result, true);
+    assert.equal(manager.capacity().awaiting_tool_results, 1);
+    assert.equal(manager.capacity().recyclable_idle_named, 0);
+
+    await assert.rejects(
+      manager.execute('other', {}),
+      SessionLimitExceededError
+    );
+
+    awaitingApproval = false;
+    await manager.execute('other', {});
+    assert.deepEqual(manager.list().map((session) => session.id).sort(), ['default', 'other']);
+    assert.deepEqual(closed, ['approval']);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('close drains active named work before releasing its browser session', async () => {
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => {
@@ -185,6 +224,7 @@ test('capacity snapshot is explicit about LRU policy, pending creation and shutd
     idle: 2,
     pending_creation: 0,
     recyclable_idle_named: 1,
+    awaiting_tool_results: 0,
     max: 3,
     idle_timeout_ms: 60_000,
     automation_idle_timeout_ms: 30_000,
