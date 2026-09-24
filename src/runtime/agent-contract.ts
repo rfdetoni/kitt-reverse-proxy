@@ -822,6 +822,29 @@ function parseLooseJsonObject(text: string): Record<string, unknown> | undefined
   return undefined;
 }
 
+function contractFromBareRuntimeOperation(text: string): AgentContractResponse | undefined {
+  const parsed = parseLooseJsonObject(text);
+  if (!parsed || Object.prototype.hasOwnProperty.call(parsed, 'action')) return undefined;
+
+  const operation = parsed.operation;
+  const args = parsed.arguments;
+  if (typeof operation !== 'string' || !isRecord(args)) return undefined;
+
+  const keys = Object.keys(parsed);
+  if (keys.some((key) => key !== 'operation' && key !== 'arguments')) return undefined;
+
+  return {
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: {
+      operation,
+      arguments: args as JsonObject
+    },
+    content: null,
+    reasoning_summary: ''
+  };
+}
+
 function contractFromKittToolEnvelope(text: string): AgentContractResponse | undefined {
   const tagged = text.match(/<kitt-tool>\s*([\s\S]*?)\s*<\/kitt-tool>/iu)?.[1];
   const parsed = parseLooseJsonObject(tagged ?? text);
@@ -1062,12 +1085,19 @@ export function transformAgentContractCompletion(
     response = parseStrictContract(source);
   } catch (error) {
     const normalizedWriteFile = recoverMalformedRepoWriteFileContract(source);
-    const normalizedToolCall = normalizedWriteFile ?? contractFromKittToolEnvelope(source);
+    const normalizedBareRuntime = normalizedWriteFile
+      ? undefined
+      : contractFromBareRuntimeOperation(source);
+    const normalizedToolCall = normalizedWriteFile
+      ?? normalizedBareRuntime
+      ?? contractFromKittToolEnvelope(source);
     if (normalizedToolCall) {
       response = normalizedToolCall;
       logger.event('warn', normalizedWriteFile
         ? 'agent.contract.write_file_serialization_normalized'
-        : 'agent.contract.tool_envelope_normalized', {
+        : normalizedBareRuntime
+          ? 'agent.contract.bare_runtime_operation_normalized'
+          : 'agent.contract.tool_envelope_normalized', {
         contract_session_id: plan.sessionId,
         route: plan.route,
         response_bytes: Buffer.byteLength(source, 'utf8')
