@@ -63,7 +63,7 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
 
   assert.equal(messages[0].role, 'system');
   assert.equal(messages[0].content, AGENT_CONTRACT_SYSTEM_PROMPT);
-  assert.match(messages[0].content, /preserve a formatação normal da linguagem\/projeto/);
+  assert.match(messages[0].content, /preserve the normal formatting of the language\/project/);
   assert.match(messages[0].content, /Indentation-sensitive languages/);
   assert.match(messages[0].content, /OUTPUT CONTRACT \(mandatory, no exceptions\)/);
   assert.doesNotMatch(messages[0].content, /Você|CONTRATO DE SAÍDA|Regras:|Responda|Retorne/u);
