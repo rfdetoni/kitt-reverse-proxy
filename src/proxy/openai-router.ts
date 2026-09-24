@@ -145,7 +145,7 @@ export function buildAgentContractRepairBody(
     content: [
       '[KITT CONTRACT REPAIR]',
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct the semantic contract violation. Return exactly one JSON object matching the output contract, with no markdown or extra text.',
+      'REPAIR_INSTRUCTION: Correct the semantic contract violation. Return exactly one JSON object matching the output contract and no extra prose. If repo.write_file/patch content is present, wrap the entire JSON object in one ```json fenced block so the WebChat renderer cannot reinterpret file characters.',
       ...constraints,
       'Do not repeat the invalid action from the previous response.',
       '[END KITT CONTRACT REPAIR]'
@@ -168,7 +168,7 @@ export function buildAgentContractSerializationRepairBody(
       'SERIALIZATION_INSTRUCTION: Preserve the intended action, but emit exactly one syntactically valid JSON object matching the output contract.',
       'Escape every newline, tab, backslash, quote, and control character inside string values using JSON escapes. Never place literal newlines inside a JSON string.',
       'When serializing repo.write_file or patch content, preserve the original file indentation and line breaks exactly inside the escaped string. Never flatten or minify file content to make the outer JSON easier to serialize.',
-      'Do not use markdown fences, prose, comments, or trailing text.',
+      'For repo.write_file or patch content, wrap the entire contract object in exactly one ```json fenced block; write no prose, comments, labels, or trailing text outside that block.',
       'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string.',
       ...constraints,
       '[END KITT CONTRACT SERIALIZATION REPAIR]'

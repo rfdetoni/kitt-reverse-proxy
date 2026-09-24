@@ -163,6 +163,35 @@ test('normalizes a kitt tool envelope into the contract tool call', () => {
   assert.match(args.arguments.content, /MeuFazTudo/);
 });
 
+test('preserves markdown-sensitive XML and CSS bytes inside fenced write-file contracts', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'normalize-webchat-markup-safe' }
+  );
+  const xml = '<project>\n  <modelVersion>4.0.0</modelVersion>\n</project>\n';
+  const css = '/* reset */\n* { box-sizing: border-box; }\n';
+  for (const [path, fileContent] of [
+    ['backend/pom.xml', xml],
+    ['frontend/src/styles.css', css]
+  ]) {
+    const source = `\`\`\`json\n${JSON.stringify({
+      action: 'use_tool',
+      tool: 'kitt_runtime',
+      tool_input: {
+        operation: 'repo.write_file',
+        arguments: { path, content: fileContent }
+      },
+      content: null,
+      reasoning_summary: 'Write exact file bytes.'
+    })}\n\`\`\``;
+    const result = transformAgentContractCompletion(completion(source), plan);
+    const call = result.choices[0]?.message.tool_calls?.[0];
+    const args = JSON.parse(call?.function.arguments || '{}');
+    assert.equal(args.arguments.path, path);
+    assert.equal(args.arguments.content, fileContent);
+  }
+});
+
 test('recovers malformed repo.write_file contract when file JSON quotes are not escaped', () => {
   const plan = prepareAgentContractRequest(
     bodyWithRuntimeTool('code-generation'),

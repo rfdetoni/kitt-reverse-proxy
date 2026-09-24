@@ -20,6 +20,8 @@ The primary compatibility target is **K.I.T.T. Agent CLI**, while the API surfac
 
 Tool-call conversations that are waiting for a client-side tool result (including human approval in KITT Agent CLI) are pinned and are not evicted by session idle timeout until the result or explicit session reset/close arrives.
 
+Agent-contract mutation routes are fail-closed: unstructured status prose is never reinterpreted as a successful final response. For WebChat file writes, the contract uses a fenced JSON transport so Markdown/HTML rendering cannot consume XML tags, CSS asterisks or other source characters before the proxy reconstructs the tool call.
+
 Install/update scripts stop resident KITT services before replacing runtime files, preventing an old daemon/proxy process from holding ports, browser sessions or executable files across an upgrade.
 
 ## What’s included

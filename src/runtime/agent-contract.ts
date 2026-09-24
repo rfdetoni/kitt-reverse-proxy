@@ -7,7 +7,7 @@ export const AGENT_CONTRACT_HEADER = 'X-Kitt-Agent-Contract';
 export const AGENT_CONTRACT_VERSION = 'v1';
 export const AGENT_ROUTE_HEADER = 'X-Kitt-Route';
 export const AGENT_ROUTES = ['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat'] as const;
-export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o JSON do contrato, sem texto extra. Respeite ROUTE e use somente tools/operações presentes em TOOLS_AVAILABLE. Ao serializar conteúdo de arquivo, preserve exatamente indentação e quebras de linha usando escapes JSON; nunca achate ou minifique o conteúdo.';
+export const AGENT_CONTRACT_RETRY_PROMPT = 'Saída inválida. Responda apenas com o objeto JSON do contrato, sem texto extra. Respeite ROUTE e use somente tools/operações presentes em TOOLS_AVAILABLE. Ao serializar conteúdo de arquivo, preserve exatamente indentação e quebras de linha usando escapes JSON; nunca achate ou minifique o conteúdo. Para repo.write_file ou patch com conteúdo textual, envolva o objeto JSON inteiro em um único bloco fenced ```json para impedir que a UI WebChat interprete XML/HTML/Markdown/CSS antes da captura; não escreva nada fora desse bloco.';
 
 const TURN_CONTEXT_MARKER = '[KITT TURN CONTEXT]';
 const TURN_CONTEXT_END_MARKER = '[END KITT TURN CONTEXT]';
@@ -59,7 +59,7 @@ const FILE_MUTATING_TOOL_NAME = /(?:^|[_.:-])(write|edit|patch|apply|delete|remo
 export const AGENT_CONTRACT_SYSTEM_PROMPT = `Você é o motor de decisão de um agente autônomo (kitt-agent-cli). Você não conversa com um humano — você troca mensagens com um orquestrador que executa tools e devolve resultados.
 
 CONTRATO DE SAÍDA (obrigatório, sem exceção):
-Responda SEMPRE com um único objeto JSON, sem markdown, sem texto antes/depois, no formato:
+Responda SEMPRE com um único objeto JSON e nunca escreva prosa antes/depois. Quando a resposta contiver conteúdo textual de arquivo para repo.write_file ou patch.apply, envolva o objeto JSON inteiro em um único bloco fenced \`\`\`json ... \`\`\`; isso é uma proteção de transporte para impedir que o renderizador WebChat consuma tags XML/HTML, asteriscos, underscores ou outros caracteres do arquivo. Para respostas sem conteúdo de arquivo, o objeto JSON puro continua válido. Formato:
 {
   "action": "use_tool" | "final_response" | "request_workspace" | "request_tools",
   "tool": string | null,
@@ -1072,28 +1072,25 @@ export function transformAgentContractCompletion(
     } else {
       const contractAttempt = looksLikeContractAttempt(source);
       const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route) && !contractAttempt;
-    const completedMutationFallback = MUTATION_ROUTES.has(plan.route)
-      && plan.mutationRoundTripObserved
-      && !contractAttempt;
-    if (
-      error instanceof AgentContractValidationError
-      && error.message === NON_JSON_CONTRACT_MESSAGE
-      && source.trim()
-      && (readOnlyFallback || completedMutationFallback)
-    ) {
-      response = {
-        action: 'final_response',
-        tool: null,
-        tool_input: null,
-        content: source.trim(),
-        reasoning_summary: ''
-      };
-      logger.event('warn', 'agent.contract.text_fallback', {
-        contract_session_id: plan.sessionId,
-        route: plan.route,
-        response_bytes: Buffer.byteLength(source, 'utf8'),
-        contract_attempt: contractAttempt
-      });
+      if (
+        error instanceof AgentContractValidationError
+        && error.message === NON_JSON_CONTRACT_MESSAGE
+        && source.trim()
+        && readOnlyFallback
+      ) {
+        response = {
+          action: 'final_response',
+          tool: null,
+          tool_input: null,
+          content: source.trim(),
+          reasoning_summary: ''
+        };
+        logger.event('warn', 'agent.contract.text_fallback', {
+          contract_session_id: plan.sessionId,
+          route: plan.route,
+          response_bytes: Buffer.byteLength(source, 'utf8'),
+          contract_attempt: contractAttempt
+        });
       } else {
         throw error;
       }

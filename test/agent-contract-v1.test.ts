@@ -384,7 +384,7 @@ test('validate-diff never exposes a malformed contract attempt as final text', (
   );
 });
 
-test('mutation route accepts plain final text only after a mutation round trip', () => {
+test('mutation route keeps rejecting plain text after a mutation round trip', () => {
   const followUp = body('code-edit');
   followUp.messages = [
     ...(followUp.messages as any[]),
@@ -414,10 +414,11 @@ test('mutation route accepts plain final text only after a mutation round trip',
   const plan = prepareAgentContractRequest(followUp, { sessionId: 'sessionMutationTextFallback' });
   assert.equal(plan.mutationRoundTripObserved, true);
 
-  const result = transformAgentContractCompletion(
-    completion('Alteração aplicada e validada.'),
-    plan
+  assert.throws(
+    () => transformAgentContractCompletion(
+      completion('Alteração aplicada e validada.'),
+      plan
+    ),
+    AgentContractValidationError
   );
-  assert.equal(result.choices[0]?.message.content, 'Alteração aplicada e validada.');
-  assert.equal(result.choices[0]?.finish_reason, 'stop');
 });
