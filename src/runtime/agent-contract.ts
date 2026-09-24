@@ -263,7 +263,10 @@ const MUTATION_EDIT_TERMS = [
   'corrija', 'corrigir', 'conserte', 'consertar', 'repare', 'reparar',
   'refatore', 'refatorar', 'atualize', 'atualizar', 'modifique', 'modificar',
   'altere', 'alterar', 'edite', 'editar', 'remova', 'remover',
-  'fix', 'repair', 'refactor', 'update', 'modify', 'change', 'edit', 'remove', 'delete'
+  'converta', 'converter', 'convert', 'migre', 'migrar', 'migrate',
+  'troque', 'trocar', 'substitua', 'substituir', 'replace', 'switch',
+  'porte', 'portar', 'port', 'fix', 'repair', 'refactor', 'update',
+  'modify', 'change', 'edit', 'remove', 'delete'
 ];
 const MUTATION_CREATE_TERMS = [
   'crie', 'criar', 'cria', 'implemente', 'implementar', 'gere', 'gerar',
