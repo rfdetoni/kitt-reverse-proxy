@@ -13,7 +13,8 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    KITT_BROWSER_SANDBOX=0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini \
