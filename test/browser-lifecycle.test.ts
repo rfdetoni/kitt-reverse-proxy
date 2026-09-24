@@ -25,6 +25,21 @@ const provider = {
   }
 } as unknown as ProviderPreset;
 
+const geminiProvider = {
+  id: 'gemini',
+  name: 'Gemini Web',
+  defaultApiModel: 'gemini-web',
+  ui: {
+    inputSelectors: ['textarea'],
+    responseSelectors: [],
+    sendSelectors: [],
+    streamingSelectors: [],
+    newChatUrl: 'https://gemini.google.com/app',
+    manualAuthBrowser: 'system-chrome',
+    manualAuthUrl: 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp'
+  }
+} as unknown as ProviderPreset;
+
 function baseConfig(browserMode: AppConfig['browserMode']): AppConfig {
   return {
     targetUrl: 'https://chatgpt.com/',
@@ -112,6 +127,53 @@ test('auto mode opens visible only for auth then returns headless', async () => 
 
   assert.deepEqual(opened, [false, true, false]);
   assert.deepEqual(closed, ['s1', 's2']);
+  assert.equal(result.session.headed, false);
+});
+
+test('Gemini defers CDP automation until human Chrome login completes', async () => {
+  const launches: Array<{ headed: boolean; mode: string; launchUrl?: string }> = [];
+  const closed: string[] = [];
+  let openIndex = 0;
+  const readiness = [false, true];
+  const deps: UiBrowserLifecycleDeps = {
+    async open(config, launch) {
+      launches.push({
+        headed: config.headed,
+        mode: launch?.mode || 'default',
+        ...(launch?.launchUrl ? { launchUrl: launch.launchUrl } : {})
+      });
+      openIndex += 1;
+      return session(`g${openIndex}`, config.headed, closed);
+    },
+    async navigate() {},
+    async ready() {
+      return readiness.shift() ?? true;
+    },
+    async initialize() {
+      return executor();
+    },
+    async pause() {}
+  };
+
+  const config = {
+    ...baseConfig('auto'),
+    targetUrl: 'https://gemini.google.com/app',
+    provider: 'gemini',
+    apiModel: 'gemini-web'
+  };
+
+  const result = await createManagedUiRuntime(config, geminiProvider, deps);
+
+  assert.deepEqual(launches, [
+    { headed: false, mode: 'default' },
+    {
+      headed: true,
+      mode: 'system-chrome-auth',
+      launchUrl: 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp'
+    },
+    { headed: false, mode: 'default' }
+  ]);
+  assert.deepEqual(closed, ['g1', 'g2']);
   assert.equal(result.session.headed, false);
 });
 
