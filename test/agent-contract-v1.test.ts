@@ -292,6 +292,22 @@ test('mutation intent strengthens an incorrect validate-diff route from the call
   assert.match(developer, /MUTATION_REQUIRED_BEFORE_FINAL: true/);
 });
 
+test('workspace conversion request strengthens chat to code-edit', () => {
+  const request = body('chat');
+  request.messages = [
+    ...(request.messages as any[]).slice(0, 2),
+    { role: 'user', content: 'converta o backend deste projeto para maven' }
+  ];
+
+  const plan = prepareAgentContractRequest(request, {
+    sessionId: 'sessionStrengthenedConversion',
+    route: 'chat'
+  });
+
+  assert.equal(plan.route, 'code-edit');
+  assert.equal(plan.mutationToolAvailable, true);
+});
+
 test('explicit edit request strengthens validate-diff to code-edit', () => {
   const request = body('validate-diff');
   request.messages = [
