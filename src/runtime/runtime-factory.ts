@@ -3,6 +3,7 @@ import { captureChatExchange } from '../discovery/capture.js';
 import { createAdapter } from '../mapping/factory.js';
 import { detectProvider, transportCandidates, type ProviderPreset } from '../providers/catalog.js';
 import { telemetry } from '../util/telemetry.js';
+import { withPersistentBrowserProfile } from '../util/browser-profile.js';
 import { loadProviderPluginModules } from '../plugins/loader.js';
 import { NetworkChatExecutor } from './network-executor.js';
 import { createManagedUiRuntime } from './ui-browser-lifecycle.js';
@@ -16,9 +17,15 @@ export interface RuntimeBundle {
 }
 
 async function createUiRuntime(config: AppConfig, provider: ProviderPreset): Promise<RuntimeBundle> {
+  const browserConfig = withPersistentBrowserProfile(config, provider.id);
   logger.step(1, 3, 'Preparando sessão web no Chromium...');
+  if (browserConfig.cdpUrl) {
+    logger.info('Sessão Chromium: navegador existente via CDP.');
+  } else if (browserConfig.userDataDir) {
+    logger.info(`Perfil Chromium persistente: ${browserConfig.userDataDir}.`);
+  }
   logger.step(2, 3, 'Validando autenticação e campo de chat...');
-  const managed = await createManagedUiRuntime(config, provider);
+  const managed = await createManagedUiRuntime(browserConfig, provider);
   logger.success(`UI de ${provider.name} pronta. Nenhum endpoint privado foi fixado/reproduzido.`);
   return {
     executor: managed.executor,
