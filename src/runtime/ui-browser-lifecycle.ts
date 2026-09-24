@@ -12,6 +12,7 @@ import {
   openBrowserSession,
   navigateSession
 } from './browser-session.js';
+import { openSystemChromeSession } from './native-chrome-session.js';
 import {
   ManualInterventionRequiredError,
   UiChatExecutor
@@ -28,8 +29,21 @@ export interface ManagedUiRuntime {
   session: LiveBrowserSession;
 }
 
+export type UiBrowserLaunchMode =
+  | 'default'
+  | 'system-chrome'
+  | 'system-chrome-auth';
+
+export interface UiBrowserLaunch {
+  mode: UiBrowserLaunchMode;
+  launchUrl?: string;
+}
+
 export interface UiBrowserLifecycleDeps {
-  open(config: AppConfig): Promise<LiveBrowserSession>;
+  open(
+    config: AppConfig,
+    launch?: UiBrowserLaunch
+  ): Promise<LiveBrowserSession>;
   navigate(
     session: LiveBrowserSession,
     targetUrl: string,
@@ -70,7 +84,15 @@ async function defaultReady(
 }
 
 const DEFAULT_DEPS: UiBrowserLifecycleDeps = {
-  open: openBrowserSession,
+  async open(config, launch) {
+    if (launch?.mode === 'system-chrome' || launch?.mode === 'system-chrome-auth') {
+      return openSystemChromeSession(config, {
+        waitForManualAuth: launch.mode === 'system-chrome-auth',
+        ...(launch.launchUrl ? { launchUrl: launch.launchUrl } : {})
+      });
+    }
+    return openBrowserSession(config);
+  },
   navigate: navigateSession,
   ready: defaultReady,
   async initialize(session, provider, config) {
@@ -113,12 +135,28 @@ export function persistentUiConfig(
   };
 }
 
+function headedLaunch(
+  provider: ProviderPreset,
+  waitForManualAuth: boolean
+): UiBrowserLaunch {
+  if (provider.ui.manualAuthBrowser !== 'system-chrome') {
+    return { mode: 'default' };
+  }
+  return {
+    mode: waitForManualAuth ? 'system-chrome-auth' : 'system-chrome',
+    ...(waitForManualAuth && provider.ui.manualAuthUrl
+      ? { launchUrl: provider.ui.manualAuthUrl }
+      : {})
+  };
+}
+
 async function openNavigated(
   config: AppConfig,
   provider: ProviderPreset,
-  deps: UiBrowserLifecycleDeps
+  deps: UiBrowserLifecycleDeps,
+  launch: UiBrowserLaunch = { mode: 'default' }
 ): Promise<LiveBrowserSession> {
-  const session = await deps.open(config);
+  const session = await deps.open(config, launch);
   try {
     await deps.navigate(
       session,
@@ -160,9 +198,10 @@ async function initializeExisting(
 async function openInitialized(
   config: AppConfig,
   provider: ProviderPreset,
-  deps: UiBrowserLifecycleDeps
+  deps: UiBrowserLifecycleDeps,
+  launch: UiBrowserLaunch = { mode: 'default' }
 ): Promise<ManagedUiRuntime> {
-  const session = await openNavigated(config, provider, deps);
+  const session = await openNavigated(config, provider, deps, launch);
   return initializeExisting(session, config, provider, deps);
 }
 
@@ -195,10 +234,18 @@ export async function createManagedUiRuntime(
   }
 
   if (config.browserMode === 'headed') {
+    const launch = headedLaunch(provider, true);
+    if (launch.mode === 'system-chrome-auth') {
+      logger.info(
+        'Login humano protegido: abrindo Google Chrome estável sem controle Playwright. ' +
+        'O KITT conectará por CDP somente após o login retornar ao provider.'
+      );
+    }
     return openInitialized(
       { ...config, headed: true },
       provider,
-      deps
+      deps,
+      launch
     );
   }
 
@@ -229,9 +276,13 @@ export async function createManagedUiRuntime(
     );
   }
 
+  await deps.pause(PROFILE_RELEASE_MS);
+  const authLaunch = headedLaunch(provider, true);
   logger.info(
-    'Autenticação/intervenção necessária. ' +
-    'Abrindo Chromium visível temporariamente...'
+    authLaunch.mode === 'system-chrome-auth'
+      ? 'Autenticação necessária. Abrindo Google Chrome estável para login humano; ' +
+        'o KITT só conectará ao navegador depois que o login terminar.'
+      : 'Autenticação/intervenção necessária. Abrindo Chromium visível temporariamente...'
   );
   const headedConfig: AppConfig = {
     ...config,
@@ -240,7 +291,8 @@ export async function createManagedUiRuntime(
   const authRuntime = await openInitialized(
     headedConfig,
     provider,
-    deps
+    deps,
+    authLaunch
   );
 
   logger.success(
@@ -270,6 +322,7 @@ export async function createManagedUiRuntime(
   return openInitialized(
     headedConfig,
     provider,
-    deps
+    deps,
+    headedLaunch(provider, false)
   );
 }
