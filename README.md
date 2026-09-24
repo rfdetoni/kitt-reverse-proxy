@@ -214,6 +214,8 @@ Local Playwright launches enable the Chromium sandbox. The dedicated Docker brow
 
 All K.I.T.T.-generated system, developer, orchestration, repair, retry, tool-protocol, and validation-feedback prompts sent to upstream models are authored in English. User-authored text is preserved verbatim in its original language, and multilingual intent-detection vocabularies remain multilingual because they are classifier data rather than model instructions.
 
+The agent-contract route guard also recognizes imperative workspace conversion/migration requests (for example, Gradle to Maven) as code-edit work even if an upstream caller initially labels the route as `chat`.
+
 ### Gemini / Google Account login
 
 Google may reject sign-in when the browser is already controlled by automation. For Gemini, K.I.T.T. therefore uses a separate human-authentication bootstrap: when the stored Gemini profile is not authenticated, it opens the installed stable Google Chrome with the dedicated K.I.T.T. profile and a loopback-only remote-debugging port, but does **not** attach Playwright during the Google Account login. After the login flow returns to `gemini.google.com`, K.I.T.T. attaches through CDP and continues normal UI automation.
