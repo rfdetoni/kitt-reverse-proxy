@@ -24,6 +24,7 @@ const ROUTES = new Set<string>(AGENT_ROUTES);
 const CONTRACT_ACTIONS = new Set(['use_tool', 'final_response', 'request_workspace', 'request_tools']);
 const NON_JSON_CONTRACT_MESSAGE = 'The model response is not a pure JSON object.';
 const SUMMARY_ROUTE_INSTRUCTION = 'ROUTE_INSTRUCTION: This turn is context-summary only. Do not use or request tools. Return action="final_response" and put only the requested summary in content.';
+const DIRECT_CHAT_ROUTE_INSTRUCTION = 'ROUTE_INSTRUCTION: This is a direct chat turn with no external execution context. TOOLS_AVAILABLE=[] and WORKSPACE_CONTEXT=not_provided are intentional. Answer with action="final_response" when the request can be handled without external state or side effects. Do not request tools or workspace merely because they are absent.';
 const MUTATING_RUNTIME_OPERATIONS = new Set([
   'flow.execute',
   'repo.edit_symbol',
@@ -71,6 +72,7 @@ ALWAYS respond with exactly one JSON object and never write prose before or afte
 Rules:
 - "reasoning_summary" must contain at most 2 sentences and 400 characters. Do not include long chain-of-thought.
 - If you do not know the current workspace, available files, or which tools exist, use action="request_workspace" or action="request_tools". NEVER assume paths, files, or tools that were not explicitly supplied in this conversation.
+- ROUTE=chat is conversational. An empty TOOLS_AVAILABLE and WORKSPACE_CONTEXT=not_provided may be intentional. If the request can be answered without external state or side effects, return action="final_response"; do not request tools or workspace merely because those contexts are absent.
 - The orchestrator determines the real workspace and which tools are enabled. You only see what is supplied in TOOLS_AVAILABLE and WORKSPACE_CONTEXT for each turn.
 - TOOLS_AVAILABLE is the real executable surface for this turn. Tools may not appear as native tools in the web interface; that is expected and does NOT mean they are unavailable.
 - To invoke a tool listed in TOOLS_AVAILABLE, return action="use_tool", tool=<name>, and tool_input=<arguments>. The orchestrator will execute the call and return its result on the next turn.
@@ -520,6 +522,7 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
+    ...(route === 'chat' && tools.size === 0 && !workspaceProvided ? [DIRECT_CHAT_ROUTE_INSTRUCTION] : []),
     `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools, route), 'TOOLS_AVAILABLE')}`,
     `MUTATION_TOOL_AVAILABLE: ${mutationToolAvailable}`,
     `MUTATION_ROUND_TRIP_OBSERVED: ${mutationRoundTripObserved}`,
@@ -1055,6 +1058,16 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
     throw new AgentContractValidationError(
       `Route ${plan.route} requires a mutation attempt before final_response. `
       + 'TOOLS_AVAILABLE is a remotely executable surface; use action="use_tool" with a listed tool instead of claiming it is not exposed in the interface.'
+    );
+  }
+  if (
+    plan.route === 'chat'
+    && plan.tools.size === 0
+    && !plan.workspaceProvided
+    && (response.action === 'request_tools' || response.action === 'request_workspace')
+  ) {
+    throw new AgentContractValidationError(
+      'Direct chat without external execution context must return final_response instead of requesting tools or workspace.'
     );
   }
   if (response.action === 'request_workspace' && plan.workspaceProvided) {

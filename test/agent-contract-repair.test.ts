@@ -198,3 +198,24 @@ test('serialization repair explicitly requires escaped JSON strings', () => {
   assert.match(repair, /tool_input must remain a JSON object/);
   assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
 });
+
+
+test('direct chat without tools or workspace forbids dead-end context requests', () => {
+  const request: JsonObject = {
+    model: 'gemini-web',
+    messages: [{ role: 'user', content: 'Explain dependency injection briefly.' }]
+  };
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(request, {
+      sessionId: 'direct-chat-constraints',
+      route: 'chat'
+    })
+  );
+  const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
+  const constraint = messages.find((message) =>
+    message.role === 'developer' && message.content?.includes('DIRECT_CHAT_NO_EXTERNAL_CONTEXT')
+  )?.content ?? '';
+
+  assert.match(constraint, /request_tools and request_workspace are forbidden/);
+  assert.match(constraint, /final_response/);
+});

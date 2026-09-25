@@ -95,6 +95,12 @@ function actionConstraints(plan: AgentContractPlan): string[] {
       'ACTION_CONSTRAINT: request_workspace is forbidden because WORKSPACE_CONTEXT was already supplied. Use the supplied workspace evidence and available tools.'
     );
   }
+  if (plan.route === 'chat' && plan.tools.size === 0 && !plan.workspaceProvided) {
+    constraints.push(
+      'DIRECT_CHAT_NO_EXTERNAL_CONTEXT: true',
+      'ACTION_CONSTRAINT: request_tools and request_workspace are forbidden for this direct chat turn. Return action="final_response"; if the user asks for unavailable external state or side effects, state that limitation in content instead of requesting orchestration context.'
+    );
+  }
   if (plan.route === 'summarize') {
     constraints.push('ACTION_CONSTRAINT: route summarize requires action="final_response".');
   }

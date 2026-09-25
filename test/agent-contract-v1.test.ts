@@ -462,3 +462,44 @@ test('mutation route keeps rejecting plain text after a mutation round trip', ()
     AgentContractValidationError
   );
 });
+
+
+test('direct chat without external context resolves through final_response instead of requesting tools', () => {
+  const request: JsonObject = {
+    model: 'gemini-web',
+    messages: [{ role: 'user', content: 'Explain dependency injection briefly.' }]
+  };
+  const plan = prepareAgentContractRequest(request, {
+    sessionId: 'direct-chat-no-context',
+    route: 'chat'
+  });
+  const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
+  const user = messages.find((message) => message.role === 'user')?.content ?? '';
+
+  assert.equal(plan.route, 'chat');
+  assert.equal(plan.tools.size, 0);
+  assert.equal(plan.workspaceProvided, false);
+  assert.match(user, /direct chat turn with no external execution context/i);
+  assert.match(user, /TOOLS_AVAILABLE=\[\]/);
+
+  assert.throws(
+    () => transformAgentContractCompletion(completion(JSON.stringify({
+      action: 'request_tools',
+      tool: null,
+      tool_input: null,
+      content: 'I need tools.',
+      reasoning_summary: 'Requesting tools.'
+    })), plan),
+    (error: unknown) => error instanceof AgentContractValidationError
+      && /Direct chat without external execution context/.test(error.message)
+  );
+
+  const result = transformAgentContractCompletion(completion(JSON.stringify({
+    action: 'final_response',
+    tool: null,
+    tool_input: null,
+    content: 'Dependency injection supplies dependencies from outside an object.',
+    reasoning_summary: ''
+  })), plan);
+  assert.match(result.choices[0]?.message.content ?? '', /supplies dependencies/);
+});
