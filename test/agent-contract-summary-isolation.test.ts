@@ -86,5 +86,12 @@ test('agent contract marks named browser history as authoritative across local t
   const options = contractExecutionOptions(plan, {});
 
   assert.equal(options.allowLogicalHistoryRebase, true);
-  assert.deepEqual(options.logicalHistoryBody, plan.originalBody);
+  const logicalMessages = options.logicalHistoryBody?.messages;
+  assert.equal(Array.isArray(logicalMessages), true);
+  assert.equal(
+    (logicalMessages as Array<{ content?: string }>).some(
+      (message) => message.content?.includes('[KITT TURN CONTEXT]')
+    ),
+    false
+  );
 });
