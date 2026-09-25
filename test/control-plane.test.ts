@@ -27,9 +27,9 @@ test('legacy provider directories are imported without moving browser data', () 
   const profiles = new ProfileRegistry(root);
   const imported = profiles.importLegacy(['gemini']);
   assert.equal(imported.length, 1);
-  assert.equal(imported[0].id, 'gemini-default');
-  assert.equal(imported[0].legacy, true);
-  assert.equal(imported[0].directory, join(root, 'gemini'));
+  assert.equal(imported[0]!.id, 'gemini-default');
+  assert.equal(imported[0]!.legacy, true);
+  assert.equal(imported[0]!.directory, join(root, 'gemini'));
 });
 
 test('instance registry keeps multiple independent reverse-proxy endpoints', () => {

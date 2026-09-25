@@ -114,7 +114,7 @@ export class ProfileRegistry {
     const state = this.read();
     const index = state.profiles.findIndex((profile) => profile.id === normalized);
     if (index < 0) throw new Error(`Unknown browser profile: ${normalized}`);
-    const current = state.profiles[index];
+    const current = state.profiles[index]!;
     const updated = {
       ...current,
       providers: [...new Set([...current.providers, providerId].filter(Boolean))],

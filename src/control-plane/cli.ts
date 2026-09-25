@@ -11,7 +11,8 @@ function flagValue(args: readonly string[], name: string): string | undefined {
 function flagValues(args: readonly string[], name: string): string[] {
   const values: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    if (args[index] === name && args[index + 1]) values.push(args[index + 1]);
+    const candidate = args[index + 1];
+    if (args[index] === name && candidate) values.push(candidate);
   }
   return values;
 }
@@ -89,13 +90,15 @@ async function serviceCommand(args: string[]): Promise<number> {
       throw new Error('Usage: kitt-reverse-proxy service start <provider|url> [--profile <id>] [--id <id>] [--port <n>]');
     }
     const rawPort = flagValue(args, '--port');
-    const instance = await manager.start({
-      target,
-      profile: flagValue(args, '--profile'),
-      id: flagValue(args, '--id'),
-      port: rawPort === undefined ? undefined : Number(rawPort),
-      host: flagValue(args, '--host')
-    });
+    const options: { target: string; profile?: string; id?: string; port?: number; host?: string } = { target };
+    const profile = flagValue(args, '--profile');
+    const id = flagValue(args, '--id');
+    const host = flagValue(args, '--host');
+    if (profile) options.profile = profile;
+    if (id) options.id = id;
+    if (host) options.host = host;
+    if (rawPort !== undefined) options.port = Number(rawPort);
+    const instance = await manager.start(options);
     print({ schema_version: 1, instance }, json);
     return 0;
   }
