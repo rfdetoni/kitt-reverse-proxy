@@ -186,7 +186,13 @@ export function contractExecutionOptions(
     // Contract prompts, action constraints and synthetic tool-result turns are
     // transport-internal. Session continuity must track only the API caller's
     // original history so equivalent round trips keep a stable user timeline.
-    logicalHistoryBody: normalizeAgentContractLogicalHistory(plan.originalBody)
+    logicalHistoryBody: normalizeAgentContractLogicalHistory(plan.originalBody),
+    // KITT Agent derives the named proxy session from its logical conversation
+    // identity. Its local transcript can therefore be compacted/re-rooted while
+    // the browser conversation remains authoritative and continuous. This is
+    // intentionally internal to the agent-contract path; generic API callers
+    // retain strict divergent-history rejection.
+    allowLogicalHistoryRebase: true
   };
 }
 

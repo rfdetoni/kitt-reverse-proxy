@@ -284,6 +284,7 @@ export class UiChatExecutor implements ChatExecutor {
     );
     if (
       incoming.length > 1
+      && options?.allowLogicalHistoryRebase !== true
       && !continuingTool
       && incomingUserTurns > 0
       && this.history.length

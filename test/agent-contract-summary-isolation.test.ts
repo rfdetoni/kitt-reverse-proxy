@@ -6,6 +6,7 @@ import {
   transformAgentContractCompletion
 } from '../src/runtime/agent-contract.js';
 import type { JsonObject, OpenAiCompletion } from '../src/types.js';
+import { contractExecutionOptions } from '../src/proxy/openai-router.js';
 
 function summaryBody(): JsonObject {
   return {
@@ -77,4 +78,13 @@ test('summarize rejects request_tools before it can become an orchestration erro
     })), plan),
     (error: unknown) => error instanceof AgentContractValidationError && /summarize route requires action=final_response/.test(error.message)
   );
+});
+
+
+test('agent contract marks named browser history as authoritative across local transcript rebases', () => {
+  const plan = prepareAgentContractRequest(summaryBody(), { sessionId: 'stableConversation' });
+  const options = contractExecutionOptions(plan, {});
+
+  assert.equal(options.allowLogicalHistoryRebase, true);
+  assert.deepEqual(options.logicalHistoryBody, plan.originalBody);
 });

@@ -224,6 +224,14 @@ export interface ChatExecutionOptions {
    * prompt. This is intentionally not part of the public HTTP contract.
    */
   logicalHistoryBody?: JsonObject;
+  /**
+   * Internal KITT agent-contract continuation mode. A named reverse-proxy
+   * session already identifies the logical conversation, so the caller may
+   * compact or re-root its local transcript between top-level turns without
+   * resetting the stateful browser conversation. Generic API routes must
+   * never enable this flag.
+   */
+  allowLogicalHistoryRebase?: boolean;
 }
 
 export interface ChatExecutionResult {
