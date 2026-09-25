@@ -501,3 +501,53 @@ When borrowing ideas from external projects, preserve license boundaries. K.I.T.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Multi-instance control plane
+
+K.I.T.T. Reverse Proxy 4.2 adds a small, machine-readable control plane for running more than one browser-backed provider at the same time. The control plane does not add a resident supervisor process: each proxy remains an independent process, while lightweight registries under `~/.kitt-reverse-proxy/control/` track named browser profiles and active instances.
+
+### List provider plugins
+
+```bash
+kitt-reverse-proxy plugins list --json
+```
+
+The response is derived from the provider-plugin registry, so Agent CLI does not hard-code ChatGPT, Claude, Gemini, Kimi or DeepSeek.
+
+### Named browser profiles
+
+```bash
+kitt-reverse-proxy profiles create context-google --provider gemini
+kitt-reverse-proxy profiles create coding-openai --provider chatgpt
+kitt-reverse-proxy profiles list --json
+```
+
+Profiles are dedicated Chromium user-data directories and must be treated as credential material. The registry stores metadata and paths only; passwords, cookies and tokens remain inside the browser profile. Existing provider directories such as `~/.kitt-reverse-proxy/gemini` are imported as legacy profiles without moving their browser data.
+
+A profile can be associated with multiple providers over time. In 4.2 a profile has an exclusive runtime lock: two independent proxy instances cannot open the same Chromium user-data directory concurrently. Shared live browser ownership through CDP is intentionally left for a later BrowserHost layer.
+
+### Multiple services
+
+Ports are allocated automatically from 3000-3099 unless `--port` is specified.
+
+```bash
+kitt-reverse-proxy service start gemini \
+  --id gemini-context \
+  --profile context-google \
+  --json
+
+kitt-reverse-proxy service start chatgpt \
+  --id chatgpt-code \
+  --profile coding-openai \
+  --json
+
+kitt-reverse-proxy service list --json
+kitt-reverse-proxy service restart gemini-context --json
+kitt-reverse-proxy service stop chatgpt-code --json
+kitt-reverse-proxy service stop --all --json
+```
+
+This makes the intended Agent topology explicit: one instance can serve context gathering while another serves coding, with independent providers, profiles, ports and lifecycle.
+
+See `docs/CONTROL_PLANE.md` for ownership boundaries and the JSON contract.

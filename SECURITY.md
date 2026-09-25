@@ -136,3 +136,8 @@ Dependabot tracks npm and GitHub Actions updates. Tagged releases rerun verifica
 ## Reporting vulnerabilities
 
 Do not include cookies, tokens, browser profiles, complete authenticated request dumps or other credentials in a report. Provide the smallest sanitized reproduction, affected version/commit and steps required to reproduce the issue.
+
+
+## Browser profile registry
+
+Named browser profiles managed by the control plane contain Chromium session state and must be protected like credentials. Registry JSON files intentionally contain no passwords, cookies or bearer tokens. Do not sync profile directories into repositories, expose them through web servers, or open one user-data directory from multiple independent Chromium processes. The service manager enforces exclusive profile use for active instances.

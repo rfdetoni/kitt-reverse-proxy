@@ -9,10 +9,17 @@ import { BrowserSessionBroker } from './runtime/browser-broker.js';
 import { SessionManager } from './runtime/session-manager.js';
 import { notifyIfUpdateAvailable } from './update-check.js';
 import { SERVICE_VERSION } from './version.js';
+import { runControlPlaneCli } from './control-plane/cli.js';
 
 async function main(): Promise<void> {
-  await notifyIfUpdateAvailable(import.meta.url);
   const rawArgs = process.argv.slice(2);
+  const controlPlaneCode = await runControlPlaneCli(rawArgs);
+  if (controlPlaneCode !== null) {
+    process.exitCode = controlPlaneCode;
+    return;
+  }
+
+  await notifyIfUpdateAvailable(import.meta.url);
   if (rawArgs[0] === 'mcp') {
     const { runMcpCli } = await import('./mcp/server.js');
     process.exitCode = await runMcpCli(rawArgs.slice(1));
