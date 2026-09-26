@@ -517,7 +517,7 @@ export class SessionManager {
   }
 
   private browserPageCount(values: readonly ManagedSession[] = [...this.sessions.values()]): number {
-    const contexts = new Set<ManagedSession['browserSession']['context']>();
+    const contexts = new Set<object>();
     let pages = 0;
     for (const session of values) {
       const context = session.browserSession?.context;
