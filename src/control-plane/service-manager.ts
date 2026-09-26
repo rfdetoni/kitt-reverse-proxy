@@ -176,11 +176,13 @@ export class ServiceManager {
 
   async stopAll(): Promise<number> {
     const active = this.instances.listActive();
-    let stopped = 0;
-    for (const instance of active) {
-      if (await this.stop(instance.id)) stopped += 1;
-    }
-    return stopped;
+    const results = await Promise.allSettled(
+      active.map((instance) => this.stop(instance.id))
+    );
+    return results.reduce(
+      (count, result) => count + (result.status === 'fulfilled' && result.value ? 1 : 0),
+      0
+    );
   }
 
   async restart(id: string): Promise<ProxyInstanceRecord> {

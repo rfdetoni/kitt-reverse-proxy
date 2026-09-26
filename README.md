@@ -551,3 +551,16 @@ kitt-reverse-proxy service stop --all --json
 This makes the intended Agent topology explicit: one instance can serve context gathering while another serves coding, with independent providers, profiles, ports and lifecycle.
 
 See `docs/CONTROL_PLANE.md` for ownership boundaries and the JSON contract.
+
+## Reverse Proxy 4.3 — resident control and lower contention
+
+Version 4.3 keeps the existing per-service OpenAI-compatible endpoints but moves lifecycle discovery onto an optional resident loopback control process:
+
+- `kitt-reverse-proxy control ensure --json` starts the lightweight control server on `127.0.0.1:2999` by default; override with `KITT_REVERSE_PROXY_CONTROL_PORT`.
+- Agent CLI 0.73+ uses that channel for plugin/profile/service operations and falls back to the existing CLI contract when necessary.
+- Chat execution and the dedicated browser-automation page use independent bounded serial queues, so browser inspection does not wait behind an unrelated provider response while ordering remains strict within each lane.
+- `service stop --all` terminates independent services concurrently instead of accumulating per-process shutdown deadlines.
+- `npm run benchmark:control` measures cold control bootstrap and warm p50/p95/p99 request latency without contacting a model.
+
+The resident control process does not own authenticated browser sessions; service processes retain browser/profile isolation. This deliberately reduces CLI/process bootstrap overhead without weakening the existing profile ownership boundary.
+
