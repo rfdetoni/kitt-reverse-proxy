@@ -89,6 +89,8 @@ interface ManagedSession {
   browserAutomation?: BrowserAutomationSession;
   browserAutomationLastActivity?: number;
   queue: SerialQueue;
+  automationQueue: SerialQueue;
+  activeOperations: number;
   createdAt: number;
   lastActivity: number;
   status: 'idle' | 'busy' | 'closing';
@@ -123,6 +125,8 @@ export class SessionManager {
       executor: resilient(options.defaultExecutor, options.provider),
       ...(options.defaultBrowserSession ? { browserSession: options.defaultBrowserSession } : {}),
       queue: new SerialQueue(options.config.maxQueue, options.config.minIntervalMs),
+      automationQueue: new SerialQueue(options.config.maxQueue, 0),
+      activeOperations: 0,
       createdAt: now,
       lastActivity: now,
       status: 'idle',
@@ -165,7 +169,8 @@ export class SessionManager {
       );
     }
     session.lastActivity = Date.now();
-    return session.queue.run(async () => {
+    return session.automationQueue.run(async () => {
+      session.activeOperations += 1;
       session.status = 'busy';
       session.lastActivity = Date.now();
       try {
@@ -188,7 +193,8 @@ export class SessionManager {
         return { ...result, session_id: session.id };
       } finally {
         session.lastActivity = Date.now();
-        session.status = 'idle';
+        session.activeOperations = Math.max(0, session.activeOperations - 1);
+        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
     }, signal);
   }
@@ -218,6 +224,7 @@ export class SessionManager {
       const dequeuedAt = Date.now();
       const queueWaitMs = Math.max(0, dequeuedAt - queuedAt);
       telemetry.recordQueueWait(session.provider, queueWaitMs);
+      session.activeOperations += 1;
       session.status = 'busy';
       session.lastActivity = Date.now();
       const executorStartedAt = Date.now();
@@ -264,7 +271,8 @@ export class SessionManager {
         throw error;
       } finally {
         session.lastActivity = Date.now();
-        session.status = 'idle';
+        session.activeOperations = Math.max(0, session.activeOperations - 1);
+        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
     }, options?.signal);
   }
@@ -273,12 +281,14 @@ export class SessionManager {
     const session = await this.resolve(requestedId);
     if (!session.executor.reset) throw new SessionNotSupportedError();
     await session.queue.run(async () => {
+      session.activeOperations += 1;
       session.status = 'busy';
       try {
         await session.executor.reset!();
       } finally {
         session.lastActivity = Date.now();
-        session.status = 'idle';
+        session.activeOperations = Math.max(0, session.activeOperations - 1);
+        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
     }, signal);
   }
@@ -288,7 +298,11 @@ export class SessionManager {
     if (id === 'default') return false;
     const session = this.sessions.get(id);
     if (!session) return false;
-    if (session.status === 'busy' || session.queue.depth > 0) throw new SessionBusyError(id);
+    if (
+      session.status === 'busy'
+      || session.queue.depth > 0
+      || session.automationQueue.depth > 0
+    ) throw new SessionBusyError(id);
     await this.removeSession(session);
     return true;
   }
@@ -308,13 +322,22 @@ export class SessionManager {
 
   capacity(): SessionCapacitySnapshot {
     const values = [...this.sessions.values()];
-    const busy = values.filter((session) => session.status === 'busy' || session.queue.depth > 0).length;
-    const idle = values.filter((session) => session.status === 'idle' && session.queue.depth === 0).length;
+    const busy = values.filter((session) =>
+      session.status === 'busy'
+      || session.queue.depth > 0
+      || session.automationQueue.depth > 0
+    ).length;
+    const idle = values.filter((session) =>
+      session.status === 'idle'
+      && session.queue.depth === 0
+      && session.automationQueue.depth === 0
+    ).length;
     const awaitingToolResults = values.filter((session) => awaitsToolResult(session)).length;
     const recyclable = values.filter((session) =>
       !session.isDefault
       && session.status === 'idle'
       && session.queue.depth === 0
+      && session.automationQueue.depth === 0
       && !awaitsToolResult(session)
     ).length;
     return {
@@ -340,7 +363,8 @@ export class SessionManager {
 
   queueDepth(requestedId?: string): number {
     const id = requestedId ? this.normalizeSessionId(requestedId) : 'default';
-    return this.sessions.get(id)?.queue.depth ?? 0;
+    const session = this.sessions.get(id);
+    return session ? session.queue.depth + session.automationQueue.depth : 0;
   }
 
   async sweepIdle(now = Date.now()): Promise<void> {
@@ -351,6 +375,7 @@ export class SessionManager {
     const staleAutomation = values.filter((session) =>
       session.status === 'idle'
       && session.queue.depth === 0
+      && session.automationQueue.depth === 0
       && session.browserAutomation
       && !session.browserAutomation.isClosed()
       && now - (session.browserAutomationLastActivity ?? session.lastActivity) >= automationTimeout
@@ -366,6 +391,7 @@ export class SessionManager {
       !session.isDefault
       && session.status === 'idle'
       && session.queue.depth === 0
+      && session.automationQueue.depth === 0
       && !awaitsToolResult(session)
       && now - session.lastActivity >= timeout
     );
@@ -376,10 +402,16 @@ export class SessionManager {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
-    for (const session of this.sessions.values()) session.queue.close();
+    for (const session of this.sessions.values()) {
+      session.queue.close();
+      session.automationQueue.close();
+    }
     await Promise.allSettled([...this.creating.values()]);
     const snapshot = [...this.sessions.values()];
-    await Promise.all(snapshot.map((session) => session.queue.drain()));
+    await Promise.all(snapshot.flatMap((session) => [
+      session.queue.drain(),
+      session.automationQueue.drain()
+    ]));
     await Promise.all(snapshot.map(async (session) => {
       await session.browserAutomation?.close().catch(() => undefined);
       delete session.browserAutomation;
@@ -424,6 +456,8 @@ export class SessionManager {
       executor: resilient(result.executor, this.options.provider),
       ...(result.browserSession ? { browserSession: result.browserSession } : {}),
       queue: new SerialQueue(this.options.config.maxQueue, this.options.config.minIntervalMs),
+      automationQueue: new SerialQueue(this.options.config.maxQueue, 0),
+      activeOperations: 0,
       createdAt: now,
       lastActivity: now,
       status: 'idle',
@@ -442,6 +476,7 @@ export class SessionManager {
         !session.isDefault
         && session.status === 'idle'
         && session.queue.depth === 0
+        && session.automationQueue.depth === 0
         && !awaitsToolResult(session)
       )
       .sort((left, right) => left.lastActivity - right.lastActivity || left.createdAt - right.createdAt)[0];
@@ -453,6 +488,7 @@ export class SessionManager {
     if (this.sessions.get(session.id) !== session) return;
     session.status = 'closing';
     session.queue.close();
+    session.automationQueue.close();
     this.sessions.delete(session.id);
     await session.browserAutomation?.close().catch(() => undefined);
     delete session.browserAutomation;
