@@ -19,6 +19,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (rawArgs[0] === 'browser-host') {
+    const { runBrowserHostCli } = await import('./control-plane/browser-host.js');
+    process.exitCode = await runBrowserHostCli(rawArgs.slice(1));
+    return;
+  }
+
   await notifyIfUpdateAvailable(import.meta.url);
   if (rawArgs[0] === 'mcp') {
     const { runMcpCli } = await import('./mcp/server.js');
