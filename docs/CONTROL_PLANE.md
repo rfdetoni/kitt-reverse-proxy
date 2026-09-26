@@ -7,9 +7,10 @@ The control plane owns local reverse-proxy process discovery and lifecycle. Agen
 ## Responsibilities
 
 - `ProfileRegistry`: named Chromium profile metadata, legacy profile import and provider association.
-- `InstanceRegistry`: active reverse-proxy process descriptors.
-- `ServiceManager`: target resolution, profile exclusivity, automatic port allocation and cross-platform process lifecycle.
-- `runControlPlaneCli`: stable CLI boundary consumed by humans and KITT components.
+- `InstanceRegistry`: hot cached active-process descriptors with atomic persistence and external-mtime invalidation.
+- `ServiceManager`: target resolution, profile-scoped start serialization, automatic port allocation, BrowserHost ownership and cross-platform process lifecycle.
+- resident control server: low-overhead loopback lifecycle API used by Agent CLI.
+- `runControlPlaneCli`: stable CLI compatibility boundary consumed by humans and KITT components.
 
 The provider registry remains the source of truth for connection plugins.
 
@@ -32,7 +33,7 @@ Responses use `schema_version: 1`.
 
 ## Multi-instance topology
 
-A service instance owns one provider target, one local API endpoint and one browser profile while it is running. Multiple instances may run concurrently on different ports. A single browser profile may record successful use with multiple providers, but 4.2 deliberately prevents simultaneous independent processes from opening the same user-data directory.
+A service instance owns one provider target and one local API endpoint. Multiple instances may run concurrently on different ports. For managed non-Gemini services, multiple instances may reference the same named browser profile only through the 4.4 profile-scoped BrowserHost; service processes never open that user-data directory independently. Profiles that are not hosted remain exclusive to one service process.
 
 Agent-specific roles such as context, coding and validation do not belong in this repository. Agent CLI binds its roles to instance endpoints, preserving Clean Architecture ownership.
 
