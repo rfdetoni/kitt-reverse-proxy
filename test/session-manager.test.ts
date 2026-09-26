@@ -262,3 +262,26 @@ test('browser automation can progress while chat execution is waiting', async ()
     await manager.close();
   }
 });
+
+
+test('capacity reports resource-aware eviction budgets', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config,
+      maxBrowserPages: 7,
+      maxResidentRssBytes: 256 * 1024 * 1024
+    }
+  });
+  try {
+    const capacity = manager.capacity();
+    assert.equal(capacity.eviction, 'resource_lru_idle');
+    assert.equal(capacity.max_browser_pages, 7);
+    assert.equal(capacity.max_resident_rss_bytes, 256 * 1024 * 1024);
+    assert.equal(typeof capacity.resident_rss_bytes, 'number');
+    assert.equal(typeof capacity.browser_pages, 'number');
+  } finally {
+    await manager.close();
+  }
+});
