@@ -76,7 +76,11 @@ export interface SessionCapacitySnapshot {
   idle_timeout_ms: number;
   automation_idle_timeout_ms: number;
   automation_pages: number;
-  eviction: 'lru_idle';
+  browser_pages: number;
+  max_browser_pages: number;
+  resident_rss_bytes: number;
+  max_resident_rss_bytes: number;
+  eviction: 'resource_lru_idle';
   accepts_named_sessions: boolean;
   shutting_down: boolean;
 }
@@ -322,6 +326,10 @@ export class SessionManager {
 
   capacity(): SessionCapacitySnapshot {
     const values = [...this.sessions.values()];
+    const browserPages = this.browserPageCount(values);
+    const residentRss = process.memoryUsage().rss;
+    const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
+    const maxResidentRssBytes = this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
     const busy = values.filter((session) =>
       session.status === 'busy'
       || session.queue.depth > 0
@@ -355,7 +363,11 @@ export class SessionManager {
       automation_pages: values.filter((session) =>
         Boolean(session.browserAutomation && !session.browserAutomation.isClosed())
       ).length,
-      eviction: 'lru_idle',
+      browser_pages: browserPages,
+      max_browser_pages: maxBrowserPages,
+      resident_rss_bytes: residentRss,
+      max_resident_rss_bytes: maxResidentRssBytes,
+      eviction: 'resource_lru_idle',
       accepts_named_sessions: Boolean(this.options.factory),
       shutting_down: this.closed
     };
@@ -396,6 +408,14 @@ export class SessionManager {
       && now - session.lastActivity >= timeout
     );
     for (const session of stale) await this.removeSession(session);
+
+    // Resource pressure is evaluated independently of time-based eviction.
+    // Reap at most one additional idle session per sweep so RSS lag after
+    // browser/page teardown cannot cascade into aggressive over-eviction.
+    if (this.resourcePressure()) {
+      const candidate = this.oldestRecyclableSession();
+      if (candidate) await this.removeSession(candidate);
+    }
   }
 
   async close(): Promise<void> {
@@ -470,8 +490,20 @@ export class SessionManager {
   }
 
   private async ensureCapacity(): Promise<void> {
-    if (this.sessions.size + this.creating.size < this.options.config.maxSessions) return;
-    const candidate = [...this.sessions.values()]
+    const atCountLimit =
+      this.sessions.size + this.creating.size >= this.options.config.maxSessions;
+    if (!atCountLimit && !this.resourcePressure()) return;
+
+    const candidate = this.oldestRecyclableSession();
+    if (!candidate) {
+      if (atCountLimit) throw new SessionLimitExceededError();
+      return;
+    }
+    await this.removeSession(candidate);
+  }
+
+  private oldestRecyclableSession(): ManagedSession | undefined {
+    return [...this.sessions.values()]
       .filter((session) =>
         !session.isDefault
         && session.status === 'idle'
@@ -479,9 +511,35 @@ export class SessionManager {
         && session.automationQueue.depth === 0
         && !awaitsToolResult(session)
       )
-      .sort((left, right) => left.lastActivity - right.lastActivity || left.createdAt - right.createdAt)[0];
-    if (!candidate) throw new SessionLimitExceededError();
-    await this.removeSession(candidate);
+      .sort((left, right) =>
+        left.lastActivity - right.lastActivity || left.createdAt - right.createdAt
+      )[0];
+  }
+
+  private browserPageCount(values: readonly ManagedSession[] = [...this.sessions.values()]): number {
+    const contexts = new Set<ManagedSession['browserSession']['context']>();
+    let pages = 0;
+    for (const session of values) {
+      const context = session.browserSession?.context;
+      if (!context || contexts.has(context)) continue;
+      contexts.add(context);
+      try {
+        pages += context.pages().filter((page) => !page.isClosed()).length;
+      } catch {
+        // A concurrently closing context contributes no usable page capacity.
+      }
+    }
+    return pages;
+  }
+
+  private resourcePressure(): boolean {
+    const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
+    const maxResidentRssBytes =
+      this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
+    return (
+      this.browserPageCount() > maxBrowserPages
+      || process.memoryUsage().rss > maxResidentRssBytes
+    );
   }
 
   private async removeSession(session: ManagedSession): Promise<void> {
