@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,6 +44,8 @@ export function processAlive(pid: number): boolean {
 export class InstanceRegistry {
   private readonly controlDir: string;
   private readonly file: string;
+  private cached: InstanceFile | undefined;
+  private cachedMtimeMs = -1;
 
   constructor(root = join(homedir(), '.kitt-reverse-proxy')) {
     this.controlDir = join(root, 'control');
@@ -91,16 +93,35 @@ export class InstanceRegistry {
 
   private read(): InstanceFile {
     try {
+      const mtimeMs = statSync(this.file).mtimeMs;
+      if (this.cached && this.cachedMtimeMs === mtimeMs) {
+        return {
+          schemaVersion: SCHEMA_VERSION,
+          instances: [...this.cached.instances]
+        };
+      }
       const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<InstanceFile>;
-      if (parsed.schemaVersion !== SCHEMA_VERSION || !Array.isArray(parsed.instances)) return this.empty();
+      const state = parsed.schemaVersion === SCHEMA_VERSION && Array.isArray(parsed.instances)
+        ? {
+            schemaVersion: SCHEMA_VERSION,
+            instances: parsed.instances.filter((instance): instance is ProxyInstanceRecord =>
+              Boolean(instance && typeof instance.id === 'string' && Number.isInteger(instance.pid))
+            )
+          }
+        : this.empty();
+      this.cached = state;
+      this.cachedMtimeMs = mtimeMs;
       return {
         schemaVersion: SCHEMA_VERSION,
-        instances: parsed.instances.filter((instance): instance is ProxyInstanceRecord =>
-          Boolean(instance && typeof instance.id === 'string' && Number.isInteger(instance.pid))
-        )
+        instances: [...state.instances]
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return this.empty();
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        const empty = this.empty();
+        this.cached = empty;
+        this.cachedMtimeMs = -1;
+        return empty;
+      }
       throw error;
     }
   }
@@ -113,5 +134,10 @@ export class InstanceRegistry {
     const temporary = `${this.file}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
     renameSync(temporary, this.file);
+    this.cached = {
+      schemaVersion: SCHEMA_VERSION,
+      instances: [...state.instances]
+    };
+    this.cachedMtimeMs = statSync(this.file).mtimeMs;
   }
 }
