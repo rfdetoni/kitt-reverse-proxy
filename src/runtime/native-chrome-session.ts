@@ -6,7 +6,8 @@ import { delimiter, join, resolve } from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import type { AppConfig, LiveBrowserSession } from '../types.js';
 
-const CDP_POLL_MS = 250;
+const CDP_POLL_INITIAL_MS = 100;
+const CDP_POLL_MAX_MS = 1_000;
 const AUTH_TARGET_STABLE_MS = 1_250;
 
 function pathEntries(env: NodeJS.ProcessEnv): string[] {
@@ -148,6 +149,7 @@ async function waitForCdp(
   const deadline = Date.now() + Math.max(5_000, config.manualInterventionTimeoutMs);
   const expectedHost = targetHost(config.targetUrl);
   let stableSince = 0;
+  let pollMs = CDP_POLL_INITIAL_MS;
   let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   child.once('exit', (code, signal) => {
     exited = { code, signal };
@@ -174,10 +176,16 @@ async function waitForCdp(
     if (atTarget) {
       stableSince ||= Date.now();
       if (Date.now() - stableSince >= AUTH_TARGET_STABLE_MS) return;
+      // Once the desired page is visible, sample fast enough to confirm the
+      // stability window without adding noticeable login latency.
+      pollMs = Math.min(250, pollMs);
     } else {
       stableSince = 0;
+      // Manual authentication can take minutes. Back off progressively while
+      // no useful target is visible instead of polling CDP four times/second.
+      pollMs = Math.min(CDP_POLL_MAX_MS, Math.ceil(pollMs * 1.6));
     }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, CDP_POLL_MS));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, pollMs));
   }
 
   throw new Error(
