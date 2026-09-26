@@ -574,7 +574,7 @@ Version 4.4 completes the performance roadmap without changing the OpenAI-compat
 - Session eviction is resource-aware: idle LRU candidates may be reclaimed for max-session pressure, browser-page pressure, or configured process RSS pressure. Busy sessions and sessions awaiting client tool results remain protected.
 - The resident control plane keeps its ServiceManager and instance registry hot in memory; external file mutations are detected by mtime and atomic persistence remains authoritative.
 - Native Chrome CDP polling now backs off during long manual-authentication waits and samples quickly again when the expected target returns.
-- `npm run benchmark:runtime` reports live service/process-tree memory on Linux (PSS when available), BrowserHost topology, service-list latency, and optional destructive shutdown timing.
+- `npm run benchmark:runtime` reports live service/process-tree memory on Linux (PSS when available), BrowserHost topology and service-list latency. With `KITT_BENCH_TARGET=<provider|url>` it manages 1/2/4-service scenarios, measuring startup-to-ready, named-session creation p95, browser inspect p95 and shutdown; `KITT_BENCH_API_KEY` (or `PROXY_API_KEY`) is honored automatically.
 
 Resource knobs:
 
