@@ -178,8 +178,14 @@ function validateDefaults(config: AppConfig): void {
   config.minIntervalMs = integer(config.minIntervalMs, 'PROXY_MIN_INTERVAL_MS', true);
   config.maxSessions = integer(config.maxSessions, 'PROXY_MAX_SESSIONS');
   config.sessionIdleTimeoutMs = integer(config.sessionIdleTimeoutMs, 'PROXY_SESSION_IDLE_TIMEOUT_MS');
-  config.maxBrowserPages = integer(config.maxBrowserPages, 'PROXY_MAX_BROWSER_PAGES');
-  config.maxResidentRssBytes = integer(config.maxResidentRssBytes, 'PROXY_MAX_RSS_MB');
+  config.maxBrowserPages = integer(
+    config.maxBrowserPages ?? DEFAULTS.maxBrowserPages,
+    'PROXY_MAX_BROWSER_PAGES'
+  );
+  config.maxResidentRssBytes = integer(
+    config.maxResidentRssBytes ?? DEFAULTS.maxResidentRssBytes,
+    'PROXY_MAX_RSS_MB'
+  );
   config.logFormat = logFormat(config.logFormat);
   config.logLevel = logLevel(config.logLevel ?? 0);
   config.logContent = logContent(config.logContent ?? 'metadata');
