@@ -495,10 +495,7 @@ export class SessionManager {
     if (!atCountLimit && !this.resourcePressure()) return;
 
     const candidate = this.oldestRecyclableSession();
-    if (!candidate) {
-      if (atCountLimit) throw new SessionLimitExceededError();
-      return;
-    }
+    if (!candidate) throw new SessionLimitExceededError();
     await this.removeSession(candidate);
   }
 
@@ -537,8 +534,8 @@ export class SessionManager {
     const maxResidentRssBytes =
       this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
     return (
-      this.browserPageCount() > maxBrowserPages
-      || process.memoryUsage().rss > maxResidentRssBytes
+      this.browserPageCount() >= maxBrowserPages
+      || process.memoryUsage().rss >= maxResidentRssBytes
     );
   }
 
