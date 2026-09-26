@@ -40,7 +40,15 @@ export async function runBrowserHostCli(args: string[]): Promise<number> {
   }
 
   const profileDirectory = resolve(requiredFlag(args, '--profile'));
-  const target = new URL(requiredFlag(args, '--target')).toString();
+  const targetUrl = new URL(requiredFlag(args, '--target'));
+  if (
+    !['http:', 'https:'].includes(targetUrl.protocol)
+    || targetUrl.username
+    || targetUrl.password
+  ) {
+    throw new Error('--target must be an http(s) URL without embedded credentials.');
+  }
+  const target = targetUrl.toString();
   const cdpPort = Number(requiredFlag(args, '--cdp-port'));
   if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65_535) {
     throw new Error('--cdp-port must be an integer between 1 and 65535.');
