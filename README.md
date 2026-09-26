@@ -564,3 +564,25 @@ Version 4.3 keeps the existing per-service OpenAI-compatible endpoints but moves
 
 The resident control process does not own authenticated browser sessions; service processes retain browser/profile isolation. This deliberately reduces CLI/process bootstrap overhead without weakening the existing profile ownership boundary.
 
+## Reverse Proxy 4.4 — browser-host pooling and resource budgets
+
+Version 4.4 completes the performance roadmap without changing the OpenAI-compatible service endpoints:
+
+- Managed services may share one native Chrome BrowserHost only when they use the same named browser profile. Different credential/user-data directories are never combined.
+- Gemini remains on the dedicated human-authentication bootstrap path and is intentionally excluded from BrowserHost pooling.
+- BrowserHost startup is opportunistic: if stable Chrome/CDP is unavailable, the first service falls back to the existing process-owned browser path.
+- Session eviction is resource-aware: idle LRU candidates may be reclaimed for max-session pressure, browser-page pressure, or configured process RSS pressure. Busy sessions and sessions awaiting client tool results remain protected.
+- The resident control plane keeps its ServiceManager and instance registry hot in memory; external file mutations are detected by mtime and atomic persistence remains authoritative.
+- Native Chrome CDP polling now backs off during long manual-authentication waits and samples quickly again when the expected target returns.
+- `npm run benchmark:runtime` reports live service/process-tree memory on Linux (PSS when available), BrowserHost topology, service-list latency, and optional destructive shutdown timing.
+
+Resource knobs:
+
+```text
+PROXY_MAX_BROWSER_PAGES=12
+PROXY_MAX_RSS_MB=768
+PROXY_BROWSER_HOST_POOL=true
+```
+
+The RSS signal is the reverse-proxy process RSS; browser page count is used as the portable browser-pressure signal. The runtime benchmark additionally measures the Linux process tree so Chromium cost is visible during performance testing.
+
