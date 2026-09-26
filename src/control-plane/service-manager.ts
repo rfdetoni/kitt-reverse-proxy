@@ -203,9 +203,14 @@ export class ServiceManager {
       startedBrowserHost = true;
       try {
         await waitForCdpReady(browserHostCdpPort, browserHostPid);
-      } catch (error) {
+      } catch {
+        // Shared BrowserHost is a performance optimization, not a startup
+        // requirement. Preserve the proven process-owned browser path when
+        // stable Chrome/CDP is unavailable on this machine.
         terminateProcess(browserHostPid);
-        throw error;
+        browserHostPid = undefined;
+        browserHostCdpPort = undefined;
+        startedBrowserHost = false;
       }
     }
 
