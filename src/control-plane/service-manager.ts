@@ -75,6 +75,40 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
   }
 }
 
+function browserHostPoolEnabled(provider: string): boolean {
+  if (provider === 'gemini') return false;
+  const raw = (process.env.PROXY_BROWSER_HOST_POOL || 'true').trim().toLowerCase();
+  return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
+async function waitForCdpReady(port: number, pid: number, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = 50;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) throw new Error('Browser host exited before CDP became ready.');
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+        signal: AbortSignal.timeout(Math.min(750, Math.max(150, delayMs * 2)))
+      });
+      if (response.ok) return;
+    } catch {
+      // Browser host is still starting.
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    delayMs = Math.min(500, Math.ceil(delayMs * 1.6));
+  }
+  throw new Error('Timed out waiting for shared browser host CDP readiness.');
+}
+
+function terminateProcess(pid: number): void {
+  if (!processAlive(pid)) return;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // The process may have exited between liveness check and signal.
+  }
+}
+
 export class ServiceManager {
   readonly profiles: ProfileRegistry;
   readonly instances: InstanceRegistry;
@@ -87,6 +121,7 @@ export class ServiceManager {
   }
 
   async list(): Promise<ServiceStatus[]> {
+    this.reapOrphanBrowserHosts();
     const active = this.instances.listActive();
     return await Promise.all(active.map(async (instance) => ({
       ...instance,
@@ -99,8 +134,17 @@ export class ServiceManager {
     const profile = this.profiles.resolve(target.provider, options.profile);
     const active = this.instances.listActive();
 
+    const pooling = browserHostPoolEnabled(target.provider);
     const owner = active.find((instance) => instance.profileDirectory === profile.directory);
-    if (owner) {
+    if (
+      owner
+      && (
+        !pooling
+        || !owner.browserHostPid
+        || !owner.browserHostCdpPort
+        || !processAlive(owner.browserHostPid)
+      )
+    ) {
       throw new Error(
         `Browser profile ${profile.id} is already used by instance ${owner.id}. Stop it or choose another profile.`
       );
@@ -116,6 +160,41 @@ export class ServiceManager {
     const logs = join(this.root, 'logs');
     mkdirSync(logs, { recursive: true });
     const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
+    let browserHostPid = owner?.browserHostPid;
+    let browserHostCdpPort = owner?.browserHostCdpPort;
+    let startedBrowserHost = false;
+
+    if (pooling && !browserHostPid) {
+      browserHostCdpPort = await this.allocateBrowserHostPort(active);
+      const browserHost = spawn(
+        process.execPath,
+        [
+          cliPath,
+          'browser-host',
+          'serve',
+          '--profile', profile.directory,
+          '--target', target.targetUrl,
+          '--cdp-port', String(browserHostCdpPort)
+        ],
+        {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1' }
+        }
+      );
+      browserHost.unref();
+      if (!browserHost.pid) throw new Error('Could not obtain browser host process id.');
+      browserHostPid = browserHost.pid;
+      startedBrowserHost = true;
+      try {
+        await waitForCdpReady(browserHostCdpPort, browserHostPid);
+      } catch (error) {
+        terminateProcess(browserHostPid);
+        throw error;
+      }
+    }
+
     const args = [
       cliPath,
       target.input,
@@ -124,7 +203,9 @@ export class ServiceManager {
       '--api-model', target.model,
       '--host', host,
       '--port', String(port),
-      '--user-data-dir', profile.directory,
+      ...(browserHostPid && browserHostCdpPort
+        ? ['--cdp-url', `http://127.0.0.1:${browserHostCdpPort}`, '--user-data-dir', profile.directory]
+        : ['--user-data-dir', profile.directory]),
       '--log-file', join(logs, `${id}.log`)
     ];
     const child = spawn(process.execPath, args, {
@@ -134,7 +215,10 @@ export class ServiceManager {
       env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1' }
     });
     child.unref();
-    if (!child.pid) throw new Error('Could not obtain reverse-proxy process id.');
+    if (!child.pid) {
+      if (startedBrowserHost && browserHostPid) terminateProcess(browserHostPid);
+      throw new Error('Could not obtain reverse-proxy process id.');
+    }
 
     const record: ProxyInstanceRecord = {
       id,
@@ -146,7 +230,14 @@ export class ServiceManager {
       host,
       port,
       pid: child.pid,
-      startedAt: new Date().toISOString()
+      startedAt: new Date().toISOString(),
+      ...(browserHostPid && browserHostCdpPort
+        ? {
+            browserHostPid,
+            browserHostCdpPort,
+            browserHostMode: 'shared-profile' as const
+          }
+        : {})
     };
     this.profiles.markProvider(profile.id, target.provider);
     return this.instances.put(record);
@@ -171,6 +262,12 @@ export class ServiceManager {
       }
     }
     this.instances.remove(instance.id);
+    if (instance.browserHostPid) {
+      const stillUsed = this.instances.listActive().some(
+        (candidate) => candidate.browserHostPid === instance.browserHostPid
+      );
+      if (!stillUsed) terminateProcess(instance.browserHostPid);
+    }
     return true;
   }
 
@@ -179,10 +276,12 @@ export class ServiceManager {
     const results = await Promise.allSettled(
       active.map((instance) => this.stop(instance.id))
     );
-    return results.reduce(
+    const stopped = results.reduce(
       (count, result) => count + (result.status === 'fulfilled' && result.value ? 1 : 0),
       0
     );
+    this.reapOrphanBrowserHosts();
+    return stopped;
   }
 
   async restart(id: string): Promise<ProxyInstanceRecord> {
@@ -196,6 +295,37 @@ export class ServiceManager {
       port: instance.port,
       host: instance.host
     });
+  }
+
+  private reapOrphanBrowserHosts(): void {
+    const known = this.instances.list();
+    const activeHostPids = new Set(
+      known
+        .filter((instance) => processAlive(instance.pid) && instance.browserHostPid)
+        .map((instance) => instance.browserHostPid!)
+    );
+    const orphanPids = new Set(
+      known
+        .map((instance) => instance.browserHostPid)
+        .filter((pid): pid is number => Boolean(pid && processAlive(pid) && !activeHostPids.has(pid)))
+    );
+    for (const pid of orphanPids) terminateProcess(pid);
+    this.instances.listActive();
+  }
+
+  private async allocateBrowserHostPort(
+    active: readonly ProxyInstanceRecord[]
+  ): Promise<number> {
+    const used = new Set(
+      active
+        .map((instance) => instance.browserHostCdpPort)
+        .filter((port): port is number => Number.isInteger(port))
+    );
+    for (let port = 39000; port <= 39099; port += 1) {
+      if (used.has(port)) continue;
+      if (await portAvailable('127.0.0.1', port)) return port;
+    }
+    throw new Error('No free browser-host CDP port found in range 39000-39099.');
   }
 
   private async allocatePort(
