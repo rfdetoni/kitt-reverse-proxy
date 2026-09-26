@@ -6,7 +6,11 @@ import test from 'node:test';
 
 import { InstanceRegistry } from '../src/control-plane/instance-registry.js';
 import { ProfileRegistry } from '../src/control-plane/profile-registry.js';
-import { resolveServiceTarget } from '../src/control-plane/service-manager.js';
+import {
+  browserHostPoolEnabled,
+  canReuseBrowserHost,
+  resolveServiceTarget
+} from '../src/control-plane/service-manager.js';
 
 test('named browser profiles are reusable provider metadata without storing credentials', () => {
   const root = mkdtempSync(join(tmpdir(), 'kitt-rp-profile-'));
@@ -71,4 +75,35 @@ test('Gemini Context and ChatGPT Code resolve to independent canonical plugins',
   assert.equal(code.provider, 'chatgpt');
   assert.equal(code.model, 'chatgpt-web');
   assert.notEqual(context.targetUrl, code.targetUrl);
+});
+
+
+test('browser host pooling never crosses the Gemini human-auth boundary', () => {
+  assert.equal(browserHostPoolEnabled('gemini'), false);
+  assert.equal(browserHostPoolEnabled('chatgpt', {}), true);
+  assert.equal(
+    browserHostPoolEnabled('chatgpt', { PROXY_BROWSER_HOST_POOL: 'false' }),
+    false
+  );
+});
+
+test('browser host reuse requires a live host inside the same instance boundary', () => {
+  const owner = {
+    id: 'chatgpt-a',
+    provider: 'chatgpt',
+    model: 'chatgpt-web',
+    target: 'chatgpt',
+    profileId: 'shared',
+    profileDirectory: '/tmp/shared',
+    host: '127.0.0.1',
+    port: 3000,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    browserHostPid: 777,
+    browserHostCdpPort: 39000,
+    browserHostMode: 'shared-profile' as const
+  };
+  assert.equal(canReuseBrowserHost(owner, 'chatgpt', () => true), true);
+  assert.equal(canReuseBrowserHost(owner, 'chatgpt', () => false), false);
+  assert.equal(canReuseBrowserHost(owner, 'gemini', () => true), false);
 });
