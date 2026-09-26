@@ -301,7 +301,7 @@ test('resource pressure rejects admission when no idle session is recyclable', a
   });
   try {
     await assert.rejects(
-      manager.execute('resource-bound', {
+      manager.execute('resourcebound', {
         messages: [{ role: 'user', content: 'x' }]
       }),
       SessionLimitExceededError
