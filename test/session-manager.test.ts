@@ -201,3 +201,64 @@ test('browser automation uses a separate tab and never navigates the provider ch
     await manager.close();
   }
 });
+
+
+test('browser automation can progress while chat execution is waiting', async () => {
+  let releaseChat!: () => void;
+  const chatGate = new Promise<void>((resolve) => { releaseChat = resolve; });
+  let markChatStarted!: () => void;
+  const chatStarted = new Promise<void>((resolve) => { markChatStarted = resolve; });
+  const slowExecutor = executor('slow');
+  const normalExecute = slowExecutor.execute.bind(slowExecutor);
+  slowExecutor.execute = async (body: JsonObject) => {
+    markChatStarted();
+    await chatGate;
+    return await normalExecute(body);
+  };
+
+  const automationPage = {
+    isClosed: () => false,
+    async goto() {},
+    url: () => 'http://127.0.0.1:4200/',
+    async title() { return 'App'; },
+    async close() {},
+    async route() {},
+    on() {},
+    mainFrame() { return {}; },
+    locator() { throw new Error('not used'); }
+  } as any;
+  const browserSession: LiveBrowserSession = {
+    context: { async newPage() { return automationPage; } } as any,
+    page: {} as any,
+    persistent: true,
+    async close() {}
+  };
+
+  const manager = new SessionManager({
+    defaultExecutor: slowExecutor,
+    defaultBrowserSession: browserSession,
+    provider: 'chatgpt',
+    config
+  });
+  const chat = manager.execute(undefined, {
+    messages: [{ role: 'user', content: 'long running request' }]
+  });
+  try {
+    await chatStarted;
+    const browser = await Promise.race([
+      manager.browserAction(undefined, 'open', { url: 'http://127.0.0.1:4200/' }),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('browser action was blocked by chat queue')), 250)
+      )
+    ]);
+    assert.equal(browser.action, 'open');
+    assert.equal(manager.list()[0]?.status, 'busy');
+    releaseChat();
+    await chat;
+    assert.equal(manager.list()[0]?.status, 'idle');
+  } finally {
+    releaseChat();
+    await chat.catch(() => undefined);
+    await manager.close();
+  }
+});
