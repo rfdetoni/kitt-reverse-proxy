@@ -285,3 +285,28 @@ test('capacity reports resource-aware eviction budgets', async () => {
     await manager.close();
   }
 });
+
+
+test('resource pressure rejects admission when no idle session is recyclable', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config,
+      maxSessions: 4,
+      maxResidentRssBytes: 1,
+      maxBrowserPages: 100
+    },
+    factory: async (id) => ({ executor: executor(id) })
+  });
+  try {
+    await assert.rejects(
+      manager.execute('resource-bound', {
+        messages: [{ role: 'user', content: 'x' }]
+      }),
+      SessionLimitExceededError
+    );
+  } finally {
+    await manager.close();
+  }
+});
