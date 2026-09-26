@@ -148,3 +148,11 @@ Reverse Proxy 4.3 may run a lightweight lifecycle control server on `127.0.0.1` 
 
 Do not expose the control port through container publishing, SSH remote forwarding, reverse proxies, or non-loopback binds. Browser profiles remain exclusively owned by browser-backed service processes; the resident controller only coordinates metadata and lifecycle.
 
+## BrowserHost credential boundary
+
+BrowserHost pooling never merges browser profiles. The share key is the resolved persistent profile directory, so cookies, local storage and authenticated state stay inside the credential boundary the user selected. Each attached service receives a fresh page through CDP rather than reusing another service's chat tab.
+
+Gemini/Google authentication remains outside the pooled path because attaching automation during account login can cause Google to reject the browser. Manual authentication, MFA, CAPTCHA and other security challenges remain user-controlled.
+
+The BrowserHost CDP endpoint binds to loopback and uses an internal high port selected by the control plane. Do not publish or forward the 39000-39099 CDP range. If BrowserHost bootstrap is unavailable, KITT falls back to the existing process-owned browser rather than weakening profile isolation.
+
