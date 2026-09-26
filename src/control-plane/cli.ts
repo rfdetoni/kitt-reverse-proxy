@@ -2,6 +2,12 @@ import { loadProviderPluginModules } from '../plugins/loader.js';
 import { providerRegistry } from '../plugins/registry.js';
 import { ProfileRegistry } from './profile-registry.js';
 import { ServiceManager } from './service-manager.js';
+import {
+  controlServerReady,
+  ensureControlServer,
+  startControlServer,
+  stopControlServer
+} from './server.js';
 
 function flagValue(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -124,8 +130,41 @@ async function serviceCommand(args: string[]): Promise<number> {
   throw new Error('Usage: kitt-reverse-proxy service <list|start|stop|restart>');
 }
 
+
+async function controlCommand(args: string[]): Promise<number> {
+  const action = args[0] || 'status';
+  const json = args.includes('--json');
+  if (action === 'status') {
+    const ready = await controlServerReady();
+    print({ schema_version: 1, ready }, json);
+    return ready ? 0 : 1;
+  }
+  if (action === 'ensure') {
+    const result = await ensureControlServer();
+    print({ schema_version: 1, ...result }, json);
+    return result.ready ? 0 : 1;
+  }
+  if (action === 'serve') {
+    const server = await startControlServer();
+    const close = (): void => {
+      server.close();
+    };
+    process.once('SIGINT', close);
+    process.once('SIGTERM', close);
+    print({ schema_version: 1, ready: true, pid: process.pid }, json);
+    return 0;
+  }
+  if (action === 'stop') {
+    const stopped = await stopControlServer();
+    print({ schema_version: 1, stopped }, json);
+    return stopped ? 0 : 1;
+  }
+  throw new Error('Usage: kitt-reverse-proxy control <status|ensure|serve|stop> [--json]');
+}
+
 export async function runControlPlaneCli(args: string[]): Promise<number | null> {
   const command = args[0];
+  if (command === 'control') return await controlCommand(args.slice(1));
   if (command === 'plugins') return await pluginsCommand(args.slice(1));
   if (command === 'profiles') return await profilesCommand(args.slice(1));
   if (command === 'service') return await serviceCommand(args.slice(1));
