@@ -61,9 +61,10 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
       persistent: true,
       headed: config.headed,
       async close(): Promise<void> {
-        // CDP browser ownership belongs to the user. Closing the Playwright
-        // Browser object can terminate that browser, so detach by leaving the
-        // connection to be reclaimed with the proxy process instead.
+        // CDP browser ownership belongs to the user/browser-host, but this page
+        // was created by this KITT service and is safe to release explicitly.
+        // Never close the Browser object here.
+        await page.close().catch(() => undefined);
       }
     };
   }
