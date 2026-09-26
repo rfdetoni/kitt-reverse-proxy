@@ -38,6 +38,8 @@ export interface AppConfig {
   followRedirects: boolean;
   maxSessions: number;
   sessionIdleTimeoutMs: number;
+  maxBrowserPages: number;
+  maxResidentRssBytes: number;
   logFormat: 'text' | 'json';
   logLevel?: 0 | 1 | 2;
   logContent?: 'none' | 'metadata' | 'full';
