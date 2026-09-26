@@ -79,3 +79,7 @@ Session admission now considers the normal max-session limit plus browser-page a
 
 The capacity snapshot reports `browser_pages`, `max_browser_pages`, `resident_rss_bytes`, `max_resident_rss_bytes` and `eviction: resource_lru_idle`.
 
+## Performance verification
+
+`npm run benchmark:runtime` is non-destructive by default and snapshots current managed services. Set `KITT_BENCH_TARGET` to enable managed 1/2/4-service scenarios. Managed runs use disposable profiles, measure startup-to-ready, process-tree PSS/RSS on Linux, BrowserHost sharing, named-session creation p95, browser inspect p95 and shutdown, then stop services and delete benchmark profiles. Authenticated services reuse `KITT_BENCH_API_KEY` or `PROXY_API_KEY`.
+
