@@ -75,10 +75,27 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
   }
 }
 
-function browserHostPoolEnabled(provider: string): boolean {
+export function browserHostPoolEnabled(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
   if (provider === 'gemini') return false;
-  const raw = (process.env.PROXY_BROWSER_HOST_POOL || 'true').trim().toLowerCase();
+  const raw = (env.PROXY_BROWSER_HOST_POOL || 'true').trim().toLowerCase();
   return !['0', 'false', 'off', 'no'].includes(raw);
+}
+
+export function canReuseBrowserHost(
+  owner: ProxyInstanceRecord | undefined,
+  provider: string,
+  alive: (pid: number) => boolean = processAlive
+): boolean {
+  return Boolean(
+    owner
+    && browserHostPoolEnabled(provider)
+    && owner.browserHostPid
+    && owner.browserHostCdpPort
+    && alive(owner.browserHostPid)
+  );
 }
 
 async function waitForCdpReady(port: number, pid: number, timeoutMs = 10_000): Promise<void> {
@@ -130,21 +147,14 @@ export class ServiceManager {
   }
 
   async start(options: StartServiceOptions): Promise<ProxyInstanceRecord> {
+    this.reapOrphanBrowserHosts();
     const target = resolveServiceTarget(options.target);
     const profile = this.profiles.resolve(target.provider, options.profile);
     const active = this.instances.listActive();
 
     const pooling = browserHostPoolEnabled(target.provider);
     const owner = active.find((instance) => instance.profileDirectory === profile.directory);
-    if (
-      owner
-      && (
-        !pooling
-        || !owner.browserHostPid
-        || !owner.browserHostCdpPort
-        || !processAlive(owner.browserHostPid)
-      )
-    ) {
+    if (owner && !canReuseBrowserHost(owner, target.provider)) {
       throw new Error(
         `Browser profile ${profile.id} is already used by instance ${owner.id}. Stop it or choose another profile.`
       );
@@ -164,7 +174,9 @@ export class ServiceManager {
     let browserHostCdpPort = owner?.browserHostCdpPort;
     let startedBrowserHost = false;
 
-    if (pooling && !browserHostPid) {
+    if (browserHostPid && browserHostCdpPort) {
+      await waitForCdpReady(browserHostCdpPort, browserHostPid);
+    } else if (pooling) {
       browserHostCdpPort = await this.allocateBrowserHostPort(active);
       const browserHost = spawn(
         process.execPath,
