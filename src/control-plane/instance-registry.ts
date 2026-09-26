@@ -16,6 +16,9 @@ export interface ProxyInstanceRecord {
   port: number;
   pid: number;
   startedAt: string;
+  browserHostPid?: number;
+  browserHostCdpPort?: number;
+  browserHostMode?: 'shared-profile';
 }
 
 interface InstanceFile {
