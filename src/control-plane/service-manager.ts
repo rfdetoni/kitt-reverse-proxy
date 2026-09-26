@@ -130,6 +130,7 @@ export class ServiceManager {
   readonly profiles: ProfileRegistry;
   readonly instances: InstanceRegistry;
   private readonly root: string;
+  private readonly profileLocks = new Map<string, Promise<void>>();
 
   constructor(root = join(homedir(), '.kitt-reverse-proxy')) {
     this.root = root;
@@ -150,6 +151,7 @@ export class ServiceManager {
     this.reapOrphanBrowserHosts();
     const target = resolveServiceTarget(options.target);
     const profile = this.profiles.resolve(target.provider, options.profile);
+    return await this.withProfileLock(profile.directory, async () => {
     const active = this.instances.listActive();
 
     const pooling = browserHostPoolEnabled(target.provider);
@@ -253,6 +255,7 @@ export class ServiceManager {
     };
     this.profiles.markProvider(profile.id, target.provider);
     return this.instances.put(record);
+    });
   }
 
   async stop(id: string): Promise<boolean> {
@@ -307,6 +310,28 @@ export class ServiceManager {
       port: instance.port,
       host: instance.host
     });
+  }
+
+  private async withProfileLock<T>(
+    profileDirectory: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.profileLocks.get(profileDirectory) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolveCurrent) => {
+      release = resolveCurrent;
+    });
+    const tail = previous.then(() => current);
+    this.profileLocks.set(profileDirectory, tail);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.profileLocks.get(profileDirectory) === tail) {
+        this.profileLocks.delete(profileDirectory);
+      }
+    }
   }
 
   private reapOrphanBrowserHosts(): void {
