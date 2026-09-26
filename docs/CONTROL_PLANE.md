@@ -38,7 +38,7 @@ Agent-specific roles such as context, coding and validation do not belong in thi
 
 ## Resource policy
 
-There is no resident control-plane daemon. Registries are small JSON files and process health is sampled only when requested. Service startup chooses the first free loopback port in 3000-3099 and keeps provider browser work isolated from control-plane metadata.
+The control plane has a lightweight resident loopback process that keeps lifecycle state hot while persisting registries atomically for crash/restart recovery. Service startup chooses the first free loopback port in 3000-3099; browser/model traffic stays in the service/browser-host data plane rather than the control server.
 
 ## Resident control server (4.3)
 
@@ -57,4 +57,24 @@ This removes repeated Node bootstrap/module-loading cost for Agent CLI managemen
 Each logical session owns two bounded serialization lanes: the provider chat lane and the separate browser-automation page lane. Operations remain ordered inside a lane, but an automation inspection/click does not block behind a long provider response. Session busy/idle state is reference-counted across both lanes, and eviction/shutdown waits for both queues.
 
 Multi-service shutdown runs concurrently with the same per-instance graceful-then-forced termination policy.
+
+## 4.4 BrowserHost topology
+
+The resident control process now also coordinates an optional profile-scoped BrowserHost for managed services. A BrowserHost owns exactly one Chromium user-data directory and loopback CDP endpoint. Multiple reverse-proxy services may reuse that host only when they explicitly resolve to the same profile; each service creates its own CDP page and each logical KITT session continues to receive isolated tabs.
+
+Credential boundaries are invariant:
+
+- different profile directories never share a BrowserHost;
+- Gemini is excluded from pooling so its human-only Google authentication bootstrap is preserved;
+- if a shared host cannot start, the first service falls back to the previous process-owned browser path;
+- a profile already owned by a non-pooled/legacy service remains exclusive;
+- per-profile service starts are serialized to prevent concurrent host/profile races.
+
+When the last service using a BrowserHost stops, the control plane terminates that host. Stale instance records are reconciled and orphan BrowserHost wrapper processes are reaped on control-plane lifecycle operations.
+
+## Resource-aware session policy
+
+Session admission now considers the normal max-session limit plus browser-page and resident-RSS budgets. Only idle, non-default sessions that are not awaiting a tool result are recyclable. Time-based cleanup remains in place, but pressure-based cleanup can reclaim an idle LRU session before the idle timeout.
+
+The capacity snapshot reports `browser_pages`, `max_browser_pages`, `resident_rss_bytes`, `max_resident_rss_bytes` and `eviction: resource_lru_idle`.
 
