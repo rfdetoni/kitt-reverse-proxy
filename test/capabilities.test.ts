@@ -79,7 +79,7 @@ test('publishes live session capacity, provider discovery and resilience state',
     assert.equal(sessionContract.named, 1);
     assert.equal(sessionContract.max, 4);
     assert.equal(sessionContract.idle_timeout_ms, 120_000);
-    assert.equal(sessionContract.eviction, 'lru_idle');
+    assert.equal(sessionContract.eviction, 'resource_lru_idle');
     assert.equal(sessionContract.accepts_named_sessions, true);
     assert.equal(sessionContract.recyclable_idle_named, 1);
     assert.equal(capabilities.resilience.circuit, 'closed');
