@@ -318,8 +318,8 @@ export class ServiceManager {
       serviceFingerprint = await waitForFingerprint(child.pid);
       await waitForServiceReady(host, port, child.pid, serviceFingerprint);
     } catch (error) {
-      killSpawned(child);
-      if (startedBrowserHost) killSpawned(browserHostChild);
+      terminateSpawnedOwned(child, serviceFingerprint);
+      if (startedBrowserHost) terminateSpawnedOwned(browserHostChild, browserHostFingerprint);
       throw error;
     }
 
@@ -348,8 +348,8 @@ export class ServiceManager {
       this.profiles.markProvider(profile.id, target.provider);
       return this.instances.put(record);
     } catch (error) {
-      killSpawned(child);
-      if (startedBrowserHost) killSpawned(browserHostChild);
+      terminateSpawnedOwned(child, serviceFingerprint);
+      if (startedBrowserHost) terminateSpawnedOwned(browserHostChild, browserHostFingerprint);
       throw error;
     }
     });
