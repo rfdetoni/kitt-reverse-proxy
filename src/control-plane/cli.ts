@@ -1,6 +1,5 @@
 import { loadProviderPluginModules } from '../plugins/loader.js';
 import { providerRegistry } from '../plugins/registry.js';
-import { ProfileRegistry } from './profile-registry.js';
 import { ServiceManager } from './service-manager.js';
 import {
   controlServerReady,
@@ -57,8 +56,9 @@ async function pluginsCommand(args: string[]): Promise<number> {
 }
 
 async function profilesCommand(args: string[]): Promise<number> {
-  const registry = new ProfileRegistry();
-  registry.importLegacy(providerRegistry.ids());
+  const manager = new ServiceManager();
+  const registry = manager.profiles;
+  await manager.withControlLock(() => registry.importLegacy(providerRegistry.ids()));
   const action = args[0] || 'list';
   const json = args.includes('--json');
   if (action === 'list') {
@@ -68,14 +68,20 @@ async function profilesCommand(args: string[]): Promise<number> {
   if (action === 'create') {
     const name = args[1];
     if (!name) throw new Error('Usage: kitt-reverse-proxy profiles create <name> [--provider <id>] [--json]');
-    const profile = registry.create(name, flagValues(args, '--provider'));
+    const profile = await manager.withControlLock(
+      () => registry.create(name, flagValues(args, '--provider'))
+    );
     print({ schema_version: 1, profile }, json);
     return 0;
   }
   if (action === 'remove') {
     const id = args[1];
     if (!id) throw new Error('Usage: kitt-reverse-proxy profiles remove <id> [--delete-data] [--json]');
-    const removed = registry.remove(id, args.includes('--delete-data'));
+    const removed = await manager.withControlLock(() => {
+      const inUse = manager.instances.listActive().some((instance) => instance.profileId === id);
+      if (inUse) throw new Error('Cannot remove a browser profile used by a running service: ' + id);
+      return registry.remove(id, args.includes('--delete-data'));
+    });
     print({ schema_version: 1, id, removed }, json);
     return removed ? 0 : 1;
   }
