@@ -140,13 +140,13 @@ Do not include cookies, tokens, browser profiles, complete authenticated request
 
 ## Browser profile registry
 
-Named browser profiles managed by the control plane contain Chromium session state and must be protected like credentials. Registry JSON files intentionally contain no passwords, cookies or bearer tokens. Do not sync profile directories into repositories, expose them through web servers, or open one user-data directory from multiple independent Chromium processes. The service manager enforces exclusive profile use for active instances.
+Named browser profiles managed by the control plane contain Chromium session state and must be protected like credentials. Registry JSON files intentionally contain no passwords, cookies or bearer tokens. Do not sync profile directories into repositories, expose them through web servers, or open one user-data directory from multiple independent Chromium owners. The service manager enforces one live browser owner per profile; Reverse Proxy 4.4 may attach multiple compatible service processes to that single owner through loopback CDP.
 
 ## Resident control plane
 
 Reverse Proxy 4.3 may run a lightweight lifecycle control server on `127.0.0.1` (default port 2999). It is intentionally loopback-only and carries no prompt, model response, cookie, token, or browser-profile contents. Its authority is equivalent to running the local `kitt-reverse-proxy service/profiles/plugins` CLI as the same OS user.
 
-Do not expose the control port through container publishing, SSH remote forwarding, reverse proxies, or non-loopback binds. Browser profiles remain exclusively owned by browser-backed service processes; the resident controller only coordinates metadata and lifecycle.
+Do not expose the control port through container publishing, SSH remote forwarding, reverse proxies, or non-loopback binds. Browser profile ownership remains inside the browser data plane: either one service-owned browser or one profile-scoped BrowserHost. The resident controller coordinates metadata and lifecycle but never reads profile contents.
 
 ## BrowserHost credential boundary
 
