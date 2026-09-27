@@ -2,8 +2,11 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { withFileLockSync } from './file-lock.js';
+import { processMatches } from './process-identity.js';
+
 const INSTANCE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface ProxyInstanceRecord {
   id: string;
@@ -15,8 +18,10 @@ export interface ProxyInstanceRecord {
   host: string;
   port: number;
   pid: number;
+  processFingerprint: string;
   startedAt: string;
   browserHostPid?: number;
+  browserHostFingerprint?: string;
   browserHostCdpPort?: number;
   browserHostMode?: 'shared-profile';
 }
@@ -34,23 +39,15 @@ export function normalizeInstanceId(value: string): string {
   return id;
 }
 
-export function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export class InstanceRegistry {
+  private readonly root: string;
   private readonly controlDir: string;
   private readonly file: string;
   private cached: InstanceFile | undefined;
   private cachedMtimeMs = -1;
 
   constructor(root = join(homedir(), '.kitt-reverse-proxy')) {
+    this.root = root;
     this.controlDir = join(root, 'control');
     this.file = join(this.controlDir, 'instances.json');
     mkdirSync(this.controlDir, { recursive: true });
@@ -61,13 +58,17 @@ export class InstanceRegistry {
   }
 
   listActive(): ProxyInstanceRecord[] {
-    const state = this.read();
-    const active = state.instances.filter((instance) => processAlive(instance.pid));
-    if (active.length !== state.instances.length) {
-      state.instances = active;
-      this.write(state);
-    }
-    return active;
+    return withFileLockSync(this.root, 'instances', () => {
+      const state = this.read();
+      const active = state.instances.filter((instance) =>
+        processMatches(instance.pid, instance.processFingerprint)
+      );
+      if (active.length !== state.instances.length) {
+        state.instances = active;
+        this.write(state);
+      }
+      return active;
+    });
   }
 
   get(id: string): ProxyInstanceRecord | undefined {
@@ -76,22 +77,26 @@ export class InstanceRegistry {
   }
 
   put(record: ProxyInstanceRecord): ProxyInstanceRecord {
-    const state = this.read();
-    const normalized = normalizeInstanceId(record.id);
-    const next = { ...record, id: normalized };
-    state.instances = state.instances.filter((instance) => instance.id !== normalized);
-    state.instances.push(next);
-    this.write(state);
-    return next;
+    return withFileLockSync(this.root, 'instances', () => {
+      const state = this.read();
+      const normalized = normalizeInstanceId(record.id);
+      const next = { ...record, id: normalized };
+      state.instances = state.instances.filter((instance) => instance.id !== normalized);
+      state.instances.push(next);
+      this.write(state);
+      return next;
+    });
   }
 
   remove(id: string): boolean {
-    const normalized = normalizeInstanceId(id);
-    const state = this.read();
-    const before = state.instances.length;
-    state.instances = state.instances.filter((instance) => instance.id !== normalized);
-    if (state.instances.length !== before) this.write(state);
-    return state.instances.length !== before;
+    return withFileLockSync(this.root, 'instances', () => {
+      const normalized = normalizeInstanceId(id);
+      const state = this.read();
+      const before = state.instances.length;
+      state.instances = state.instances.filter((instance) => instance.id !== normalized);
+      if (state.instances.length !== before) this.write(state);
+      return state.instances.length !== before;
+    });
   }
 
   private read(): InstanceFile {
@@ -108,7 +113,13 @@ export class InstanceRegistry {
         ? {
             schemaVersion: SCHEMA_VERSION,
             instances: parsed.instances.filter((instance): instance is ProxyInstanceRecord =>
-              Boolean(instance && typeof instance.id === 'string' && Number.isInteger(instance.pid))
+              Boolean(
+                instance
+                && typeof instance.id === 'string'
+                && Number.isInteger(instance.pid)
+                && typeof instance.processFingerprint === 'string'
+                && instance.processFingerprint
+              )
             )
           }
         : this.empty();
@@ -134,7 +145,7 @@ export class InstanceRegistry {
   }
 
   private write(state: InstanceFile): void {
-    const temporary = `${this.file}.${process.pid}.tmp`;
+    const temporary = this.file + '.' + process.pid + '.' + Date.now() + '.tmp';
     writeFileSync(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
     renameSync(temporary, this.file);
     this.cached = {
