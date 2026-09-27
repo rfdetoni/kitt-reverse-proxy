@@ -216,26 +216,119 @@ test('capacity snapshot is explicit about LRU policy, pending creation and shutd
   await manager.execute('idle', {});
 
   const snapshot = manager.capacity();
-  assert.deepEqual(snapshot, {
-    provider: 'chatgpt',
-    active: 3,
-    named: 2,
-    busy: 1,
-    idle: 2,
-    pending_creation: 0,
-    recyclable_idle_named: 1,
-    awaiting_tool_results: 0,
-    max: 3,
-    idle_timeout_ms: 60_000,
-    automation_idle_timeout_ms: 30_000,
-    automation_pages: 0,
-    eviction: 'lru_idle',
-    accepts_named_sessions: true,
-    shutting_down: false
-  });
+  assert.deepEqual(
+    {
+      provider: snapshot.provider,
+      active: snapshot.active,
+      named: snapshot.named,
+      busy: snapshot.busy,
+      idle: snapshot.idle,
+      pending_creation: snapshot.pending_creation,
+      recyclable_idle_named: snapshot.recyclable_idle_named,
+      awaiting_tool_results: snapshot.awaiting_tool_results,
+      max: snapshot.max,
+      idle_timeout_ms: snapshot.idle_timeout_ms,
+      automation_idle_timeout_ms: snapshot.automation_idle_timeout_ms,
+      automation_pages: snapshot.automation_pages,
+      browser_pages: snapshot.browser_pages,
+      max_browser_pages: snapshot.max_browser_pages,
+      eviction: snapshot.eviction,
+      accepts_named_sessions: snapshot.accepts_named_sessions,
+      shutting_down: snapshot.shutting_down
+    },
+    {
+      provider: 'chatgpt',
+      active: 3,
+      named: 2,
+      busy: 1,
+      idle: 2,
+      pending_creation: 0,
+      recyclable_idle_named: 1,
+      awaiting_tool_results: 0,
+      max: 3,
+      idle_timeout_ms: 60_000,
+      automation_idle_timeout_ms: 30_000,
+      automation_pages: 0,
+      browser_pages: 0,
+      max_browser_pages: 12,
+      eviction: 'resource_lru_idle',
+      accepts_named_sessions: true,
+      shutting_down: false
+    }
+  );
+  assert.ok(snapshot.resident_rss_bytes > 0);
+  assert.equal(snapshot.max_resident_rss_bytes, 768 * 1024 * 1024);
 
   release();
   await running;
   await manager.close();
   assert.equal(manager.capacity().shutting_down, true);
+});
+
+
+test('resource pressure evicts only an idle recyclable named session', async () => {
+  const closed: string[] = [];
+  const pressureConfig = {
+    ...config(8),
+    maxResidentRssBytes: 1,
+    maxBrowserPages: 100
+  } as AppConfig;
+  const manager = new SessionManager({
+    defaultExecutor: executor(),
+    provider: 'chatgpt',
+    config: pressureConfig,
+    factory: async (id) => ({
+      executor: executor(),
+      browserSession: browserSession(id, closed)
+    })
+  });
+
+  try {
+    await manager.execute('oldest', {});
+    await tick();
+    await manager.execute('newer', {});
+
+    assert.deepEqual(
+      manager.list().map((session) => session.id).sort(),
+      ['default', 'newer']
+    );
+    assert.deepEqual(closed, ['oldest']);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('resource pressure never evicts a session waiting for a client tool result', async () => {
+  let awaiting = true;
+  const pinned = executor();
+  pinned.hasPendingToolCalls = () => awaiting;
+  const pressureConfig = {
+    ...config(8),
+    maxResidentRssBytes: 1,
+    maxBrowserPages: 100
+  } as AppConfig;
+  const manager = new SessionManager({
+    defaultExecutor: executor(),
+    provider: 'chatgpt',
+    config: pressureConfig,
+    factory: async (id) => ({
+      executor: id === 'pinned' ? pinned : executor()
+    })
+  });
+
+  try {
+    await manager.execute('pinned', {});
+    await manager.execute('other', {});
+    assert.deepEqual(
+      manager.list().map((session) => session.id).sort(),
+      ['default', 'other', 'pinned']
+    );
+    assert.equal(
+      manager.list().find((session) => session.id === 'pinned')?.awaiting_tool_result,
+      true
+    );
+  } finally {
+    awaiting = false;
+    await manager.close();
+  }
 });
