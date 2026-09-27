@@ -10,6 +10,12 @@ const CDP_POLL_INITIAL_MS = 100;
 const CDP_POLL_MAX_MS = 1_000;
 const AUTH_TARGET_STABLE_MS = 1_250;
 
+export function nextCdpPollDelay(currentMs: number, atTarget = false): number {
+  if (atTarget) return CDP_POLL_INITIAL_MS;
+  const current = Math.max(CDP_POLL_INITIAL_MS, Math.floor(currentMs || 0));
+  return Math.min(CDP_POLL_MAX_MS, Math.ceil(current * 1.6));
+}
+
 function pathEntries(env: NodeJS.ProcessEnv): string[] {
   return String(env.PATH || '')
     .split(delimiter)
@@ -178,12 +184,12 @@ async function waitForCdp(
       if (Date.now() - stableSince >= AUTH_TARGET_STABLE_MS) return;
       // Once the desired page is visible, sample fast enough to confirm the
       // stability window without adding noticeable login latency.
-      pollMs = Math.min(250, pollMs);
+      pollMs = nextCdpPollDelay(pollMs, true);
     } else {
       stableSince = 0;
       // Manual authentication can take minutes. Back off progressively while
       // no useful target is visible instead of polling CDP four times/second.
-      pollMs = Math.min(CDP_POLL_MAX_MS, Math.ceil(pollMs * 1.6));
+      pollMs = nextCdpPollDelay(pollMs, false);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, pollMs));
   }
