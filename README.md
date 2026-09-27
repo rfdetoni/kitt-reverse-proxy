@@ -566,6 +566,16 @@ Version 4.3 keeps the existing per-service OpenAI-compatible endpoints but moves
 
 The resident control process does not own authenticated browser sessions; service processes retain browser/profile isolation. This deliberately reduces CLI/process bootstrap overhead without weakening the existing profile ownership boundary.
 
+## Reverse Proxy 4.4.1 — lifecycle hardening
+
+Patch 4.4.1 hardens the multi-process lifecycle without changing the public model APIs:
+
+- managed services and BrowserHosts persist a process fingerprint derived from process start/command identity; a recycled PID alone is never authority to terminate a process;
+- profile/instance registry mutations use cross-process locks and service lifecycle operations use a broader lock, preventing lost JSON updates and competing start/stop allocation;
+- service startup is published only after the spawned HTTP listener answers its liveness endpoint; failed starts roll back their owned child processes;
+- pre-4.4.1 instance records without a process fingerprint are treated as stale rather than trusted for termination;
+- session shutdown propagates cancellation and uses a bounded drain window so an executor that ignores cancellation cannot block shutdown indefinitely.
+
 ## Reverse Proxy 4.4 — browser-host pooling and resource budgets
 
 Version 4.4 completes the performance roadmap without changing the OpenAI-compatible service endpoints:
