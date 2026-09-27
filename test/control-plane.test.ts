@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -106,4 +106,36 @@ test('browser host reuse requires a live host inside the same instance boundary'
   assert.equal(canReuseBrowserHost(owner, 'chatgpt', () => true), true);
   assert.equal(canReuseBrowserHost(owner, 'chatgpt', () => false), false);
   assert.equal(canReuseBrowserHost(owner, 'gemini', () => true), false);
+});
+
+
+test('instance registry invalidates its hot cache after an external writer changes the file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'kitt-rp-registry-cache-'));
+  const first = new InstanceRegistry(root);
+  const second = new InstanceRegistry(root);
+  const record = (id: string, port: number) => ({
+    id,
+    provider: 'chatgpt',
+    model: 'chatgpt-web',
+    target: 'chatgpt',
+    profileId: id,
+    profileDirectory: join(root, 'profiles', id),
+    host: '127.0.0.1',
+    port,
+    pid: process.pid,
+    startedAt: new Date().toISOString()
+  });
+
+  first.put(record('first', 3000));
+  assert.deepEqual(first.list().map((item) => item.id), ['first']);
+
+  second.put(record('second', 3001));
+  const registryFile = join(root, 'control', 'instances.json');
+  const future = new Date(Date.now() + 2_000);
+  utimesSync(registryFile, future, future);
+
+  assert.deepEqual(
+    first.list().map((item) => item.id).sort(),
+    ['first', 'second']
+  );
 });
