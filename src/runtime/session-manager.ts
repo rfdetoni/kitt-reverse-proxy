@@ -495,7 +495,12 @@ export class SessionManager {
     if (!atCountLimit && !this.resourcePressure()) return;
 
     const candidate = this.oldestRecyclableSession();
-    if (!candidate) throw new SessionLimitExceededError();
+    if (!candidate) {
+      // Resource pressure is advisory when every live session is protected.
+      // Only the hard session-count limit can reject admission.
+      if (atCountLimit) throw new SessionLimitExceededError();
+      return;
+    }
     await this.removeSession(candidate);
   }
 
