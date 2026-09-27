@@ -59,6 +59,16 @@ Each logical session owns two bounded serialization lanes: the provider chat lan
 
 Multi-service shutdown runs concurrently with the same per-instance graceful-then-forced termination policy.
 
+## 4.4.1 lifecycle ownership
+
+Lifecycle authority is stronger than a numeric PID. Every managed service and BrowserHost persisted by 4.4.1 carries a process fingerprint derived from process start identity and command identity. Stop, stale-record reconciliation and orphan cleanup signal a process only when the currently running OS process matches that fingerprint. Legacy records without this identity are discarded and never killed.
+
+Profile and instance read/modify/write operations use short cross-process filesystem locks. Start/stop/restart additionally share a lifecycle lock, so separate CLI and resident-control processes cannot overwrite registry state or race for the same service/CDP port. Atomic rename remains the final persistence step.
+
+Service start is transactional from the caller perspective: the child must expose /healthz before its instance record is published. A child that exits or fails to bind is rolled back together with any BrowserHost created only for that start attempt.
+
+Session-manager shutdown rejects new work, propagates an AbortSignal to accepted work and waits only a bounded grace period before releasing browser resources. Third-party executors can no longer block process shutdown forever.
+
 ## 4.4 BrowserHost topology
 
 The resident control process now also coordinates an optional profile-scoped BrowserHost for managed services. A BrowserHost owns exactly one Chromium user-data directory and loopback CDP endpoint. Multiple reverse-proxy services may reuse that host only when they explicitly resolve to the same profile; each service creates its own CDP page and each logical KITT session continues to receive isolated tabs.
