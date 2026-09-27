@@ -45,12 +45,6 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     const browser = await chromium.connectOverCDP(config.cdpUrl);
     const contexts = browser.contexts();
     const context = contexts[0] ?? await browser.newContext({ acceptDownloads: false });
-    let targetHostname = '';
-    try {
-      targetHostname = new URL(config.targetUrl).hostname;
-    } catch {
-      // Config validation rejects malformed targets before runtime creation.
-    }
     // CDP browser may contain stale/busy chat tabs from prior agent turns.
     // Always use fresh tab; cookies/auth remain in shared context.
     const page = await context.newPage();
@@ -61,9 +55,10 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
       persistent: true,
       headed: config.headed,
       async close(): Promise<void> {
-        // CDP browser ownership belongs to the user. Closing the Playwright
-        // Browser object can terminate that browser, so detach by leaving the
-        // connection to be reclaimed with the proxy process instead.
+        // CDP browser ownership belongs to the user/browser-host, but this page
+        // was created by this KITT service and is safe to release explicitly.
+        // Never close the Browser object here.
+        await page.close().catch(() => undefined);
       }
     };
   }

@@ -50,6 +50,11 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+function stableCapacity(value: any): any {
+  const { resident_rss_bytes: _rss, ...stable } = value;
+  return stable;
+}
+
 test('publishes live session capacity, provider discovery and resilience state', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor(),
@@ -79,7 +84,7 @@ test('publishes live session capacity, provider discovery and resilience state',
     assert.equal(sessionContract.named, 1);
     assert.equal(sessionContract.max, 4);
     assert.equal(sessionContract.idle_timeout_ms, 120_000);
-    assert.equal(sessionContract.eviction, 'lru_idle');
+    assert.equal(sessionContract.eviction, 'resource_lru_idle');
     assert.equal(sessionContract.accepts_named_sessions, true);
     assert.equal(sessionContract.recyclable_idle_named, 1);
     assert.equal(capabilities.resilience.circuit, 'closed');
@@ -91,7 +96,11 @@ test('publishes live session capacity, provider discovery and resilience state',
 
     const discovery = await (await fetch(`${baseUrl}/v1`)).json() as any;
     assert.deepEqual(discovery.capabilities.kitt_agent_cli.agent_contract, agentContract);
-    assert.deepEqual(discovery.capabilities.kitt_agent_cli.session_management, sessionContract);
+    assert.ok(discovery.capabilities.kitt_agent_cli.session_management.resident_rss_bytes > 0);
+    assert.deepEqual(
+      stableCapacity(discovery.capabilities.kitt_agent_cli.session_management),
+      stableCapacity(sessionContract)
+    );
     assert.equal(discovery.endpoints.providers, '/v1/providers');
 
     const providers = await (await fetch(`${baseUrl}/v1/providers`)).json() as any;
@@ -109,12 +118,14 @@ test('publishes live session capacity, provider discovery and resilience state',
     assert(providerModels.data[0].aliases.includes('chatgpt'));
 
     const status = await (await fetch(`${baseUrl}/v1/kitt/status`)).json() as any;
-    assert.deepEqual(status.session_capacity, manager.capacity());
+    assert.ok(status.session_capacity.resident_rss_bytes > 0);
+    assert.deepEqual(stableCapacity(status.session_capacity), stableCapacity(manager.capacity()));
     assert.equal(status.resilience.circuit, 'closed');
 
     const sessions = await (await fetch(`${baseUrl}/v1/kitt/sessions`)).json() as any;
     assert.equal(sessions.sessions.length, 2);
-    assert.deepEqual(sessions.capacity, manager.capacity());
+    assert.ok(sessions.capacity.resident_rss_bytes > 0);
+    assert.deepEqual(stableCapacity(sessions.capacity), stableCapacity(manager.capacity()));
   } finally {
     await closeServer(server);
     await manager.close();

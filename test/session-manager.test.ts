@@ -262,3 +262,53 @@ test('browser automation can progress while chat execution is waiting', async ()
     await manager.close();
   }
 });
+
+
+test('capacity reports resource-aware eviction budgets', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config,
+      maxBrowserPages: 7,
+      maxResidentRssBytes: 256 * 1024 * 1024
+    }
+  });
+  try {
+    const capacity = manager.capacity();
+    assert.equal(capacity.eviction, 'resource_lru_idle');
+    assert.equal(capacity.max_browser_pages, 7);
+    assert.equal(capacity.max_resident_rss_bytes, 256 * 1024 * 1024);
+    assert.equal(typeof capacity.resident_rss_bytes, 'number');
+    assert.equal(typeof capacity.browser_pages, 'number');
+  } finally {
+    await manager.close();
+  }
+});
+
+
+test('soft resource pressure admits work when no idle session is recyclable', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config,
+      maxSessions: 4,
+      maxResidentRssBytes: 1,
+      maxBrowserPages: 100
+    },
+    factory: async (id) => ({ executor: executor(id) })
+  });
+  try {
+    const result = await manager.execute('resourcebound', {
+      messages: [{ role: 'user', content: 'x' }]
+    });
+    assert.equal(result.completion.choices[0]?.message.content, 'ok');
+    assert.deepEqual(
+      manager.list().map((session) => session.id).sort(),
+      ['default', 'resourcebound']
+    );
+  } finally {
+    await manager.close();
+  }
+});

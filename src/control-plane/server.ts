@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 
 import { loadProviderPluginModules } from '../plugins/loader.js';
 import { providerRegistry } from '../plugins/registry.js';
-import { ProfileRegistry } from './profile-registry.js';
 import { ServiceManager } from './service-manager.js';
 
 const CONTROL_HOST = '127.0.0.1';
@@ -25,6 +24,16 @@ export function controlPort(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 let pluginLoad: Promise<void> | undefined;
+const serviceManagers = new Map<string, ServiceManager>();
+
+function serviceManager(root?: string): ServiceManager {
+  const key = root || '<default>';
+  const existing = serviceManagers.get(key);
+  if (existing) return existing;
+  const created = new ServiceManager(root);
+  serviceManagers.set(key, created);
+  return created;
+}
 
 async function ensureProviderPlugins(): Promise<void> {
   if (!pluginLoad) {
@@ -82,7 +91,8 @@ export async function dispatchControlRequest(
     return { schema_version: 1, plugins };
   }
 
-  const profiles = new ProfileRegistry(root);
+  const services = serviceManager(root);
+  const profiles = services.profiles;
   profiles.importLegacy(providerRegistry.ids());
 
   if (request.action === 'profiles.list') {
@@ -99,7 +109,6 @@ export async function dispatchControlRequest(
     return { schema_version: 1, id, removed };
   }
 
-  const services = new ServiceManager(root);
   if (request.action === 'service.list') {
     return { schema_version: 1, instances: await services.list() };
   }

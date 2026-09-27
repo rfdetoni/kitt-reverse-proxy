@@ -7,9 +7,10 @@ The control plane owns local reverse-proxy process discovery and lifecycle. Agen
 ## Responsibilities
 
 - `ProfileRegistry`: named Chromium profile metadata, legacy profile import and provider association.
-- `InstanceRegistry`: active reverse-proxy process descriptors.
-- `ServiceManager`: target resolution, profile exclusivity, automatic port allocation and cross-platform process lifecycle.
-- `runControlPlaneCli`: stable CLI boundary consumed by humans and KITT components.
+- `InstanceRegistry`: hot cached active-process descriptors with atomic persistence and external-mtime invalidation.
+- `ServiceManager`: target resolution, profile-scoped start serialization, automatic port allocation, BrowserHost ownership and cross-platform process lifecycle.
+- resident control server: low-overhead loopback lifecycle API used by Agent CLI.
+- `runControlPlaneCli`: stable CLI compatibility boundary consumed by humans and KITT components.
 
 The provider registry remains the source of truth for connection plugins.
 
@@ -32,13 +33,13 @@ Responses use `schema_version: 1`.
 
 ## Multi-instance topology
 
-A service instance owns one provider target, one local API endpoint and one browser profile while it is running. Multiple instances may run concurrently on different ports. A single browser profile may record successful use with multiple providers, but 4.2 deliberately prevents simultaneous independent processes from opening the same user-data directory.
+A service instance owns one provider target and one local API endpoint. Multiple instances may run concurrently on different ports. For managed non-Gemini services, multiple instances may reference the same named browser profile only through the 4.4 profile-scoped BrowserHost; service processes never open that user-data directory independently. Profiles that are not hosted remain exclusive to one service process.
 
 Agent-specific roles such as context, coding and validation do not belong in this repository. Agent CLI binds its roles to instance endpoints, preserving Clean Architecture ownership.
 
 ## Resource policy
 
-There is no resident control-plane daemon. Registries are small JSON files and process health is sampled only when requested. Service startup chooses the first free loopback port in 3000-3099 and keeps provider browser work isolated from control-plane metadata.
+The control plane has a lightweight resident loopback process that keeps lifecycle state hot while persisting registries atomically for crash/restart recovery. Service startup chooses the first free loopback port in 3000-3099; browser/model traffic stays in the service/browser-host data plane rather than the control server.
 
 ## Resident control server (4.3)
 
@@ -57,4 +58,28 @@ This removes repeated Node bootstrap/module-loading cost for Agent CLI managemen
 Each logical session owns two bounded serialization lanes: the provider chat lane and the separate browser-automation page lane. Operations remain ordered inside a lane, but an automation inspection/click does not block behind a long provider response. Session busy/idle state is reference-counted across both lanes, and eviction/shutdown waits for both queues.
 
 Multi-service shutdown runs concurrently with the same per-instance graceful-then-forced termination policy.
+
+## 4.4 BrowserHost topology
+
+The resident control process now also coordinates an optional profile-scoped BrowserHost for managed services. A BrowserHost owns exactly one Chromium user-data directory and loopback CDP endpoint. Multiple reverse-proxy services may reuse that host only when they explicitly resolve to the same profile; each service creates its own CDP page and each logical KITT session continues to receive isolated tabs.
+
+Credential boundaries are invariant:
+
+- different profile directories never share a BrowserHost;
+- Gemini is excluded from pooling so its human-only Google authentication bootstrap is preserved;
+- if a shared host cannot start, the first service falls back to the previous process-owned browser path;
+- a profile already owned by a non-pooled/legacy service remains exclusive;
+- per-profile service starts are serialized to prevent concurrent host/profile races.
+
+When the last service using a BrowserHost stops, the control plane terminates that host. Stale instance records are reconciled and orphan BrowserHost wrapper processes are reaped on control-plane lifecycle operations.
+
+## Resource-aware session policy
+
+Session admission now considers the normal max-session limit plus browser-page and resident-RSS budgets. Only idle, non-default sessions that are not awaiting a tool result are recyclable. Time-based cleanup remains in place, but pressure-based cleanup can reclaim an idle LRU session before the idle timeout.
+
+The capacity snapshot reports `browser_pages`, `max_browser_pages`, `resident_rss_bytes`, `max_resident_rss_bytes` and `eviction: resource_lru_idle`.
+
+## Performance verification
+
+`npm run benchmark:runtime` is non-destructive by default and snapshots current managed services. Set `KITT_BENCH_TARGET` to enable managed 1/2/4-service scenarios. Managed runs use disposable profiles, measure startup-to-ready, process-tree PSS/RSS on Linux, BrowserHost sharing, named-session creation p95, browser inspect p95 and shutdown, then stop services and delete benchmark profiles. Authenticated services reuse `KITT_BENCH_API_KEY` or `PROXY_API_KEY`.
 
