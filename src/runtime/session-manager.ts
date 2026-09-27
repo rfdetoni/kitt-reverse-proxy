@@ -18,6 +18,27 @@ import { updateRequestContext } from '../util/request-context.js';
 import { traceSpan } from '../observability/tracing.js';
 
 const SESSION_ID = /^[A-Za-z0-9]{1,64}$/;
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+
+function combinedSignal(primary: AbortSignal | undefined, shutdown: AbortSignal): AbortSignal {
+  return primary ? AbortSignal.any([primary, shutdown]) : shutdown;
+}
+
+async function settleWithin(promises: readonly Promise<unknown>[], timeoutMs: number): Promise<void> {
+  if (!promises.length) return;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      Promise.allSettled(promises).then(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref();
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export class SessionLimitExceededError extends Error {
   constructor() {
@@ -113,6 +134,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
   private readonly timer: NodeJS.Timeout;
+  private readonly shutdownController = new AbortController();
   private closed = false;
 
   constructor(private readonly options: {
@@ -173,6 +195,7 @@ export class SessionManager {
       );
     }
     session.lastActivity = Date.now();
+    const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
     return session.automationQueue.run(async () => {
       session.activeOperations += 1;
       session.status = 'busy';
@@ -200,7 +223,7 @@ export class SessionManager {
         session.activeOperations = Math.max(0, session.activeOperations - 1);
         session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
-    }, signal);
+    }, signalWithShutdown);
   }
 
   normalizeSessionId(value: string | undefined): string {
@@ -224,6 +247,8 @@ export class SessionManager {
     updateRequestContext({ sessionId: session.id, provider: session.provider });
     session.lastActivity = Date.now();
     const queuedAt = Date.now();
+    const signalWithShutdown = combinedSignal(options?.signal, this.shutdownController.signal);
+    const executionOptions: ChatExecutionOptions = { ...(options ?? {}), signal: signalWithShutdown };
     return session.queue.run(async () => {
       const dequeuedAt = Date.now();
       const queueWaitMs = Math.max(0, dequeuedAt - queuedAt);
@@ -238,7 +263,7 @@ export class SessionManager {
           'kitt.transport': session.executor.transport,
           'kitt.session.id': session.id,
           'kitt.queue.wait_ms': queueWaitMs
-        }, () => session.executor.execute(body, options));
+        }, () => session.executor.execute(body, executionOptions));
         logger.trace('session.execute.response', {
           session_id: session.id,
           provider: session.provider,
@@ -278,12 +303,13 @@ export class SessionManager {
         session.activeOperations = Math.max(0, session.activeOperations - 1);
         session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
-    }, options?.signal);
+    }, signalWithShutdown);
   }
 
   async reset(requestedId: string | undefined, signal?: AbortSignal): Promise<void> {
     const session = await this.resolve(requestedId);
     if (!session.executor.reset) throw new SessionNotSupportedError();
+    const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
     await session.queue.run(async () => {
       session.activeOperations += 1;
       session.status = 'busy';
@@ -294,7 +320,7 @@ export class SessionManager {
         session.activeOperations = Math.max(0, session.activeOperations - 1);
         session.status = session.activeOperations > 0 ? 'busy' : 'idle';
       }
-    }, signal);
+    }, signalWithShutdown);
   }
 
   async delete(requestedId: string): Promise<boolean> {
@@ -422,24 +448,31 @@ export class SessionManager {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
+    this.shutdownController.abort();
     for (const session of this.sessions.values()) {
       session.queue.close();
       session.automationQueue.close();
     }
-    await Promise.allSettled([...this.creating.values()]);
+
+    await settleWithin([...this.creating.values()], SHUTDOWN_DRAIN_TIMEOUT_MS);
     const snapshot = [...this.sessions.values()];
-    await Promise.all(snapshot.flatMap((session) => [
-      session.queue.drain(),
-      session.automationQueue.drain()
-    ]));
-    await Promise.all(snapshot.map(async (session) => {
+    await settleWithin(
+      snapshot.flatMap((session) => [session.queue.drain(), session.automationQueue.drain()]),
+      SHUTDOWN_DRAIN_TIMEOUT_MS
+    );
+
+    for (const session of snapshot) {
       await session.browserAutomation?.close().catch(() => undefined);
       delete session.browserAutomation;
       delete session.browserAutomationLastActivity;
-    }));
-    for (const session of snapshot) {
-      if (!session.isDefault && this.sessions.get(session.id) === session) await this.removeSession(session);
     }
+    for (const session of snapshot) {
+      if (!session.isDefault && this.sessions.get(session.id) === session) {
+        await this.removeSession(session);
+      }
+    }
+    const defaultSession = this.sessions.get('default');
+    await defaultSession?.browserSession?.close().catch(() => undefined);
   }
 
   private get defaultSession(): ManagedSession {
