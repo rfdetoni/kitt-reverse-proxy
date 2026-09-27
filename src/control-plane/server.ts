@@ -93,19 +93,25 @@ export async function dispatchControlRequest(
 
   const services = serviceManager(root);
   const profiles = services.profiles;
-  profiles.importLegacy(providerRegistry.ids());
+  await services.withControlLock(() => profiles.importLegacy(providerRegistry.ids()));
 
   if (request.action === 'profiles.list') {
     return { schema_version: 1, profiles: profiles.list() };
   }
   if (request.action === 'profiles.create') {
     const provider = optionalString(params, 'provider');
-    const profile = profiles.create(requiredString(params, 'name'), provider ? [provider] : []);
+    const profile = await services.withControlLock(
+      () => profiles.create(requiredString(params, 'name'), provider ? [provider] : [])
+    );
     return { schema_version: 1, profile };
   }
   if (request.action === 'profiles.remove') {
     const id = requiredString(params, 'id');
-    const removed = profiles.remove(id, params.delete_data === true);
+    const removed = await services.withControlLock(() => {
+      const inUse = services.instances.listActive().some((instance) => instance.profileId === id);
+      if (inUse) throw new Error('Cannot remove a browser profile used by a running service: ' + id);
+      return profiles.remove(id, params.delete_data === true);
+    });
     return { schema_version: 1, id, removed };
   }
 
