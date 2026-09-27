@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   nativeChromeLaunchArgs,
+  nextCdpPollDelay,
   systemChromeCandidates
 } from '../src/runtime/native-chrome-session.js';
 
@@ -26,4 +27,18 @@ test('explicit Chrome executable has priority for human authentication', () => {
     PATH: ''
   });
   assert.equal(candidates[0], '/custom/google-chrome');
+});
+
+
+test('CDP polling backs off while waiting and resets near the target', () => {
+  let delay = 100;
+  delay = nextCdpPollDelay(delay, false);
+  assert.equal(delay, 160);
+  delay = nextCdpPollDelay(delay, false);
+  assert.equal(delay, 256);
+  for (let index = 0; index < 10; index += 1) {
+    delay = nextCdpPollDelay(delay, false);
+  }
+  assert.equal(delay, 1000);
+  assert.equal(nextCdpPollDelay(delay, true), 100);
 });
