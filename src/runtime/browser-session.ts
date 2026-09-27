@@ -45,12 +45,6 @@ export async function openBrowserSession(config: AppConfig): Promise<LiveBrowser
     const browser = await chromium.connectOverCDP(config.cdpUrl);
     const contexts = browser.contexts();
     const context = contexts[0] ?? await browser.newContext({ acceptDownloads: false });
-    let targetHostname = '';
-    try {
-      targetHostname = new URL(config.targetUrl).hostname;
-    } catch {
-      // Config validation rejects malformed targets before runtime creation.
-    }
     // CDP browser may contain stale/busy chat tabs from prior agent turns.
     // Always use fresh tab; cookies/auth remain in shared context.
     const page = await context.newPage();
