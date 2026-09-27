@@ -96,7 +96,11 @@ test('publishes live session capacity, provider discovery and resilience state',
 
     const discovery = await (await fetch(`${baseUrl}/v1`)).json() as any;
     assert.deepEqual(discovery.capabilities.kitt_agent_cli.agent_contract, agentContract);
-    assert.deepEqual(discovery.capabilities.kitt_agent_cli.session_management, sessionContract);
+    assert.ok(discovery.capabilities.kitt_agent_cli.session_management.resident_rss_bytes > 0);
+    assert.deepEqual(
+      stableCapacity(discovery.capabilities.kitt_agent_cli.session_management),
+      stableCapacity(sessionContract)
+    );
     assert.equal(discovery.endpoints.providers, '/v1/providers');
 
     const providers = await (await fetch(`${baseUrl}/v1/providers`)).json() as any;
