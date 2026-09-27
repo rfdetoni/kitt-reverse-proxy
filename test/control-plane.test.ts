@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { InstanceRegistry } from '../src/control-plane/instance-registry.js';
 import { ProfileRegistry } from '../src/control-plane/profile-registry.js';
+import { processFingerprint } from '../src/control-plane/process-identity.js';
 import {
   browserHostPoolEnabled,
   canReuseBrowserHost,
@@ -37,6 +38,8 @@ test('legacy provider directories are imported without moving browser data', () 
 });
 
 test('instance registry keeps multiple independent reverse-proxy endpoints', () => {
+  const fingerprint = processFingerprint(process.pid);
+  assert.ok(fingerprint);
   const root = mkdtempSync(join(tmpdir(), 'kitt-rp-instance-'));
   const registry = new InstanceRegistry(root);
   registry.put({
@@ -49,6 +52,7 @@ test('instance registry keeps multiple independent reverse-proxy endpoints', () 
     host: '127.0.0.1',
     port: 3000,
     pid: process.pid,
+    processFingerprint: fingerprint,
     startedAt: new Date().toISOString()
   });
   registry.put({
@@ -61,6 +65,7 @@ test('instance registry keeps multiple independent reverse-proxy endpoints', () 
     host: '127.0.0.1',
     port: 3001,
     pid: process.pid,
+    processFingerprint: fingerprint,
     startedAt: new Date().toISOString()
   });
   assert.deepEqual(registry.listActive().map((item) => item.id).sort(), ['chatgpt-code', 'gemini-context']);
@@ -88,6 +93,8 @@ test('browser host pooling never crosses the Gemini human-auth boundary', () => 
 });
 
 test('browser host reuse requires a live host inside the same instance boundary', () => {
+  const fingerprint = processFingerprint(process.pid);
+  assert.ok(fingerprint);
   const owner = {
     id: 'chatgpt-a',
     provider: 'chatgpt',
@@ -98,8 +105,10 @@ test('browser host reuse requires a live host inside the same instance boundary'
     host: '127.0.0.1',
     port: 3000,
     pid: process.pid,
+    processFingerprint: fingerprint,
     startedAt: new Date().toISOString(),
     browserHostPid: 777,
+    browserHostFingerprint: 'browser-fingerprint',
     browserHostCdpPort: 39000,
     browserHostMode: 'shared-profile' as const
   };
@@ -110,6 +119,8 @@ test('browser host reuse requires a live host inside the same instance boundary'
 
 
 test('instance registry invalidates its hot cache after an external writer changes the file', () => {
+  const fingerprint = processFingerprint(process.pid);
+  assert.ok(fingerprint);
   const root = mkdtempSync(join(tmpdir(), 'kitt-rp-registry-cache-'));
   const first = new InstanceRegistry(root);
   const second = new InstanceRegistry(root);
@@ -123,6 +134,7 @@ test('instance registry invalidates its hot cache after an external writer chang
     host: '127.0.0.1',
     port,
     pid: process.pid,
+    processFingerprint: fingerprint,
     startedAt: new Date().toISOString()
   });
 
