@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { withFileLockSync } from './file-lock.js';
+
 const PROFILE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SCHEMA_VERSION = 1;
 
@@ -50,8 +52,9 @@ export class ProfileRegistry {
   }
 
   create(name: string, providers: readonly string[] = []): BrowserProfileRecord {
-    const id = normalizeProfileId(name);
-    const state = this.read();
+    return withFileLockSync(this.root, 'profiles', () => {
+      const id = normalizeProfileId(name);
+      const state = this.read();
     const existing = state.profiles.find((profile) => profile.id === id);
     if (existing) return existing;
 
@@ -68,12 +71,14 @@ export class ProfileRegistry {
       legacy: false
     };
     state.profiles.push(record);
-    this.write(state);
-    return record;
+      this.write(state);
+      return record;
+    });
   }
 
   importLegacy(providerIds: readonly string[]): BrowserProfileRecord[] {
-    const state = this.read();
+    return withFileLockSync(this.root, 'profiles', () => {
+      const state = this.read();
     let changed = false;
     for (const provider of providerIds) {
       const id = provider.trim().toLowerCase();
@@ -93,8 +98,9 @@ export class ProfileRegistry {
       });
       changed = true;
     }
-    if (changed) this.write(state);
-    return state.profiles;
+      if (changed) this.write(state);
+      return state.profiles;
+    });
   }
 
   resolve(provider: string, requested?: string): BrowserProfileRecord {
@@ -109,7 +115,8 @@ export class ProfileRegistry {
   }
 
   markProvider(id: string, provider: string): BrowserProfileRecord {
-    const normalized = normalizeProfileId(id);
+    return withFileLockSync(this.root, 'profiles', () => {
+      const normalized = normalizeProfileId(id);
     const providerId = provider.trim().toLowerCase();
     const state = this.read();
     const index = state.profiles.findIndex((profile) => profile.id === normalized);
@@ -121,19 +128,22 @@ export class ProfileRegistry {
       updatedAt: new Date().toISOString()
     };
     state.profiles[index] = updated;
-    this.write(state);
-    return updated;
+      this.write(state);
+      return updated;
+    });
   }
 
   remove(id: string, deleteData = false): boolean {
-    const normalized = normalizeProfileId(id);
+    return withFileLockSync(this.root, 'profiles', () => {
+      const normalized = normalizeProfileId(id);
     const state = this.read();
     const record = state.profiles.find((profile) => profile.id === normalized);
     if (!record) return false;
     state.profiles = state.profiles.filter((profile) => profile.id !== normalized);
     this.write(state);
-    if (deleteData && !record.legacy) rmSync(record.directory, { recursive: true, force: true });
-    return true;
+      if (deleteData && !record.legacy) rmSync(record.directory, { recursive: true, force: true });
+      return true;
+    });
   }
 
   private read(): ProfileFile {
@@ -158,7 +168,7 @@ export class ProfileRegistry {
 
   private write(state: ProfileFile): void {
     mkdirSync(this.controlDir, { recursive: true });
-    const temporary = `${this.file}.${process.pid}.tmp`;
+    const temporary = this.file + '.' + process.pid + '.' + Date.now() + '.tmp';
     writeFileSync(temporary, JSON.stringify(state, null, 2), { mode: 0o600 });
     renameSync(temporary, this.file);
   }
