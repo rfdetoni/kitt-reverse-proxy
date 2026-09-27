@@ -180,13 +180,12 @@ function terminateOwnedProcess(
   }
 }
 
-function killSpawned(child: ChildProcess | undefined, signal: NodeJS.Signals = 'SIGTERM'): void {
-  if (!child?.pid) return;
-  try {
-    child.kill(signal);
-  } catch {
-    // The child may already have exited.
-  }
+function terminateSpawnedOwned(
+  child: ChildProcess | undefined,
+  fingerprint: string | undefined
+): void {
+  if (!child?.pid || !fingerprint) return;
+  terminateOwnedProcess(child.pid, fingerprint);
 }
 
 export class ServiceManager {
@@ -280,7 +279,7 @@ export class ServiceManager {
       } catch {
         // BrowserHost pooling is an optimization. Roll back only the child
         // created by this start attempt and retain the process-owned fallback.
-        killSpawned(browserHostChild);
+        terminateSpawnedOwned(browserHostChild, browserHostFingerprint);
         browserHostPid = undefined;
         browserHostFingerprint = undefined;
         browserHostCdpPort = undefined;
@@ -310,11 +309,11 @@ export class ServiceManager {
     });
     child.unref();
     if (!child.pid) {
-      if (startedBrowserHost) killSpawned(browserHostChild);
+      if (startedBrowserHost) terminateSpawnedOwned(browserHostChild, browserHostFingerprint);
       throw new Error('Could not obtain reverse-proxy process id.');
     }
 
-    let serviceFingerprint: string;
+    let serviceFingerprint: string | undefined;
     try {
       serviceFingerprint = await waitForFingerprint(child.pid);
       await waitForServiceReady(host, port, child.pid, serviceFingerprint);
@@ -334,7 +333,7 @@ export class ServiceManager {
       host,
       port,
       pid: child.pid,
-      processFingerprint: serviceFingerprint,
+      processFingerprint: serviceFingerprint!,
       startedAt: new Date().toISOString(),
       ...(browserHostPid && browserHostFingerprint && browserHostCdpPort
         ? {
