@@ -10,7 +10,8 @@ import { processFingerprint } from '../src/control-plane/process-identity.js';
 import {
   browserHostPoolEnabled,
   canReuseBrowserHost,
-  resolveServiceTarget
+  resolveServiceTarget,
+  SERVICE_READY_TIMEOUT_MS
 } from '../src/control-plane/service-manager.js';
 
 test('named browser profiles are reusable provider metadata without storing credentials', () => {
@@ -82,6 +83,10 @@ test('Gemini Context and ChatGPT Code resolve to independent canonical plugins',
   assert.notEqual(context.targetUrl, code.targetUrl);
 });
 
+
+test('managed service readiness budget allows interactive browser startup', () => {
+  assert.equal(SERVICE_READY_TIMEOUT_MS, 330_000);
+});
 
 test('browser host pooling never crosses the Gemini human-auth boundary', () => {
   assert.equal(browserHostPoolEnabled('gemini'), false);
