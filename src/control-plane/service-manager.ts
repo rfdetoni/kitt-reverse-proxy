@@ -96,7 +96,7 @@ async function waitForServiceReady(
   port: number,
   pid: number,
   fingerprint: string,
-  timeoutMs = 10_000
+  timeoutMs = 330_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let delayMs = 40;
