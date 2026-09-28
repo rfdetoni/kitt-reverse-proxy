@@ -98,3 +98,29 @@ test('invalid external provider ids are rejected before plugin loading', () => {
     /Provider inválido/
   );
 });
+
+
+test('hybrid read controls parse conservatively and DOM remains an explicit kill switch', () => {
+  const config = parseCliArgs([
+    'chatgpt',
+    '--read-mode', 'dom',
+    '--tap-match-timeout-ms', '2500',
+    '--tap-first-byte-ms', '6000',
+    '--tap-stall-ms', '3500',
+    '--tap-max-bytes', '1048576',
+    '--tap-breaker-threshold', '4',
+    '--tap-breaker-cooldown-s', '90',
+    '--tap-verify-turns', '5'
+  ]);
+  if ('help' in config) throw new Error('unexpected help');
+
+  assert.equal(config.readMode, 'dom');
+  assert.equal(config.tapMatchTimeoutMs, 2500);
+  assert.equal(config.tapFirstByteMs, 6000);
+  assert.equal(config.tapStallMs, 3500);
+  assert.equal(config.tapMaxBytes, 1048576);
+  assert.equal(config.tapBreakerThreshold, 4);
+  assert.equal(config.tapBreakerCooldownMs, 90_000);
+  assert.equal(config.tapVerifyTurns, 5);
+  assert.throws(() => parseCliArgs(['chatgpt', '--read-mode', 'unsafe']), /Read mode inválido/);
+});
