@@ -61,7 +61,7 @@ Multi-service shutdown runs concurrently with the same per-instance graceful-the
 
 ## 4.4.1 lifecycle ownership
 
-Lifecycle authority is stronger than a numeric PID. Every managed service and BrowserHost persisted by 4.4.1 carries a process fingerprint derived from process start identity and command identity. Stop, stale-record reconciliation and orphan cleanup signal a process only when the currently running OS process matches that fingerprint. Legacy records without this identity are discarded and never killed.
+Lifecycle authority is stronger than a numeric PID. Every managed service and BrowserHost persisted by 4.4.1 carries a process fingerprint derived from process start identity plus an OS-appropriate executable/process identity. Stop, stale-record reconciliation and orphan cleanup signal a process only when the currently running OS process matches that fingerprint. Legacy records without this identity are discarded and never killed.
 
 Profile and instance read/modify/write operations use short cross-process filesystem locks. Start/stop/restart additionally share a lifecycle lock, so separate CLI and resident-control processes cannot overwrite registry state or race for the same service/CDP port. Atomic rename remains the final persistence step.
 
@@ -82,6 +82,12 @@ Credential boundaries are invariant:
 - per-profile service starts are serialized to prevent concurrent host/profile races.
 
 When the last service using a BrowserHost stops, the control plane terminates that host. Stale instance records are reconciled and orphan BrowserHost wrapper processes are reaped on control-plane lifecycle operations.
+
+## 4.5 agent-contract and response-liveness boundary
+
+Agent CLI 0.77 can mark a broad mutation turn as discovery-first. The reverse proxy preserves that intent in its agent-contract state, records whether a read-only repository tool result has completed, and rejects a non-exploration action until that observation exists. The Agent remains the owner of planning and milestones; the proxy only validates the wire contract.
+
+UI response waiting now distinguishes inactivity from total wall-clock duration. Streaming indicators, response-text changes and DOM mutations count as progress and refresh the configured inactivity window. A separate bounded absolute ceiling still terminates a chat that never reaches a usable final response. This protects long visible reasoning without permitting an unbounded browser wait.
 
 ## Resource-aware session policy
 

@@ -33,9 +33,14 @@ export const GEMINI_PLUGIN = defineProviderPlugin({
     ],
     responseSelectors: [
       'model-response message-content',
+      'model-response .markdown',
+      'model-response [class*="markdown" i]',
       'model-response',
       '.model-response-text',
       'message-content .markdown',
+      'message-content',
+      '[data-test-id*="response" i] message-content',
+      '[data-testid*="response" i] message-content',
       '.response-content',
       '[class*="model-response" i]'
     ],

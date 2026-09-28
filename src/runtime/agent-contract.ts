@@ -113,6 +113,8 @@ export interface AgentContractPlan {
   tools: Map<string, ToolDescriptor>;
   mutationToolAvailable: boolean;
   mutationRoundTripObserved: boolean;
+  discoveryRequired: boolean;
+  explorationRoundTripObserved: boolean;
   sessionId: string;
 }
 
@@ -445,6 +447,7 @@ export function prepareAgentContractRequest(
   const orchestratorContext: string[] = [];
   const syntheticToolCalls = new Map<string, SyntheticToolCall>();
   let mutationRoundTripObserved = false;
+  let explorationRoundTripObserved = false;
   let turnContext: Record<string, unknown> | undefined;
 
   for (const message of originalMessages) {
@@ -459,6 +462,7 @@ export function prepareAgentContractRequest(
           if (pending) {
             const [callId, toolCall] = pending;
             if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+            if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
             forwardedMessages.push(contractToolResultMessage(
               toolCall.name,
               callId,
@@ -491,6 +495,7 @@ export function prepareAgentContractRequest(
       const toolCall = syntheticToolCalls.get(callId);
       if (callId && toolCall) {
         if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+        if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
         forwardedMessages.push(contractToolResultMessage(toolCall.name, callId, text));
         syntheticToolCalls.delete(callId);
         continue;
@@ -513,6 +518,9 @@ export function prepareAgentContractRequest(
   // caller's implementation prompt; this route never executes workspace work.
   if (route === 'summarize') tools.clear();
   const mutationToolAvailable = hasMutationCapability(tools);
+  const discoveryRequired = MUTATION_ROUTES.has(route) && orchestratorContext.some((text) =>
+    text.includes('[KITT EXECUTION SLICE: DISCOVERY]')
+  );
   const mutationRequiredBeforeFinal = MUTATION_ROUTES.has(route) && mutationToolAvailable && !mutationRoundTripObserved;
   const workspaceContext = turnContext?.workspace_context ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
@@ -526,6 +534,11 @@ export function prepareAgentContractRequest(
     `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools, route), 'TOOLS_AVAILABLE')}`,
     `MUTATION_TOOL_AVAILABLE: ${mutationToolAvailable}`,
     `MUTATION_ROUND_TRIP_OBSERVED: ${mutationRoundTripObserved}`,
+    `DISCOVERY_REQUIRED_BEFORE_MUTATION: ${discoveryRequired}`,
+    `EXPLORATION_ROUND_TRIP_OBSERVED: ${explorationRoundTripObserved}`,
+    ...(discoveryRequired && !explorationRoundTripObserved ? [
+      'FIRST_ACTION_CONSTRAINT: perform one read-only repository inspection before mutation.'
+    ] : []),
     ...(mutationRequiredBeforeFinal ? [
       'MUTATION_REQUIRED_BEFORE_FINAL: true',
       'ACTION_CONSTRAINT: final_response is forbidden until a mutation-capable tool has been attempted. TOOLS_AVAILABLE are remotely executable through action="use_tool" even if they are not native UI tools.'
@@ -561,6 +574,8 @@ export function prepareAgentContractRequest(
     tools,
     mutationToolAvailable,
     mutationRoundTripObserved,
+    discoveryRequired,
+    explorationRoundTripObserved,
     sessionId
   };
 }
@@ -1004,6 +1019,17 @@ function isMutatingTool(name: string, input: JsonObject): boolean {
   return MUTATING_TOOL_NAME.test(name);
 }
 
+function isExplorationTool(name: string, input: JsonObject): boolean {
+  if (name === 'kitt_runtime') {
+    const operation = runtimeOperation(input);
+    return new Set([
+      'repo.read', 'repo.list', 'repo.search', 'repo.inspect_symbol',
+      'repo.read_symbol', 'repo.references'
+    ]).has(String(operation || ''));
+  }
+  return /(?:^|[_.:-])(read|list|search|inspect|references)(?:$|[_.:-])/i.test(name);
+}
+
 function isFileMutatingTool(name: string, input: JsonObject): boolean {
   if (name === 'kitt_runtime') {
     const operation = runtimeOperation(input);
@@ -1031,6 +1057,15 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
     if (!tool) throw new AgentContractValidationError(`Tool unavailable for this turn: ${response.tool}.`);
     if (!routeAllowsTool(plan.route, response.tool, response.tool_input)) {
       throw new AgentContractValidationError(`Route ${plan.route} does not allow the operation requested through ${response.tool}.`);
+    }
+    if (
+      plan.discoveryRequired
+      && !plan.explorationRoundTripObserved
+      && !isExplorationTool(response.tool, response.tool_input)
+    ) {
+      throw new AgentContractValidationError(
+        'Discovery-first execution requires a read-only repository inspection before other actions.'
+      );
     }
     if (tool.parameters !== undefined) {
       const validation = validateJsonSchema(response.tool_input, tool.parameters);

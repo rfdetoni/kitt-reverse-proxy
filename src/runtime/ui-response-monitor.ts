@@ -20,7 +20,16 @@ export interface UiResponseResult {
   durationMs: number;
 }
 
-const FIRST_USEFUL_DELTA_TIMEOUT_MS = 90_000;
+export function uiResponseWatchdogBudget(timeoutMs: number): {
+  inactivityMs: number;
+  absoluteMs: number;
+} {
+  const inactivityMs = Math.max(1_000, Math.floor(timeoutMs));
+  const extended = Math.max(inactivityMs * 2, inactivityMs + 120_000);
+  const absoluteMs = Math.max(inactivityMs, Math.min(900_000, extended));
+  return { inactivityMs, absoluteMs };
+}
+
 
 async function waitForDomMutation(
   session: LiveBrowserSession,
@@ -112,8 +121,9 @@ export async function awaitUiResponse(
   signal?: AbortSignal
 ): Promise<UiResponseResult> {
   const startedAt = Date.now();
-  const deadline = startedAt + config.uiResponseTimeoutMs;
-  const firstUsefulDeltaDeadline = Math.min(deadline, startedAt + FIRST_USEFUL_DELTA_TIMEOUT_MS);
+  const watchdog = uiResponseWatchdogBudget(config.uiResponseTimeoutMs);
+  const absoluteDeadline = startedAt + watchdog.absoluteMs;
+  let lastActivityAt = startedAt;
   const deltas: string[] = [];
   let firstDeltaMs: number | undefined;
   let retainedDeltaChars = 0;
@@ -128,7 +138,7 @@ export async function awaitUiResponse(
 
   await abortableSleep(250, signal);
 
-  while (Date.now() < deadline) {
+  while (Date.now() < absoluteDeadline) {
     throwIfAborted(signal);
     const now = Date.now();
     if (now >= nextGateCheckAt) {
@@ -143,6 +153,7 @@ export async function awaitUiResponse(
     if (now >= nextStreamingCheckAt) {
       streaming = await anyVisible(session.page, provider.ui.streamingSelectors);
       observedStreaming ||= streaming;
+      if (streaming) lastActivityAt = now;
       nextStreamingCheckAt = now + (streaming ? 350 : 600);
     }
 
@@ -161,6 +172,7 @@ export async function awaitUiResponse(
     if (activeText && activeText !== lastText) {
       lastText = activeText;
       stableSince = Date.now();
+      lastActivityAt = stableSince;
       if (!isThinkingIndicator(activeText)) {
         const delta = deltaFromCumulative(streamedText, activeText);
         if (delta) {
@@ -176,9 +188,9 @@ export async function awaitUiResponse(
       }
     }
 
-    if (firstDeltaMs === undefined && Date.now() >= firstUsefulDeltaDeadline) {
+    if (Date.now() - lastActivityAt >= watchdog.inactivityMs) {
       throw new UiTimeoutError(
-        `Nenhum delta útil do chat foi detectado em ${Math.round((firstUsefulDeltaDeadline - startedAt) / 1000)}s.`
+        `Nenhum progresso do chat foi detectado em ${Math.round(watchdog.inactivityMs / 1000)}s.`
       );
     }
 
@@ -191,9 +203,12 @@ export async function awaitUiResponse(
     }
 
     await abortableSleep(streaming ? 120 : 200, signal);
-    await waitForDomMutation(session, streaming ? 260 : 450, signal);
+    const domChanged = await waitForDomMutation(session, streaming ? 260 : 450, signal);
+    if (domChanged) lastActivityAt = Date.now();
   }
 
   if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
-  throw new UiTimeoutError(`Nenhuma resposta do chat foi detectada em ${Math.round(config.uiResponseTimeoutMs / 1000)}s.`);
+  throw new UiTimeoutError(
+    `O chat excedeu o teto absoluto de ${Math.round(watchdog.absoluteMs / 1000)}s sem resposta final.`
+  );
 }

@@ -32,28 +32,33 @@ function linuxFingerprint(pid: number): string | undefined {
 }
 
 function windowsFingerprint(pid: number): string | undefined {
+  // Get-CimInstance can block for several seconds while WMI/CIM initializes on
+  // fresh Windows hosts. Process identity only needs to defeat PID reuse, so
+  // the process start timestamp plus executable identity is sufficient and is
+  // available through the much cheaper Get-Process path.
   const script =
-    '$p=Get-CimInstance Win32_Process -Filter "ProcessId = ' + pid + '"; ' +
-    'if($p){$p | Select-Object CreationDate,CommandLine,ExecutablePath | ConvertTo-Json -Compress}';
+    '$p=Get-Process -Id ' + pid + ' -ErrorAction SilentlyContinue; ' +
+    'if($p){[PSCustomObject]@{' +
+    'StartTicks=$p.StartTime.ToUniversalTime().Ticks;' +
+    'Path=$p.Path' +
+    '} | ConvertTo-Json -Compress}';
   const result = spawnSync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', windowsHide: true, timeout: 2_000, maxBuffer: 256 * 1024 }
+    { encoding: 'utf8', windowsHide: true, timeout: 2_000, maxBuffer: 64 * 1024 }
   );
   if (result.status !== 0 || !result.stdout.trim()) return undefined;
   try {
     const parsed = JSON.parse(result.stdout) as {
-      CreationDate?: unknown;
-      CommandLine?: unknown;
-      ExecutablePath?: unknown;
+      StartTicks?: unknown;
+      Path?: unknown;
     };
-    const created = String(parsed.CreationDate ?? '').trim();
-    if (!created) return undefined;
+    const started = String(parsed.StartTicks ?? '').trim();
+    if (!started) return undefined;
     return digest([
       'win32',
-      created,
-      String(parsed.ExecutablePath ?? ''),
-      String(parsed.CommandLine ?? '')
+      started,
+      String(parsed.Path ?? '')
     ]);
   } catch {
     return undefined;
