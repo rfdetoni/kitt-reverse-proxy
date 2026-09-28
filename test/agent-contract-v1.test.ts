@@ -161,8 +161,10 @@ test('wrapped Agent CLI tool feedback is recovered as a synthetic tool result', 
     content: null,
     reasoning_summary: 'Vou aplicar a alteração.'
   })), firstPlan);
-  const toolCall = firstResult.choices[0]?.message.tool_calls?.[0];
+  const firstMessage = firstResult.choices[0]?.message;
+  const toolCall = firstMessage?.tool_calls?.[0];
   assert.ok(toolCall);
+  assert.equal(firstMessage?.content, 'Vou aplicar a alteração.');
 
   const followUp = body('code-edit');
   followUp.messages = [
@@ -201,7 +203,7 @@ test('converts a valid use_tool contract into a native OpenAI tool call', () => 
   })), plan);
 
   const message = result.choices[0]?.message;
-  assert.equal(message?.content, null);
+  assert.equal(message?.content, 'Preciso ler o arquivo solicitado.');
   assert.equal(message?.tool_calls?.[0]?.function.name, 'kitt_runtime');
   assert.deepEqual(JSON.parse(message?.tool_calls?.[0]?.function.arguments || '{}'), {
     operation: 'repo.read',
