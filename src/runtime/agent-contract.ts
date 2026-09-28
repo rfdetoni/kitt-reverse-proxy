@@ -113,6 +113,8 @@ export interface AgentContractPlan {
   tools: Map<string, ToolDescriptor>;
   mutationToolAvailable: boolean;
   mutationRoundTripObserved: boolean;
+  discoveryRequired: boolean;
+  explorationRoundTripObserved: boolean;
   sessionId: string;
 }
 
@@ -445,6 +447,7 @@ export function prepareAgentContractRequest(
   const orchestratorContext: string[] = [];
   const syntheticToolCalls = new Map<string, SyntheticToolCall>();
   let mutationRoundTripObserved = false;
+  let explorationRoundTripObserved = false;
   let turnContext: Record<string, unknown> | undefined;
 
   for (const message of originalMessages) {
