@@ -70,6 +70,21 @@ A browser supplied through `--cdp-url` is user-owned; shutdown does not intentio
 
 The v4 browser session broker centralizes ownership of named-session browser resources. Persistent authenticated contexts are reused only to create isolated tabs; non-persistent sessions receive isolated BrowserContexts derived from bounded storage state. Per-session serialization remains authoritative, and broker leases are idempotently released so one named conversation cannot close another conversation's authenticated context.
 
+## Passive response stream tap
+
+Reverse Proxy 4.6 can observe the response stream of UI-backed chats through a Chromium DevTools Protocol session. This path is deliberately read-only and is not a replacement for the normal WebChat UI:
+
+- prompts are still typed/clicked through the real provider UI and are never replayed through a private API;
+- the tap does not modify request or response headers, cookies, bodies, page JavaScript or authentication state;
+- the existing DOM response monitor stays active and defines the final canonical answer;
+- learned tap metadata is kept in memory and contains only endpoint origin/path/method, MIME/framing and a response text path;
+- raw request bodies, authorization material and response text are not persisted as tap profiles;
+- endpoint matching still passes through the existing URL policy and explicit host allowlist;
+- tap buffers are bounded and tap failures degrade to DOM rather than producing a client-visible provider failure;
+- a tap is not trusted for streaming until repeated exact verification against DOM output succeeds.
+
+The CDP streaming primitive is Chromium-specific and may change independently of K.I.T.T. If it is unavailable or incompatible, the tap is treated as unavailable and DOM behavior remains authoritative. `--read-mode dom` disables the tap entirely.
+
 ## Network transport and captured session material
 
 A BrowserContext may contain cookies, authorization and CSRF/XSRF state.

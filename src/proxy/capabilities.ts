@@ -111,6 +111,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
   const imageInput = manager.transport === 'ui' && Boolean(provider?.ui.supportsImageUpload);
   const toolCalling = typeof description.toolCalling === 'string' ? description.toolCalling : 'protocol-emulated';
   const resilience = asObject(description.resilience);
+  const read = asObject(description.read);
 
   return {
     status: 'ok',
@@ -136,6 +137,10 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
     browser_automation: browserAutomationContract(manager),
     reasoning: reasoningContract(),
     resilience: resilience ?? { circuit: 'closed' },
+    read: read ?? {
+      mode: manager.transport === 'ui' ? (config.readMode ?? 'auto') : 'network',
+      final_source: manager.transport === 'ui' ? 'dom' : 'network'
+    },
     provider_discovery: {
       list_endpoint: '/v1/providers',
       detail_endpoint_template: '/v1/providers/:provider',

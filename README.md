@@ -343,6 +343,35 @@ K.I.T.T. keeps resilience on the safe side of chat semantics:
 
 Provider resilience events are available in JSON and Prometheus output through `/v1/kitt/metrics` as `provider_events_total`.
 
+### Hybrid UI read path (4.6)
+
+UI providers still send every message through the authenticated browser UI exactly once. Response reading now has a conservative hybrid path:
+
+- the existing DOM monitor is always the canonical reader and remains armed for the complete turn;
+- `--read-mode auto` attaches a passive Chromium CDP stream tap and observes candidate response bytes without modifying requests, responses, cookies or page JavaScript;
+- a newly learned tap remains in **shadow** mode until its decoded text matches the final DOM text for several consecutive turns (default: 3);
+- only a trusted tap may emit early streaming deltas; the final completion text still comes from the DOM;
+- any attach, match, first-byte, stall, decode, verification or stream failure demotes the tap and continues through the DOM without resending the prompt;
+- tap failures use an independent per-session circuit breaker, so a broken tap never marks the provider itself unavailable;
+- `--read-mode dom` is the global kill switch and does not attach CDP at all.
+
+The tap profile is learned in memory from origin/path/method/content-type/framing/text-path only. It does not persist request bodies, cookies, authorization headers or tokens. `/v1/kitt/status` and `/v1/capabilities` expose read-path health without response content.
+
+Hybrid read controls:
+
+```text
+--read-mode <auto|dom|tap>       default: auto
+--tap-match-timeout-ms <ms>      default: 4000
+--tap-first-byte-ms <ms>         default: 8000
+--tap-stall-ms <ms>              default: 5000
+--tap-max-bytes <bytes>          default: 8388608
+--tap-breaker-threshold <n>      default: 3
+--tap-breaker-cooldown-s <s>     default: 300
+--tap-verify-turns <n>           default: 3
+```
+
+Equivalent environment variables use the `PROXY_` prefix: `PROXY_READ_MODE`, `PROXY_TAP_MATCH_TIMEOUT_MS`, `PROXY_TAP_FIRST_BYTE_MS`, `PROXY_TAP_STALL_MS`, `PROXY_TAP_MAX_BYTES`, `PROXY_TAP_BREAKER_THRESHOLD`, `PROXY_TAP_BREAKER_COOLDOWN_S` and `PROXY_TAP_VERIFY_TURNS`. Control Center keys live under `reverse_proxy.runtime` using the corresponding snake_case names.
+
 ---
 
 ## API compatibility
