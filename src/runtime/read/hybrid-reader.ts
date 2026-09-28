@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 
 export interface HybridUiResponseResult extends UiResponseResult {
+  snapshots?: string[];
   readDiagnostics: ReadDiagnostics;
 }
 
