@@ -21,7 +21,7 @@ export interface HybridUiResponseResult extends UiResponseResult {
 
 export class HybridUiResponseReader {
   private readonly tap: CdpStreamTap;
-  private pending?: TapTurn;
+  private pending: TapTurn | undefined;
 
   constructor(
     private readonly session: LiveBrowserSession,
