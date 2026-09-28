@@ -49,10 +49,11 @@ export class TapHealthController {
 
     if (this.openUntil > now) return { mode: 'disabled', reason: 'circuit_open' };
     if (this.openUntil > 0 && now >= this.openUntil) {
-      if (this.halfOpenProbe) return { mode: 'disabled', reason: 'circuit_open' };
+      this.openUntil = 0;
       this.halfOpenProbe = true;
       return { mode: 'shadow' };
     }
+    if (this.halfOpenProbe) return { mode: 'shadow' };
 
     return { mode: this.trusted && this.profile ? 'active' : 'shadow' };
   }
