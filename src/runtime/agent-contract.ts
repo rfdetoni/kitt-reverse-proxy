@@ -534,6 +534,11 @@ export function prepareAgentContractRequest(
     `TOOLS_AVAILABLE: ${boundedJson(toolsForPrompt(tools, route), 'TOOLS_AVAILABLE')}`,
     `MUTATION_TOOL_AVAILABLE: ${mutationToolAvailable}`,
     `MUTATION_ROUND_TRIP_OBSERVED: ${mutationRoundTripObserved}`,
+    `DISCOVERY_REQUIRED_BEFORE_MUTATION: ${discoveryRequired}`,
+    `EXPLORATION_ROUND_TRIP_OBSERVED: ${explorationRoundTripObserved}`,
+    ...(discoveryRequired && !explorationRoundTripObserved ? [
+      'FIRST_ACTION_CONSTRAINT: perform one read-only repository inspection before mutation.'
+    ] : []),
     ...(mutationRequiredBeforeFinal ? [
       'MUTATION_REQUIRED_BEFORE_FINAL: true',
       'ACTION_CONSTRAINT: final_response is forbidden until a mutation-capable tool has been attempted. TOOLS_AVAILABLE are remotely executable through action="use_tool" even if they are not native UI tools.'
