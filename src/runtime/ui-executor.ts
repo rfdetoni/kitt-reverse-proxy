@@ -68,7 +68,10 @@ import {
 } from './tool-enforcement.js';
 import { throwIfAborted } from './cancellation.js';
 import { sendUiPrompt, waitForUiReady } from './ui-interaction.js';
-import { awaitUiResponse } from './ui-response-monitor.js';
+import {
+  HybridUiResponseReader,
+  type HybridUiResponseResult
+} from './read/hybrid-reader.js';
 import {
   ConversationStateConflictError,
   ManualInterventionRequiredError,
@@ -140,6 +143,7 @@ export class UiChatExecutor implements ChatExecutor {
   private readonly explorationCallIds = new Set<string>();
   private readonly mutationCallIds = new Set<string>();
   private artifactFingerprints: Set<string> | undefined;
+  private readonly responseReader: HybridUiResponseReader;
 
   constructor(
     private readonly session: LiveBrowserSession,
@@ -147,10 +151,12 @@ export class UiChatExecutor implements ChatExecutor {
     private readonly config: AppConfig
   ) {
     this.modelId = config.apiModel || provider.defaultApiModel;
+    this.responseReader = new HybridUiResponseReader(session, provider, config);
   }
 
   async initialize(): Promise<void> {
     await this.waitForReady('inicialização');
+    await this.responseReader.initialize();
   }
 
   private async waitForReady(reason: string, signal?: AbortSignal): Promise<void> {
@@ -158,7 +164,13 @@ export class UiChatExecutor implements ChatExecutor {
   }
 
   private async sendPrompt(prompt: string, signal?: AbortSignal): Promise<void> {
-    await sendUiPrompt(this.session, this.provider, this.config, prompt, signal);
+    this.responseReader.arm(prompt);
+    try {
+      await sendUiPrompt(this.session, this.provider, this.config, prompt, signal);
+    } catch (error) {
+      this.responseReader.cancelPending();
+      throw error;
+    }
   }
 
   private async awaitResponse(
@@ -166,8 +178,8 @@ export class UiChatExecutor implements ChatExecutor {
     sentPrompt: string,
     onDelta?: ChatExecutionOptions['onDelta'],
     signal?: AbortSignal
-  ): Promise<{ text: string; deltas?: string[]; snapshots?: string[]; firstDeltaMs: number | undefined; durationMs: number }> {
-    return await awaitUiResponse(this.session, this.provider, this.config, baseline, sentPrompt, onDelta, signal);
+  ): Promise<HybridUiResponseResult> {
+    return this.responseReader.read(baseline, sentPrompt, onDelta, signal);
   }
 
   async reset(signal?: AbortSignal): Promise<void> {
@@ -193,6 +205,7 @@ export class UiChatExecutor implements ChatExecutor {
         throw new UiAutomationError(`Falha ao iniciar nova conversa: ${error instanceof Error ? error.message : String(error)}`);
       });
     await this.waitForReady('nova conversa', signal);
+    await this.responseReader.reset();
   }
 
   private pendingMessages(incoming: CanonicalMessage[]): CanonicalMessage[] {
@@ -538,7 +551,9 @@ export class UiChatExecutor implements ChatExecutor {
       ui_prompt_send_ms: Math.max(0, promptSentAt - promptSendStartedAt),
       ui_response_ttft_ms: result.firstDeltaMs ?? result.durationMs,
       ui_response_wait_ms: result.durationMs,
-      ui_executor_total_ms: Math.max(0, Date.now() - executionStartedAt)
+      ui_executor_total_ms: Math.max(0, Date.now() - executionStartedAt),
+      read_source: result.readDiagnostics.source,
+      tap_mode: result.readDiagnostics.tap_mode
     };
     const execution: ChatExecutionResult = {
       completion: output,
@@ -570,6 +585,7 @@ export class UiChatExecutor implements ChatExecutor {
       progressiveUiStreaming: true,
       boundedHistoryChars: RESOURCE_LIMITS.uiHistoryChars,
       cancellation: 'cooperative',
+      read: this.responseReader.describe(),
       reasoning: this.provider.id === 'chatgpt'
         ? {
             supported: true,
