@@ -41,6 +41,18 @@ Install/update scripts stop resident KITT services before replacing runtime file
 
 ---
 
+## Reverse Proxy 4.5.0 — agentic WebChat reliability
+
+Reverse Proxy 4.5.0 aligns browser-backed providers with the Agent CLI 0.77 execution model:
+
+- discovery-first turns expose and validate whether a read-only repository observation has completed before mutation is accepted;
+- WebChat response waiting is activity-aware: visible streaming state, response-text changes and DOM mutations refresh the inactivity budget;
+- the configured UI response timeout is treated as inactivity protection, while a larger bounded absolute ceiling prevents infinite waits;
+- Gemini response extraction keeps the broader selector set introduced in 4.4.2;
+- managed browser-service startup retains the 330-second readiness budget for login/profile startup.
+
+This does not make UI automation equivalent to an official streaming API. When a native provider API is configured, its token stream remains the preferred low-latency transport; WebChat remains a resilient compatibility path.
+
 ## Architecture v4
 
 Version 4 formalizes the reverse proxy as a **browser-backed AI gateway runtime**, while preserving the OpenAI-compatible contract consumed by K.I.T.T. Agent CLI.
