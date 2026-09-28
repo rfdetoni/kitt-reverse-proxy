@@ -44,10 +44,19 @@ const DEFAULTS = Object.freeze({
   headed: boolSetting(CENTER, 'headed') ?? true,
   provider: (process.env.PROXY_PROVIDER || stringSetting(CENTER, 'provider') || 'auto') as ProviderId,
   providerPlugins: (process.env.PROXY_PROVIDER_PLUGINS || '').split(',').map((item) => item.trim()).filter(Boolean),
-  transport: (process.env.PROXY_TRANSPORT || stringSetting(CENTER, 'transport') || 'auto') as TransportMode
+  transport: (process.env.PROXY_TRANSPORT || stringSetting(CENTER, 'transport') || 'auto') as TransportMode,
+  readMode: (process.env.PROXY_READ_MODE || stringSetting(CENTER, 'read_mode') || 'auto') as NonNullable<AppConfig['readMode']>,
+  tapMatchTimeoutMs: Number(process.env.PROXY_TAP_MATCH_TIMEOUT_MS || numberSetting(CENTER, 'tap_match_timeout_ms') || 4_000),
+  tapFirstByteMs: Number(process.env.PROXY_TAP_FIRST_BYTE_MS || numberSetting(CENTER, 'tap_first_byte_ms') || 8_000),
+  tapStallMs: Number(process.env.PROXY_TAP_STALL_MS || numberSetting(CENTER, 'tap_stall_ms') || 5_000),
+  tapMaxBytes: Number(process.env.PROXY_TAP_MAX_BYTES || numberSetting(CENTER, 'tap_max_bytes') || 8 * 1024 * 1024),
+  tapBreakerThreshold: Number(process.env.PROXY_TAP_BREAKER_THRESHOLD || numberSetting(CENTER, 'tap_breaker_threshold') || 3),
+  tapBreakerCooldownMs: Number(process.env.PROXY_TAP_BREAKER_COOLDOWN_S || numberSetting(CENTER, 'tap_breaker_cooldown_s') || 300) * 1000,
+  tapVerifyTurns: Number(process.env.PROXY_TAP_VERIFY_TURNS || numberSetting(CENTER, 'tap_verify_turns') || 3)
 });
 
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
+const READ_MODES = new Set<NonNullable<AppConfig['readMode']>>(['auto', 'dom', 'tap']);
 const LOG_FORMATS = new Set<AppConfig['logFormat']>(['text', 'json']);
 const LOG_CONTENT_POLICIES = new Set<NonNullable<AppConfig['logContent']>>(['none', 'metadata', 'full']);
 const TOOL_ENFORCEMENTS = new Set<NonNullable<AppConfig['toolEnforcement']>>(['auto', 'explore-first', 'required']);
@@ -134,6 +143,12 @@ function transport(value: string): TransportMode {
   return normalized;
 }
 
+function readMode(value: string): NonNullable<AppConfig['readMode']> {
+  const normalized = value.toLowerCase() as NonNullable<AppConfig['readMode']>;
+  if (!READ_MODES.has(normalized)) throw new Error(`Read mode inválido: ${value}. Use: auto, dom ou tap.`);
+  return normalized;
+}
+
 function logFormat(value: string): AppConfig['logFormat'] {
   const normalized = value.toLowerCase() as AppConfig['logFormat'];
   if (!LOG_FORMATS.has(normalized)) throw new Error(`Log format inválido: ${value}. Use: text ou json.`);
@@ -193,6 +208,14 @@ function validateDefaults(config: AppConfig): void {
   config.provider = provider(config.provider);
   config.providerPlugins = [...new Set((config.providerPlugins ?? []).map((item) => item.trim()).filter(Boolean))];
   config.transport = transport(config.transport);
+  config.readMode = readMode(config.readMode ?? 'auto');
+  config.tapMatchTimeoutMs = integer(config.tapMatchTimeoutMs ?? DEFAULTS.tapMatchTimeoutMs, 'PROXY_TAP_MATCH_TIMEOUT_MS');
+  config.tapFirstByteMs = integer(config.tapFirstByteMs ?? DEFAULTS.tapFirstByteMs, 'PROXY_TAP_FIRST_BYTE_MS');
+  config.tapStallMs = integer(config.tapStallMs ?? DEFAULTS.tapStallMs, 'PROXY_TAP_STALL_MS');
+  config.tapMaxBytes = integer(config.tapMaxBytes ?? DEFAULTS.tapMaxBytes, 'PROXY_TAP_MAX_BYTES');
+  config.tapBreakerThreshold = integer(config.tapBreakerThreshold ?? DEFAULTS.tapBreakerThreshold, 'PROXY_TAP_BREAKER_THRESHOLD');
+  config.tapBreakerCooldownMs = integer(config.tapBreakerCooldownMs ?? DEFAULTS.tapBreakerCooldownMs, 'PROXY_TAP_BREAKER_COOLDOWN_S');
+  config.tapVerifyTurns = integer(config.tapVerifyTurns ?? DEFAULTS.tapVerifyTurns, 'PROXY_TAP_VERIFY_TURNS');
 }
 
 export function parseCliArgs(args: string[]): AppConfig | { help: true } {
@@ -233,6 +256,14 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
     provider: DEFAULTS.provider,
     providerPlugins: [...DEFAULTS.providerPlugins],
     transport: DEFAULTS.transport,
+    readMode: DEFAULTS.readMode,
+    tapMatchTimeoutMs: DEFAULTS.tapMatchTimeoutMs,
+    tapFirstByteMs: DEFAULTS.tapFirstByteMs,
+    tapStallMs: DEFAULTS.tapStallMs,
+    tapMaxBytes: DEFAULTS.tapMaxBytes,
+    tapBreakerThreshold: DEFAULTS.tapBreakerThreshold,
+    tapBreakerCooldownMs: DEFAULTS.tapBreakerCooldownMs,
+    tapVerifyTurns: DEFAULTS.tapVerifyTurns,
     ...(DEFAULTS.apiKey ? { apiKey: DEFAULTS.apiKey } : {}),
     ...(DEFAULTS.apiModel ? { apiModel: DEFAULTS.apiModel } : {}),
     ...(DEFAULTS.userDataDir ? { userDataDir: DEFAULTS.userDataDir } : {}),
@@ -282,6 +313,14 @@ export function parseCliArgs(args: string[]): AppConfig | { help: true } {
       case '--provider': config.provider = provider(readValue(args, index, arg)); index += 1; break;
       case '--provider-plugin': config.providerPlugins ??= []; config.providerPlugins.push(readValue(args, index, arg)); index += 1; break;
       case '--transport': config.transport = transport(readValue(args, index, arg)); index += 1; break;
+      case '--read-mode': config.readMode = readMode(readValue(args, index, arg)); index += 1; break;
+      case '--tap-match-timeout-ms': config.tapMatchTimeoutMs = integer(readValue(args, index, arg), arg); index += 1; break;
+      case '--tap-first-byte-ms': config.tapFirstByteMs = integer(readValue(args, index, arg), arg); index += 1; break;
+      case '--tap-stall-ms': config.tapStallMs = integer(readValue(args, index, arg), arg); index += 1; break;
+      case '--tap-max-bytes': config.tapMaxBytes = integer(readValue(args, index, arg), arg); index += 1; break;
+      case '--tap-breaker-threshold': config.tapBreakerThreshold = integer(readValue(args, index, arg), arg); index += 1; break;
+      case '--tap-breaker-cooldown-s': config.tapBreakerCooldownMs = integer(readValue(args, index, arg), arg) * 1000; index += 1; break;
+      case '--tap-verify-turns': config.tapVerifyTurns = integer(readValue(args, index, arg), arg); index += 1; break;
       case '--allow-endpoint-host': config.allowedEndpointHosts.push(endpointHost(readValue(args, index, arg))); index += 1; break;
       case '--auto-browser':
         config.browserMode = 'auto';
