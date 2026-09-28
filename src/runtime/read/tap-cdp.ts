@@ -27,17 +27,17 @@ interface Candidate {
 
 interface ActiveTurn {
   mode: TapTurnMode;
-  profile?: TapProfile;
+  profile?: TapProfile | undefined;
   needle: string;
   queue: AsyncEventQueue<TapEvent>;
   candidates: Map<string, Candidate>;
   matchedRequestId?: string;
   bytes: number;
   cancelled: boolean;
-  matchTimer?: ReturnType<typeof setTimeout>;
-  firstByteTimer?: ReturnType<typeof setTimeout>;
-  stallTimer?: ReturnType<typeof setTimeout>;
-  selectTimer?: ReturnType<typeof setTimeout>;
+  matchTimer?: ReturnType<typeof setTimeout> | undefined;
+  firstByteTimer?: ReturnType<typeof setTimeout> | undefined;
+  stallTimer?: ReturnType<typeof setTimeout> | undefined;
+  selectTimer?: ReturnType<typeof setTimeout> | undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -98,8 +98,8 @@ function disabledTurn(): TapTurn {
 }
 
 export class CdpStreamTap {
-  private cdp?: CDPSession;
-  private current?: ActiveTurn;
+  private cdp: CDPSession | undefined;
+  private current: ActiveTurn | undefined;
   private readonly healthController: TapHealthController;
 
   constructor(
