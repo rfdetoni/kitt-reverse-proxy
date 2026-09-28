@@ -1,3 +1,9 @@
+## Reverse Proxy 4.6.1 — reasoning-summary transport
+
+Reverse Proxy 4.6.1 preserves the validated agent-contract `reasoning_summary` on native OpenAI tool-call completions instead of discarding it when `action="use_tool"` is transformed into `tool_calls`. The summary remains bounded by the existing two-sentence / 400-character contract and is public progress metadata, not chain-of-thought.
+
+This allows Agent CLI 0.77.2+ to show what the model is doing and why while keeping the concrete tool/operation as a separate technical detail.
+
 # K.I.T.T. Reverse Proxy
 
 <p align="center">

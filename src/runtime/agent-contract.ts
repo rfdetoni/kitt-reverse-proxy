@@ -1194,7 +1194,7 @@ export function transformAgentContractCompletion(
   if (response.action === 'use_tool') {
     const tool = response.tool!;
     const input = response.tool_input!;
-    choice.message.content = null;
+    choice.message.content = response.reasoning_summary.trim() || null;
     choice.message.tool_calls = [{
       id: `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       type: 'function',
