@@ -75,6 +75,7 @@ export class TapHealthController {
     this.consecutiveFailures += 1;
     this.verifiedTurns = 0;
     this.trusted = false;
+    if (reason === 'verify_mismatch' || reason === 'profile_mismatch') this.profile = undefined;
     this.halfOpenProbe = false;
     if (this.consecutiveFailures >= this.failureThreshold) {
       this.openUntil = now + this.cooldownMs;
