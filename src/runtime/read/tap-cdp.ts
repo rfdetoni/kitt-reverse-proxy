@@ -139,7 +139,7 @@ export class CdpStreamTap {
   }
 
   async detach(): Promise<void> {
-    this.current?.cancelled || this.cancelCurrent();
+    if (this.current && !this.current.cancelled) this.cancelCurrent();
     const cdp = this.cdp;
     this.cdp = undefined;
     this.healthController.setAttached(false);
