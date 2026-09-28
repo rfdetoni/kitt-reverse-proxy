@@ -48,6 +48,14 @@ export interface AppConfig {
   provider: ProviderId;
   providerPlugins?: string[];
   transport: TransportMode;
+  readMode?: 'auto' | 'dom' | 'tap';
+  tapMatchTimeoutMs?: number;
+  tapFirstByteMs?: number;
+  tapStallMs?: number;
+  tapMaxBytes?: number;
+  tapBreakerThreshold?: number;
+  tapBreakerCooldownMs?: number;
+  tapVerifyTurns?: number;
 }
 
 export interface RequestBodyCodecDescriptor {
