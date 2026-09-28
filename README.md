@@ -566,6 +566,16 @@ Version 4.3 keeps the existing per-service OpenAI-compatible endpoints but moves
 
 The resident control process does not own authenticated browser sessions; service processes retain browser/profile isolation. This deliberately reduces CLI/process bootstrap overhead without weakening the existing profile ownership boundary.
 
+## Reverse Proxy 4.4.2 — UI response and managed-start reliability
+
+Patch 4.4.2 fixes two timeout paths exposed by long-running WebChat sessions and managed browser startup:
+
+- the first useful UI delta now uses the configured `--ui-response-timeout` budget instead of an independent hard 90-second cutoff, so a configured 180-second response window is honored end to end;
+- Gemini response discovery covers current `message-content` and nested markdown DOM variants while retaining the existing provider-specific selectors;
+- managed `service start` readiness allows up to 330 seconds for visible Chromium and human-login bootstrap before declaring startup failure.
+
+These changes keep the OpenAI-compatible API and control-plane schema unchanged.
+
 ## Reverse Proxy 4.4.1 — lifecycle hardening
 
 Patch 4.4.1 hardens the multi-process lifecycle without changing the public model APIs:
