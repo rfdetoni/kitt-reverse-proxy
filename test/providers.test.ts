@@ -24,6 +24,13 @@ test('known AI web apps default to UI transport', () => {
   }
 });
 
+test('Gemini response selectors cover current message-content variants', () => {
+  const provider = providerById('gemini');
+  assert(provider);
+  assert.ok(provider.ui.responseSelectors.includes('message-content'));
+  assert.ok(provider.ui.responseSelectors.includes('model-response [class*="markdown" i]'));
+});
+
 test('unknown chat uses network first with safe UI bootstrap fallback', () => {
   const provider = detectProvider('https://example.com/support/chat');
   assert.equal(provider.id, 'generic');
