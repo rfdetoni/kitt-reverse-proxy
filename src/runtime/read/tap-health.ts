@@ -21,7 +21,7 @@ function sameProfile(left: TapProfile | undefined, right: TapProfile): boolean {
 
 export class TapHealthController {
   private attached = false;
-  private profile?: TapProfile;
+  private profile: TapProfile | undefined;
   private verifiedTurns = 0;
   private trusted = false;
   private consecutiveFailures = 0;
