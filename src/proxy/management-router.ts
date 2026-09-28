@@ -30,9 +30,13 @@ function browserOriginScope(req: Request): string[] {
   return normalizeBrowserOriginScope(decoded);
 }
 
-function resilience(manager: SessionManager): JsonObject | undefined {
-  const value = manager.describe().resilience;
+function describedObject(manager: SessionManager, key: string): JsonObject | undefined {
+  const value = manager.describe()[key];
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+function resilience(manager: SessionManager): JsonObject | undefined {
+  return describedObject(manager, 'resilience');
 }
 
 export function createManagementRouter(manager: SessionManager, config: AppConfig): Router {
@@ -256,6 +260,10 @@ export function createManagementRouter(manager: SessionManager, config: AppConfi
       provider: manager.providerId,
       transport: manager.transport,
       resilience: resilience(manager) ?? { circuit: 'closed' },
+      read: describedObject(manager, 'read') ?? {
+        mode: manager.transport === 'ui' ? (config.readMode ?? 'auto') : 'network',
+        final_source: manager.transport === 'ui' ? 'dom' : 'network'
+      },
       sessions: manager.list().length,
       session_capacity: manager.capacity(),
       queue_depth: manager.queueDepth()
