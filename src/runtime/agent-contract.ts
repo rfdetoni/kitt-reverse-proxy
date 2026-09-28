@@ -462,6 +462,7 @@ export function prepareAgentContractRequest(
           if (pending) {
             const [callId, toolCall] = pending;
             if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+            if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
             forwardedMessages.push(contractToolResultMessage(
               toolCall.name,
               callId,
@@ -494,6 +495,7 @@ export function prepareAgentContractRequest(
       const toolCall = syntheticToolCalls.get(callId);
       if (callId && toolCall) {
         if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+        if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
         forwardedMessages.push(contractToolResultMessage(toolCall.name, callId, text));
         syntheticToolCalls.delete(callId);
         continue;
@@ -516,6 +518,9 @@ export function prepareAgentContractRequest(
   // caller's implementation prompt; this route never executes workspace work.
   if (route === 'summarize') tools.clear();
   const mutationToolAvailable = hasMutationCapability(tools);
+  const discoveryRequired = MUTATION_ROUTES.has(route) && orchestratorContext.some((text) =>
+    text.includes('[KITT EXECUTION SLICE: DISCOVERY]')
+  );
   const mutationRequiredBeforeFinal = MUTATION_ROUTES.has(route) && mutationToolAvailable && !mutationRoundTripObserved;
   const workspaceContext = turnContext?.workspace_context ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
@@ -564,6 +569,8 @@ export function prepareAgentContractRequest(
     tools,
     mutationToolAvailable,
     mutationRoundTripObserved,
+    discoveryRequired,
+    explorationRoundTripObserved,
     sessionId
   };
 }
@@ -1005,6 +1012,17 @@ function isMutatingTool(name: string, input: JsonObject): boolean {
     return operation === undefined || MUTATING_RUNTIME_OPERATIONS.has(operation);
   }
   return MUTATING_TOOL_NAME.test(name);
+}
+
+function isExplorationTool(name: string, input: JsonObject): boolean {
+  if (name === 'kitt_runtime') {
+    const operation = runtimeOperation(input);
+    return new Set([
+      'repo.read', 'repo.list', 'repo.search', 'repo.inspect_symbol',
+      'repo.read_symbol', 'repo.references'
+    ]).has(String(operation || ''));
+  }
+  return /(?:^|[_.:-])(read|list|search|inspect|references)(?:$|[_.:-])/i.test(name);
 }
 
 function isFileMutatingTool(name: string, input: JsonObject): boolean {
