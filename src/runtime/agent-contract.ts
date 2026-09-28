@@ -1058,6 +1058,15 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
     if (!routeAllowsTool(plan.route, response.tool, response.tool_input)) {
       throw new AgentContractValidationError(`Route ${plan.route} does not allow the operation requested through ${response.tool}.`);
     }
+    if (
+      plan.discoveryRequired
+      && !plan.explorationRoundTripObserved
+      && !isExplorationTool(response.tool, response.tool_input)
+    ) {
+      throw new AgentContractValidationError(
+        'Discovery-first execution requires a read-only repository inspection before other actions.'
+      );
+    }
     if (tool.parameters !== undefined) {
       const validation = validateJsonSchema(response.tool_input, tool.parameters);
       if (!validation.valid) {
