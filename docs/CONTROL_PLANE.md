@@ -83,6 +83,12 @@ Credential boundaries are invariant:
 
 When the last service using a BrowserHost stops, the control plane terminates that host. Stale instance records are reconciled and orphan BrowserHost wrapper processes are reaped on control-plane lifecycle operations.
 
+## 4.5 agent-contract and response-liveness boundary
+
+Agent CLI 0.77 can mark a broad mutation turn as discovery-first. The reverse proxy preserves that intent in its agent-contract state, records whether a read-only repository tool result has completed, and rejects a non-exploration action until that observation exists. The Agent remains the owner of planning and milestones; the proxy only validates the wire contract.
+
+UI response waiting now distinguishes inactivity from total wall-clock duration. Streaming indicators, response-text changes and DOM mutations count as progress and refresh the configured inactivity window. A separate bounded absolute ceiling still terminates a chat that never reaches a usable final response. This protects long visible reasoning without permitting an unbounded browser wait.
+
 ## Resource-aware session policy
 
 Session admission now considers the normal max-session limit plus browser-page and resident-RSS budgets. Only idle, non-default sessions that are not awaiting a tool result are recyclable. Time-based cleanup remains in place, but pressure-based cleanup can reclaim an idle LRU session before the idle timeout.
