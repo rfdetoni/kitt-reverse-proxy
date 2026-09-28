@@ -31,6 +31,8 @@ export interface ServiceStatus extends ProxyInstanceRecord {
   status: 'ready' | 'running' | 'unhealthy';
 }
 
+export const SERVICE_READY_TIMEOUT_MS = 330_000;
+
 export function resolveServiceTarget(input: string): ResolvedServiceTarget {
   const value = input.trim();
   const preset = cliLaunchPresets().find((item) => item.id === value.toLowerCase());
@@ -96,7 +98,7 @@ async function waitForServiceReady(
   port: number,
   pid: number,
   fingerprint: string,
-  timeoutMs = 330_000
+  timeoutMs = SERVICE_READY_TIMEOUT_MS
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let delayMs = 40;
