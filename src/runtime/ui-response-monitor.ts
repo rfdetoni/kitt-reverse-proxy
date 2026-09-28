@@ -20,7 +20,6 @@ export interface UiResponseResult {
   durationMs: number;
 }
 
-const FIRST_USEFUL_DELTA_TIMEOUT_MS = 90_000;
 
 async function waitForDomMutation(
   session: LiveBrowserSession,
@@ -113,7 +112,7 @@ export async function awaitUiResponse(
 ): Promise<UiResponseResult> {
   const startedAt = Date.now();
   const deadline = startedAt + config.uiResponseTimeoutMs;
-  const firstUsefulDeltaDeadline = Math.min(deadline, startedAt + FIRST_USEFUL_DELTA_TIMEOUT_MS);
+  const firstUsefulDeltaDeadline = deadline;
   const deltas: string[] = [];
   let firstDeltaMs: number | undefined;
   let retainedDeltaChars = 0;
