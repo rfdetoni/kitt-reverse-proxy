@@ -553,7 +553,18 @@ export class UiChatExecutor implements ChatExecutor {
       ui_response_wait_ms: result.durationMs,
       ui_executor_total_ms: Math.max(0, Date.now() - executionStartedAt),
       read_source: result.readDiagnostics.source,
-      tap_mode: result.readDiagnostics.tap_mode
+      tap_mode: result.readDiagnostics.tap_mode,
+      tap_verified: result.readDiagnostics.tap_verified ?? false,
+      tap_trusted: result.readDiagnostics.tap_trusted ?? false,
+      ...(result.readDiagnostics.fallback_reason
+        ? { tap_fallback_reason: result.readDiagnostics.fallback_reason }
+        : {}),
+      ...(result.readDiagnostics.tap_matched_ms !== undefined
+        ? { tap_matched_ms: result.readDiagnostics.tap_matched_ms }
+        : {}),
+      ...(result.readDiagnostics.tap_first_byte_ms !== undefined
+        ? { tap_first_byte_ms: result.readDiagnostics.tap_first_byte_ms }
+        : {})
     };
     const execution: ChatExecutionResult = {
       completion: output,
