@@ -6,8 +6,7 @@ import {
   ollamaGenerateBodyToChat,
   ollamaTagsResponse,
   validateOllamaChatBody,
-  OllamaChatStreamWriter,
-  OllamaGenerateStreamWriter
+  OllamaChatStreamWriter
 } from '../src/proxy/ollama.js';
 
 test('validateOllamaChatBody requires valid messages', () => {
