@@ -26,8 +26,12 @@ export function sendProxyError(res: Response, error: unknown, protocol: ErrorPro
     descriptor.message,
     descriptor.code,
     {
-      recoverable: descriptor.recoverable,
-      recovery_action: descriptor.recoveryAction
+      ...(descriptor.recoverable !== undefined
+        ? { recoverable: descriptor.recoverable }
+        : {}),
+      ...(descriptor.recoveryAction
+        ? { recovery_action: descriptor.recoveryAction }
+        : {})
     }
   );
 }
