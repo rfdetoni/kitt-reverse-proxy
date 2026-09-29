@@ -49,6 +49,48 @@ function request(messages?: JsonObject[]): JsonObject {
   };
 }
 
+
+test('bootstrap prompt is staged and does not resend generated persona/tool contract', () => {
+  const source = request([{
+    role: 'system',
+    content: [
+      "You are an autonomous coding agent operating inside the user's workspace.",
+      '',
+      "Tool Contract:",
+      "Available host tools: [{'name':'kitt_runtime'}]",
+      '',
+      'Memory:',
+      'trusted memory',
+      '',
+      '[KITT EXECUTION SLICE: DISCOVERY]',
+      'Inspect first.'
+    ].join('\n')
+  }, {
+    role: 'user',
+    content: `[KITT TURN CONTEXT]\n${JSON.stringify({
+      route: 'code-generation',
+      workspace_context: { files: ['package.json'] },
+      discovery_required: true,
+      execution_plan: ['discovery', 'mutation', 'validation'],
+      execution_phase: 'discovery'
+    })}\n[END KITT TURN CONTEXT]\n\nIntent: IMPLEMENT\n\nGoal:\nBuild the application.`
+  }]);
+  const plan = prepareAgentContractRequest(source, {
+    sessionId: 'staged-superprompt-regression',
+    route: 'code-generation'
+  });
+  const text = (plan.body.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+
+  assert.match(text, /EXECUTION_PLAN: discovery -> mutation -> validation/);
+  assert.match(text, /EXECUTION_PHASE: discovery/);
+  assert.match(text, /PHASE_RULE: choose one host action/);
+  assert.doesNotMatch(text, /You are an autonomous coding agent operating inside the user's workspace/);
+  assert.doesNotMatch(text, /Tool Contract:/);
+  assert.match(text, /Memory:\ntrusted memory/);
+});
+
 test('discovery-first contract rejects mutation before repository evidence', () => {
   const plan = prepareAgentContractRequest(request(), {
     sessionId: 'discovery-first-block',
