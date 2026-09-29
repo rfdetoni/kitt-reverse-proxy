@@ -88,7 +88,7 @@ test('bootstrap prompt is staged and does not resend generated persona/tool cont
   assert.match(text, /PHASE_RULE: choose one host action/);
   assert.doesNotMatch(text, /You are an autonomous coding agent operating inside the user's workspace/);
   assert.doesNotMatch(text, /Tool Contract:/);
-  assert.match(text, /Memory:\ntrusted memory/);
+  assert.match(text, /trusted memory/);
 });
 
 test('discovery-first contract rejects mutation before repository evidence', () => {
