@@ -12,9 +12,6 @@ export interface UiTextSnapshot {
 
 const EMPTY_SNAPSHOT: UiTextSnapshot = Object.freeze({ selector: '', frameIndex: -1, count: 0, text: '' });
 const MAX_SNAPSHOT_CHARS = 2 * 1024 * 1024;
-const MAX_ARTIFACTS = 16;
-const MAX_ARTIFACT_CHARS = 256 * 1024;
-const MAX_ARTIFACT_TOTAL_CHARS = 1024 * 1024;
 
 function frames(page: Page): Frame[] {
   return page.frames().filter((frame: Frame) => !frame.isDetached());
