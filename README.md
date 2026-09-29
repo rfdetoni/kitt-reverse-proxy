@@ -1,3 +1,9 @@
+## Reverse Proxy 4.6.3 — staged agent contract
+
+Reverse Proxy 4.6.3 removes the superprompt regression in browser-backed agent execution. The first request for a stable Agent session is a bounded bootstrap with the active tool schema and workspace evidence; later tool round trips use compact delta context and rely on the named session for already-supplied bootstrap state.
+
+Contract repair no longer resends the original workspace/task payload. Valid `use_tool` responses may omit nullable `content`/`reasoning_summary`, and common `tool_name`/`arguments` aliases are normalized locally before schema validation. Broad implementation turns preserve the Agent's structured discovery phase, forcing one repository observation before mutation and then progressing one host action per round trip.
+
 ## Reverse Proxy 4.6.1 — reasoning-summary transport
 
 Reverse Proxy 4.6.1 preserves the validated agent-contract `reasoning_summary` on native OpenAI tool-call completions instead of discarding it when `action="use_tool"` is transformed into `tool_calls`. The summary remains bounded by the existing two-sentence / 400-character contract and is public progress metadata, not chain-of-thought.
