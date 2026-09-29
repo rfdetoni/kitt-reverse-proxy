@@ -212,7 +212,7 @@ function parseToolInput(value: unknown): JsonObject {
 }
 
 function syntheticAssistantToolCalls(message: unknown): SyntheticToolCall[] {
-  if (!isRecord(message) || messageRole(message) !== 'assistant' || messageText(message).trim()) return [];
+  if (!isRecord(message) || messageRole(message) !== 'assistant') return [];
   if (!Array.isArray(message.tool_calls)) return [];
 
   const calls: SyntheticToolCall[] = [];
