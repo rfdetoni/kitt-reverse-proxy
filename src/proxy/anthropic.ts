@@ -252,7 +252,7 @@ export class AnthropicStreamWriter {
     });
   }
 
-  finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
+  finish(completion: OpenAiCompletion): void {
     this.begin();
     const message = completion.choices[0]?.message;
     const text = message?.content || '';
