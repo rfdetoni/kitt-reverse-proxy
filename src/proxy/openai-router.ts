@@ -161,14 +161,12 @@ export function buildAgentContractRepairBody(
   validationError: AgentContractValidationError
 ): JsonObject {
   const messages = compactContractRepairMessages(plan);
-  const constraints = actionConstraints(plan);
   messages.push({
     role: 'user',
     content: [
       '[KITT CONTRACT REPAIR]',
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct the semantic contract violation. Return exactly one JSON object matching the output contract and no extra prose. If repo.write_file/patch content is present, wrap the entire JSON object in one ```json fenced block so the WebChat renderer cannot reinterpret file characters.',
-      ...constraints,
+      'REPAIR_INSTRUCTION: Correct only the semantic contract violation. Return one contract action and no extra prose.',
       'Do not repeat the invalid action from the previous response.',
       '[END KITT CONTRACT REPAIR]'
     ].join('\n')
@@ -181,7 +179,6 @@ export function buildAgentContractSerializationRepairBody(
   validationError: AgentContractValidationError
 ): JsonObject {
   const messages = compactContractRepairMessages(plan);
-  const constraints = actionConstraints(plan);
   messages.push({
     role: 'user',
     content: [
@@ -192,7 +189,6 @@ export function buildAgentContractSerializationRepairBody(
       'When serializing repo.write_file or patch content, preserve the original file indentation and line breaks exactly inside the escaped string. Never flatten or minify file content to make the outer JSON easier to serialize.',
       'For repo.write_file or patch content, wrap the entire contract object in exactly one ```json fenced block; write no prose, comments, labels, or trailing text outside that block.',
       'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string.',
-      ...constraints,
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
   });
