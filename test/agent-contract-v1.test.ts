@@ -124,6 +124,26 @@ test('consumes cache-friendly user turn context without dropping the user task',
   assert.equal(plan.route, 'code-edit');
 });
 
+
+test('stable contract sessions switch from bootstrap to compact delta context', () => {
+  const sessionId = 'bootstrap-to-delta';
+  const first = prepareAgentContractRequest(body('code-generation'), { sessionId });
+  const firstUser = (first.body.messages as Array<{ role?: string; content?: string }>)
+    .find((message) => message.role === 'user')?.content ?? '';
+  assert.match(firstUser, /CONTEXT_MODE: bootstrap/);
+  assert.match(firstUser, /TOOLS_AVAILABLE:/);
+  assert.match(firstUser, /WORKSPACE_CONTEXT:/);
+
+  const second = prepareAgentContractRequest(body('code-generation'), { sessionId });
+  const secondUser = (second.body.messages as Array<{ role?: string; content?: string }>)
+    .find((message) => message.role === 'user')?.content ?? '';
+  assert.match(secondUser, /CONTEXT_MODE: delta/);
+  assert.match(secondUser, /TOOLS_AVAILABLE_NAMES:/);
+  assert.match(secondUser, /WORKSPACE_CONTEXT: session_cached/);
+  assert.match(secondUser, /ORCHESTRATOR_CONTEXT_DATA: session_cached/);
+  assert.doesNotMatch(secondUser, /Execute KITT runtime operations/);
+});
+
 test('logical history strips volatile turn context while preserving the real user task', () => {
   const first = body('code-generation', { files: ['README.md'] });
   first.messages = [{
