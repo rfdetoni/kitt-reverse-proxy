@@ -152,7 +152,6 @@ function headedLaunch(
 
 async function openNavigated(
   config: AppConfig,
-  provider: ProviderPreset,
   deps: UiBrowserLifecycleDeps,
   launch: UiBrowserLaunch = { mode: 'default' }
 ): Promise<LiveBrowserSession> {
@@ -201,7 +200,7 @@ async function openInitialized(
   deps: UiBrowserLifecycleDeps,
   launch: UiBrowserLaunch = { mode: 'default' }
 ): Promise<ManagedUiRuntime> {
-  const session = await openNavigated(config, provider, deps, launch);
+  const session = await openNavigated(config, deps, launch);
   return initializeExisting(session, config, provider, deps);
 }
 
@@ -211,7 +210,7 @@ async function headlessCandidate(
   deps: UiBrowserLifecycleDeps,
   probeMs: number
 ): Promise<ManagedUiRuntime | undefined> {
-  const session = await openNavigated(config, provider, deps);
+  const session = await openNavigated(config, deps);
   const ready = await deps.ready(session, provider, probeMs)
     .catch(() => false);
   if (!ready) {
