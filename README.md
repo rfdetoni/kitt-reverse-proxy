@@ -1,5 +1,9 @@
 ## Reverse Proxy 4.6.4 — compact staged agent bootstrap
 
+## Reverse Proxy 4.6.5 — synthetic tool-call continuity
+
+Reverse Proxy 4.6.5 preserves Agent contract tool round trips when an OpenAI-style assistant message contains both a native `tool_calls` entry and public progress text in `content`. Contract-generated call IDs are normalized back into KITT tool-result evidence before the browser executor sees the next turn, preventing false `invalid_tool_request: unknown tool_call_id` failures.
+
 Reverse Proxy 4.6.4 prevents superprompt amplification in browser-backed Agent sessions. Generated Agent persona and the textual Tool Contract are no longer re-forwarded after the proxy has received the real tool schema structurally.
 
 Mutation turns use a compact deterministic execution plan: `discovery -> mutation -> validation`. Only one host action is requested for the current phase before waiting for its result. Trusted orchestration retained from the Agent is capped at 4 KiB, while workspace/tool schemas are sent only when the session bootstrap changes; later turns remain deltas.
