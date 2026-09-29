@@ -15,6 +15,7 @@ const TOOL_RESULT_MARKER = '[KITT TOOL RESULT DATA]';
 const TOOL_RESULT_END_MARKER = '[END KITT TOOL RESULT DATA]';
 const MAX_REASONING_SUMMARY_CHARS = 400;
 const MAX_DYNAMIC_CONTEXT_BYTES = 256 * 1024;
+const MAX_ORCHESTRATOR_CONTEXT_BYTES = 4 * 1024;
 const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
@@ -160,21 +161,43 @@ const KITT_AGENT_PERSONA_PREFIX =
 
 function compactOrchestratorContext(text: string): string {
   const trimmed = text.trim();
-  if (!trimmed.startsWith(KITT_AGENT_PERSONA_PREFIX)) return trimmed;
+  const generatedExecutionPrompt = trimmed.startsWith(KITT_AGENT_PERSONA_PREFIX)
+    || trimmed.includes("Tool Contract:");
+  if (!generatedExecutionPrompt) {
+    return Buffer.from(trimmed, 'utf8').subarray(0, MAX_ORCHESTRATOR_CONTEXT_BYTES).toString('utf8').trim();
+  }
 
-  const suffixMarkers = [
-    "\n\nMemory:\n",
-    "\n\nLearned Harness:\n",
-    "\n\nMandatory Constraints:\n",
-    "\n\n[PLANNING MODE ACTIVE]",
-    "\n\n[KITT EXECUTION SLICE:"
+  // Never forward the generated persona or textual tool contract. The proxy
+  // already owns the execution contract and receives tools structurally.
+  const markers = [
+    "Memory:",
+    "Learned Harness:",
+    "Mandatory Constraints:",
+    "[PLANNING MODE ACTIVE]",
+    "[KITT EXECUTION SLICE:"
   ];
-  const offsets = suffixMarkers
-    .map((value) => trimmed.indexOf(value))
-    .filter((value) => value >= 0);
-  if (!offsets.length) return "";
-  const first = Math.min(...offsets);
-  return trimmed.slice(first + 2).trim();
+  const matches = markers
+    .flatMap((marker) => {
+      const index = trimmed.indexOf(marker);
+      return index >= 0 ? [{ marker, index }] : [];
+    })
+    .sort((left, right) => left.index - right.index);
+
+  const parts: string[] = [];
+  for (let index = 0; index < matches.length; index += 1) {
+    const current = matches[index]!;
+    const end = matches[index + 1]?.index ?? trimmed.length;
+    const section = trimmed.slice(current.index, end).trim();
+    const payload = section.slice(current.marker.length).trim();
+    if (!payload && !current.marker.startsWith("[KITT ")) continue;
+    parts.push(section);
+  }
+
+  const compact = parts.join("\n\n");
+  return Buffer.from(compact, 'utf8')
+    .subarray(0, MAX_ORCHESTRATOR_CONTEXT_BYTES)
+    .toString('utf8')
+    .trim();
 }
 
 function parseToolInput(value: unknown): JsonObject {
@@ -568,10 +591,21 @@ export function prepareAgentContractRequest(
   );
   if (bootstrapContext) stats.contextFingerprint = contextFingerprint;
 
+  const executionPhase = MUTATION_ROUTES.has(route)
+    ? (!explorationRoundTripObserved && discoveryRequired
+        ? 'discovery'
+        : (!mutationRoundTripObserved ? 'mutation' : 'validation'))
+    : 'response';
+
   const dynamicParts = [
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
+    ...(MUTATION_ROUTES.has(route) ? [
+      'EXECUTION_PLAN: discovery -> mutation -> validation',
+      `EXECUTION_PHASE: ${executionPhase}`,
+      'PHASE_RULE: choose one host action for the current phase, wait for its result, then continue; never plan the entire implementation inside one tool call.'
+    ] : []),
     ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
     ...(route === 'chat' && tools.size === 0 && !workspaceProvided ? [DIRECT_CHAT_ROUTE_INSTRUCTION] : []),
     ...(bootstrapContext
@@ -582,7 +616,6 @@ export function prepareAgentContractRequest(
     `DISCOVERY_REQUIRED_BEFORE_MUTATION: ${discoveryRequired}`,
     `EXPLORATION_ROUND_TRIP_OBSERVED: ${explorationRoundTripObserved}`,
     ...(discoveryRequired && !explorationRoundTripObserved ? [
-      'EXECUTION_PHASE: discovery',
       'FIRST_ACTION_CONSTRAINT: perform exactly one read-only repository inspection, then wait for the host result.'
     ] : []),
     ...(mutationRequiredBeforeFinal ? [
