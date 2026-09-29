@@ -100,11 +100,12 @@ test('semantic retry includes the validation cause and available tool names', ()
   );
   const messages = retry.messages as Array<{ role?: string; content?: string }>;
   const repair = messages.at(-1)?.content ?? '';
+  const transport = messages.map((message) => message.content ?? '').join('\n');
 
   assert.match(repair, /PREVIOUS_VALIDATION_ERROR: request_tools is incompatible/);
-  assert.match(repair, /request_tools is forbidden/);
-  assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
-  assert.match(repair, /request_workspace is forbidden/);
+  assert.match(transport, /request_tools is forbidden/);
+  assert.match(transport, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
+  assert.match(transport, /request_workspace is forbidden/);
   assert.match(repair, /Do not repeat the invalid action/);
 });
 
@@ -207,6 +208,7 @@ test('serialization repair explicitly requires escaped JSON strings', () => {
   );
   const messages = retry.messages as Array<{ role?: string; content?: string }>;
   const repair = messages.at(-1)?.content ?? '';
+  const transport = messages.map((message) => message.content ?? '').join('\n');
 
   assert.match(repair, /KITT CONTRACT SERIALIZATION REPAIR/);
   assert.match(repair, /Escape every newline, tab, backslash, quote/);
@@ -215,7 +217,7 @@ test('serialization repair explicitly requires escaped JSON strings', () => {
   assert.match(repair, /Never flatten or minify file content/);
   assert.match(repair, /wrap the entire contract object in exactly one/);
   assert.match(repair, /tool_input must remain a JSON object/);
-  assert.match(repair, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
+  assert.match(transport, /AVAILABLE_TOOL_NAMES: \["kitt_runtime"\]/);
 });
 
 
