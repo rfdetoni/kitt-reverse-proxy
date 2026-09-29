@@ -250,8 +250,12 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
     ...(followUp.messages as any[]),
     {
       role: 'assistant',
-      content: null,
+      content: firstResult.choices[0]?.message.content,
       tool_calls: [toolCall]
+    },
+    {
+      role: 'developer',
+      content: '[KITT ACTION CONSTRAINTS] keep using the supplied runtime'
     },
     {
       role: 'tool',
@@ -266,6 +270,7 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
 
   assert.equal(messages.some((message) => message.role === 'tool'), false);
   assert.equal(messages.some((message) => message.role === 'assistant' && Array.isArray(message.tool_calls)), false);
+  assert.equal(messages.some((message) => message.role === 'assistant' && message.content === 'Vou ler o arquivo antes de continuar.'), false);
 
   const resultMessage = messages.find((message) =>
     message.role === 'user' && typeof message.content === 'string' && message.content.includes('[KITT TOOL RESULT DATA]')
