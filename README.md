@@ -655,3 +655,8 @@ PROXY_BROWSER_HOST_POOL=true
 
 The RSS signal is the reverse-proxy process RSS; browser page count is used as the portable browser-pressure signal. The runtime benchmark additionally measures the Linux process tree so Chromium cost is visible during performance testing.
 
+
+
+## 4.6.2 code-hygiene gate
+
+TypeScript validation now rejects unused locals and unused parameters in production/test compilation. This keeps stale transport, provider and browser-runtime branches from accumulating silently as the plugin architecture evolves.
