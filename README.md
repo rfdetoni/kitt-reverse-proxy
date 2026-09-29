@@ -1,3 +1,7 @@
+## Reverse Proxy 4.6.7 — validation evidence gate
+
+Agent mutation turns now carry validation state explicitly. A final response is rejected until a host build/test/check reports `HOST_STATUS: success` after the latest mutation; failed validation resets completion eligibility instead of allowing the model to claim that the project was tested successfully.
+
 ## Reverse Proxy 4.6.6 — recoverable model-response failures
 
 Reverse Proxy 4.6.6 keeps browser-backed Agent sessions alive when the upstream model repeatedly returns an invalid Agent contract. After the built-in repair attempts are exhausted, the proxy returns a structured recoverable `agent_contract_invalid` response with `recovery_action: "continue"` instead of misclassifying the event as a terminal `502/api_error`.
