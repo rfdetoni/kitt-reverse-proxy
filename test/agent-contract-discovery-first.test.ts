@@ -111,3 +111,26 @@ test('discovery-first contract allows mutation after a read result round trip', 
     reasoning_summary: 'Apply the next milestone.'
   })), second));
 });
+
+test('structured turn context enables discovery without preserving the textual tool contract marker', () => {
+  const staged = request([{
+    role: 'user',
+    content: `[KITT TURN CONTEXT]\n${JSON.stringify({
+      route: 'code-generation',
+      workspace_context: { files: ['.kitt-router.json'] },
+      discovery_required: true,
+      execution_phase: 'discovery'
+    })}\n[END KITT TURN CONTEXT]\n\nIntent: IMPLEMENT\n\nGoal:\nBuild the application.`
+  }]);
+  const plan = prepareAgentContractRequest(staged, {
+    sessionId: 'discovery-structured-envelope',
+    route: 'code-generation'
+  });
+
+  assert.equal(plan.discoveryRequired, true);
+  assert.equal(plan.explorationRoundTripObserved, false);
+  const user = (plan.body.messages as Array<{ role?: string; content?: string }>)
+    .find((message) => message.role === 'user')?.content ?? '';
+  assert.match(user, /EXECUTION_PHASE: discovery/);
+  assert.match(user, /exactly one read-only repository inspection/);
+});
