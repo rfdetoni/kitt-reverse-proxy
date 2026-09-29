@@ -51,13 +51,23 @@ export interface ProxyErrorDescriptor {
   status: number;
   code: string;
   message: string;
+  recoverable?: boolean;
+  recoveryAction?: 'continue' | 'retry';
 }
 
 export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   const message = error instanceof Error ? error.message : 'Erro interno do proxy.';
 
   if (error instanceof InvalidRequestError) return { status: error.status, code: error.code, message };
-  if (error instanceof AgentContractError) return { status: error.status, code: error.code, message };
+  if (error instanceof AgentContractError) {
+    return {
+      status: error.status,
+      code: error.code,
+      message,
+      ...(error.recoverable ? { recoverable: true } : {}),
+      ...(error.recoveryAction ? { recoveryAction: error.recoveryAction } : {})
+    };
+  }
   if (error instanceof RequestAbortedError) return { status: 499, code: 'request_aborted', message };
   if (error instanceof SessionLimitExceededError) return { status: 429, code: 'session_limit_exceeded', message };
   if (error instanceof SessionBusyError) return { status: 409, code: 'session_busy', message };
