@@ -32,7 +32,7 @@ export function createAnthropicRouter(manager: SessionManager): Router {
           if (result.metadata?.structured_output === 'failed' && !res.headersSent) {
             res.setHeader('X-Kitt-Structured-Output', 'failed');
           }
-          writer.finish(result.completion, bufferTools ? [] : result.deltas);
+          writer.finish(result.completion);
           return;
         }
 
