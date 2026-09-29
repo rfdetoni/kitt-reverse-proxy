@@ -1,3 +1,11 @@
+## Reverse Proxy 4.6.4 — compact staged agent bootstrap
+
+Reverse Proxy 4.6.4 prevents superprompt amplification in browser-backed Agent sessions. Generated Agent persona and the textual Tool Contract are no longer re-forwarded after the proxy has received the real tool schema structurally.
+
+Mutation turns use a compact deterministic execution plan: `discovery -> mutation -> validation`. Only one host action is requested for the current phase before waiting for its result. Trusted orchestration retained from the Agent is capped at 4 KiB, while workspace/tool schemas are sent only when the session bootstrap changes; later turns remain deltas.
+
+Contract repair remains isolated from the workspace bootstrap. Valid Gemini-style `use_tool` responses that omit nullable `content` or `reasoning_summary` are normalized locally instead of causing repair loops.
+
 ## Reverse Proxy 4.6.3 — staged agent contract
 
 Reverse Proxy 4.6.3 removes the superprompt regression in browser-backed agent execution. The first request for a stable Agent session is a bounded bootstrap with the active tool schema and workspace evidence; later tool round trips use compact delta context and rely on the named session for already-supplied bootstrap state.
