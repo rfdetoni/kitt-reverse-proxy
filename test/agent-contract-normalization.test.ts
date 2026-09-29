@@ -127,6 +127,29 @@ test('repairs literal newlines inside contract string values locally', () => {
 });
 
 
+
+test('logged Gemini-style JSON label plus omitted content does not trigger repair', () => {
+  const plan = prepareAgentContractRequest(
+    bodyWithRuntimeTool('code-generation'),
+    { sessionId: 'gemini-json-label-regression' }
+  );
+  const source = 'JSON\n' + JSON.stringify({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: {
+      operation: 'process.run',
+      arguments: {
+        argv: ['npx', '--yes', '@angular/cli@latest', '--version']
+      }
+    },
+    reasoning_summary: 'Check the Angular CLI version.'
+  });
+  const result = transformAgentContractCompletion(completion(source), plan);
+  const call = result.choices[0]?.message.tool_calls?.[0];
+  assert.equal(call?.function.name, 'kitt_runtime');
+  assert.equal(JSON.parse(call?.function.arguments || '{}').operation, 'process.run');
+});
+
 test('normalizes omitted nullable fields on a valid use_tool action', () => {
   const plan = prepareAgentContractRequest(
     bodyWithRuntimeTool('code-generation'),
