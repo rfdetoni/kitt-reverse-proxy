@@ -85,8 +85,8 @@ test('implementation route rejects final response before any mutation attempt', 
   );
 });
 
-test('mutating tool round trip allows a later final response', () => {
-  const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'mutation-observed' });
+test('mutation round trip alone does not satisfy validation requirement', () => {
+  const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'mutation-needs-validation' });
   const first = transformAgentContractCompletion(completion(contract({
     action: 'use_tool',
     tool: 'kitt_runtime',
@@ -103,17 +103,133 @@ test('mutating tool round trip allows a later final response', () => {
       role: 'tool',
       tool_call_id: toolCall.id,
       name: 'kitt_runtime',
-      content: '{"created":"backend"}'
+      content: 'HOST_STATUS: success\nHOST_OUTPUT:\ncreated backend'
     }
   ];
 
-  const secondPlan = prepareAgentContractRequest(followUp, { sessionId: 'mutation-observed' });
+  const secondPlan = prepareAgentContractRequest(followUp, { sessionId: 'mutation-needs-validation' });
   assert.equal(secondPlan.mutationRoundTripObserved, true);
+  assert.equal(secondPlan.validationRequiredBeforeFinal, true);
+  assert.equal(secondPlan.successfulValidationRoundTripObserved, false);
+  assert.throws(
+    () => transformAgentContractCompletion(completion(contract({
+      action: 'final_response',
+      content: 'Mutação concluída.'
+    })), secondPlan),
+    (error: unknown) => error instanceof AgentContractValidationError
+      && /requires a successful host build\/test\/check/i.test(error.message)
+  );
+});
+
+test('failed validation keeps final response blocked', () => {
+  const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'validation-failed' });
+  const mutation = transformAgentContractCompletion(completion(contract({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.create_directory', arguments: { path: 'backend' } }
+  })), firstPlan);
+  const mutationCall = mutation.choices[0]?.message.tool_calls?.[0];
+  assert.ok(mutationCall);
+
+  const afterMutation = body();
+  afterMutation.messages = [
+    ...(afterMutation.messages as any[]),
+    { role: 'assistant', content: null, tool_calls: [mutationCall] },
+    {
+      role: 'tool',
+      tool_call_id: mutationCall.id,
+      name: 'kitt_runtime',
+      content: 'HOST_STATUS: success\nHOST_OUTPUT:\ncreated backend'
+    }
+  ];
+
+  const validationPlan = prepareAgentContractRequest(afterMutation, { sessionId: 'validation-failed' });
+  const validation = transformAgentContractCompletion(completion(contract({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: {
+      operation: 'process.run',
+      arguments: { argv: ['npm', 'run', 'build'], cwd: 'backend' }
+    }
+  })), validationPlan);
+  const validationCall = validation.choices[0]?.message.tool_calls?.[0];
+  assert.ok(validationCall);
+
+  const afterFailure = body();
+  afterFailure.messages = [
+    ...(afterMutation.messages as any[]),
+    { role: 'assistant', content: null, tool_calls: [validationCall] },
+    {
+      role: 'tool',
+      tool_call_id: validationCall.id,
+      name: 'kitt_runtime',
+      content: 'HOST_STATUS: error\nHOST_ERROR: Command exited with code 1\nHOST_OUTPUT:\nTS2551'
+    }
+  ];
+  const failedPlan = prepareAgentContractRequest(afterFailure, { sessionId: 'validation-failed' });
+  assert.equal(failedPlan.validationRoundTripObserved, true);
+  assert.equal(failedPlan.successfulValidationRoundTripObserved, false);
+  assert.throws(
+    () => transformAgentContractCompletion(completion(contract({
+      action: 'final_response',
+      content: 'Build validado.'
+    })), failedPlan),
+    AgentContractValidationError
+  );
+});
+
+test('successful validation after mutation allows final response', () => {
+  const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'validation-success' });
+  const mutation = transformAgentContractCompletion(completion(contract({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.create_directory', arguments: { path: 'backend' } }
+  })), firstPlan);
+  const mutationCall = mutation.choices[0]?.message.tool_calls?.[0];
+  assert.ok(mutationCall);
+
+  const afterMutation = body();
+  afterMutation.messages = [
+    ...(afterMutation.messages as any[]),
+    { role: 'assistant', content: null, tool_calls: [mutationCall] },
+    {
+      role: 'tool',
+      tool_call_id: mutationCall.id,
+      name: 'kitt_runtime',
+      content: 'HOST_STATUS: success\nHOST_OUTPUT:\ncreated backend'
+    }
+  ];
+
+  const validationPlan = prepareAgentContractRequest(afterMutation, { sessionId: 'validation-success' });
+  const validation = transformAgentContractCompletion(completion(contract({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: {
+      operation: 'process.run',
+      arguments: { argv: ['npm', 'run', 'build'], cwd: 'backend' }
+    }
+  })), validationPlan);
+  const validationCall = validation.choices[0]?.message.tool_calls?.[0];
+  assert.ok(validationCall);
+
+  const afterSuccess = body();
+  afterSuccess.messages = [
+    ...(afterMutation.messages as any[]),
+    { role: 'assistant', content: null, tool_calls: [validationCall] },
+    {
+      role: 'tool',
+      tool_call_id: validationCall.id,
+      name: 'kitt_runtime',
+      content: 'HOST_STATUS: success\nHOST_OUTPUT:\nbuild completed'
+    }
+  ];
+  const successPlan = prepareAgentContractRequest(afterSuccess, { sessionId: 'validation-success' });
+  assert.equal(successPlan.successfulValidationRoundTripObserved, true);
   const result = transformAgentContractCompletion(completion(contract({
     action: 'final_response',
-    content: 'A tentativa de mutação foi executada pelo host.'
-  })), secondPlan);
-  assert.equal(result.choices[0]?.message.content, 'A tentativa de mutação foi executada pelo host.');
+    content: 'Build validado com sucesso.'
+  })), successPlan);
+  assert.equal(result.choices[0]?.message.content, 'Build validado com sucesso.');
 });
 
 test('read-only tool round trip does not satisfy mutation requirement', () => {
