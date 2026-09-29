@@ -105,7 +105,7 @@ test('Anthropic streaming starts text once and never replays emitted deltas', ()
   writer.finish({
     id: 'test', object: 'chat.completion', created: 1, model: 'claude-web',
     choices: [{ index: 0, message: { role: 'assistant', content: 'hello world' }, finish_reason: 'stop' }]
-  }, ['hello', ' world']);
+  });
   const events = output.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
   assert.equal(events.filter((event) => event.type === 'content_block_start').length, 1);
   assert.equal(events.filter((event) => event.type === 'content_block_delta').map((event) => event.delta.text).join(''), 'hello world');
