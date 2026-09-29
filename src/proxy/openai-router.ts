@@ -4,6 +4,7 @@ import { logger } from '../logger.js';
 import { adaptCompletionForLegacyFunctions, requestMayReturnToolCalls } from '../mapping/tool-calling.js';
 import {
   AGENT_CONTRACT_HEADER,
+  AGENT_CONTRACT_SYSTEM_PROMPT,
   AGENT_CONTRACT_VERSION,
   AGENT_ROUTE_HEADER,
   AgentContractError,
@@ -107,6 +108,21 @@ function actionConstraints(plan: AgentContractPlan): string[] {
   return constraints;
 }
 
+function compactContractRepairMessages(plan: AgentContractPlan): JsonObject[] {
+  const messages: JsonObject[] = [
+    { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT }
+  ];
+  const constraints = actionConstraints(plan);
+  if (constraints.length) {
+    messages.push({
+      role: 'developer',
+      content: ['[KITT ACTION CONSTRAINTS]', ...constraints, '[END KITT ACTION CONSTRAINTS]'].join('\n')
+    });
+  }
+  return messages;
+}
+
+
 export function reinforceAgentContractPlan(plan: AgentContractPlan): AgentContractPlan {
   const constraints = actionConstraints(plan);
   if (!constraints.length) return plan;
@@ -144,7 +160,7 @@ export function buildAgentContractRepairBody(
   plan: AgentContractPlan,
   validationError: AgentContractValidationError
 ): JsonObject {
-  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+  const messages = compactContractRepairMessages(plan);
   const constraints = actionConstraints(plan);
   messages.push({
     role: 'user',
@@ -164,7 +180,7 @@ export function buildAgentContractSerializationRepairBody(
   plan: AgentContractPlan,
   validationError: AgentContractValidationError
 ): JsonObject {
-  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+  const messages = compactContractRepairMessages(plan);
   const constraints = actionConstraints(plan);
   messages.push({
     role: 'user',
