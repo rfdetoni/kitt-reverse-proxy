@@ -219,3 +219,85 @@ test('protocol validation failures are client errors, never internal server erro
     await close(server, manager);
   }
 });
+
+
+test('invalid model contract stays recoverable and preserves the named session', async () => {
+  let attempts = 0;
+  const failing: ChatExecutor = {
+    modelId: 'chatgpt-web',
+    transport: 'ui',
+    async execute() {
+      attempts += 1;
+      return {
+        completion: {
+          id: `invalid-contract-${attempts}`,
+          object: 'chat.completion',
+          created: 1,
+          model: 'chatgpt-web',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'I encountered an error doing what you asked. Could you try again?' },
+            finish_reason: 'stop'
+          }]
+        },
+        deltas: []
+      };
+    },
+    describe() {
+      return {
+        reasoning: { supported: false },
+        toolCalling: 'protocol-emulated'
+      };
+    }
+  };
+  const manager = new SessionManager({
+    defaultExecutor: failing,
+    provider: 'chatgpt',
+    config,
+    factory: async () => ({ executor: failing })
+  });
+  const server = await startProxyServer({ manager, config });
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'X-Kitt-Agent-Contract': 'v1',
+        'X-Kitt-Route': 'code-generation',
+        'X-Kitt-Session-Id': 'recoverableConversation'
+      },
+      body: JSON.stringify({
+        model: 'chatgpt-web',
+        messages: [{ role: 'user', content: 'Inspect the workspace and continue.' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'kitt_runtime',
+            parameters: {
+              type: 'object',
+              properties: {
+                operation: { type: 'string', enum: ['repo.list'] },
+                arguments: { type: 'object' }
+              },
+              required: ['operation']
+            }
+          }
+        }]
+      })
+    });
+
+    assert.equal(response.status, 409);
+    const payload = await response.json() as any;
+    assert.equal(payload.error.code, 'agent_contract_invalid');
+    assert.equal(payload.error.recoverable, true);
+    assert.equal(payload.error.recovery_action, 'continue');
+    assert.equal(attempts, 3);
+    assert.equal(manager.list().some((session) => session.id === 'recoverableConversation'), true);
+  } finally {
+    await close(server, manager);
+  }
+});
