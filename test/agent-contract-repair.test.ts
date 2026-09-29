@@ -109,6 +109,25 @@ test('semantic retry includes the validation cause and available tool names', ()
 });
 
 
+
+test('semantic repair transport is compact and does not resend workspace bootstrap', () => {
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId: 'repair-compact-transport' })
+  );
+  const retry = buildAgentContractRepairBody(
+    plan,
+    new AgentContractValidationError('content must be a string or null.')
+  );
+  const content = (retry.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+
+  assert.doesNotMatch(content, /\[KITT ORCHESTRATOR TURN DATA\]/);
+  assert.doesNotMatch(content, /workspace_context/);
+  assert.doesNotMatch(content, /Create backend and frontend/);
+  assert.match(content, /\[KITT CONTRACT REPAIR\]/);
+});
+
 test('semantic repair preserves caller-visible history without volatile turn context', () => {
   const plan = reinforceAgentContractPlan(
     prepareAgentContractRequest(body(), { sessionId: 'repair-history-isolation' })
