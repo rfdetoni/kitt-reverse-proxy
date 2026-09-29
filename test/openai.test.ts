@@ -161,6 +161,31 @@ test('OpenAI errors always use a structured SDK-compatible envelope', () => {
   assert.equal(openAiErrorType(503), 'api_error');
 });
 
+test('OpenAI recoverable errors advertise the retry action without changing normal envelopes', () => {
+  let status = 0;
+  let payload: any;
+  const fake = {
+    status(value: number) { status = value; return this; },
+    json(value: unknown) { payload = value; return this; }
+  };
+  sendOpenAiError(
+    fake as never,
+    409,
+    'model output invalid',
+    'agent_contract_invalid',
+    { recoverable: true, recovery_action: 'continue' }
+  );
+  assert.equal(status, 409);
+  assert.deepEqual(payload.error, {
+    message: 'model output invalid',
+    type: 'invalid_request_error',
+    param: null,
+    code: 'agent_contract_invalid',
+    recoverable: true,
+    recovery_action: 'continue'
+  });
+});
+
 test('Chat stream completes from streamed character count without duplicating buffered text', () => {
   let output = '';
   const fake = {
