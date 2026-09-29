@@ -1,4 +1,8 @@
-## Reverse Proxy 4.6.4 — compact staged agent bootstrap
+## Reverse Proxy 4.6.6 — recoverable model-response failures
+
+Reverse Proxy 4.6.6 keeps browser-backed Agent sessions alive when the upstream model repeatedly returns an invalid Agent contract. After the built-in repair attempts are exhausted, the proxy returns a structured recoverable `agent_contract_invalid` response with `recovery_action: "continue"` instead of misclassifying the event as a terminal `502/api_error`.
+
+The named `X-Kitt-Session-Id` session is preserved so Agent CLI can offer **Continue / Retry** without reconnecting or replaying already completed host tools. Non-recoverable network, browser and protocol failures keep their normal error semantics.
 
 ## Reverse Proxy 4.6.5 — synthetic tool-call continuity
 

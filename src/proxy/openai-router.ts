@@ -348,9 +348,11 @@ async function executeAgentContract(
     recordAgentContractValidation(plan.sessionId, false);
     recordContractAttempt(plan, 'serialization-repair', serializationRetry, error);
     throw new AgentContractError(
-      502,
+      409,
       'agent_contract_invalid',
-      `O modelo violou o contrato de saída após 2 retries automáticos: ${error.message}`
+      `O modelo violou o contrato de saída após 2 retries automáticos: ${error.message}`,
+      true,
+      'continue'
     );
   }
 }

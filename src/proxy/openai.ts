@@ -130,13 +130,26 @@ export function openAiErrorType(status: number): string {
   return 'invalid_request_error';
 }
 
-export function sendOpenAiError(res: Response, status: number, message: string, code = 'proxy_error'): void {
+export interface OpenAiErrorMetadata {
+  recoverable?: boolean;
+  recovery_action?: 'continue' | 'retry';
+}
+
+export function sendOpenAiError(
+  res: Response,
+  status: number,
+  message: string,
+  code = 'proxy_error',
+  metadata: OpenAiErrorMetadata = {}
+): void {
   res.status(status).json({
     error: {
       message,
       type: openAiErrorType(status),
       param: null,
-      code
+      code,
+      ...(metadata.recoverable ? { recoverable: true } : {}),
+      ...(metadata.recovery_action ? { recovery_action: metadata.recovery_action } : {})
     }
   });
 }

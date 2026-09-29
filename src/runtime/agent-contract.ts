@@ -124,11 +124,15 @@ interface ContractStats {
 
 const statsBySession = new Map<string, ContractStats>();
 
+export type AgentRecoveryAction = 'continue' | 'retry';
+
 export class AgentContractError extends Error {
   constructor(
     public readonly status: number,
     public readonly code: string,
-    message: string
+    message: string,
+    public readonly recoverable = false,
+    public readonly recoveryAction: AgentRecoveryAction | null = null
   ) {
     super(message);
     this.name = 'AgentContractError';

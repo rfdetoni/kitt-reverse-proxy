@@ -20,7 +20,20 @@ export function sendProxyError(res: Response, error: unknown, protocol: ErrorPro
     sendAnthropicError(res, descriptor.status, descriptor.message, type);
     return;
   }
-  sendOpenAiError(res, descriptor.status, descriptor.message, descriptor.code);
+  sendOpenAiError(
+    res,
+    descriptor.status,
+    descriptor.message,
+    descriptor.code,
+    {
+      ...(descriptor.recoverable !== undefined
+        ? { recoverable: descriptor.recoverable }
+        : {}),
+      ...(descriptor.recoveryAction
+        ? { recovery_action: descriptor.recoveryAction }
+        : {})
+    }
+  );
 }
 
 export function invalidJsonError(error: unknown): InvalidRequestError | undefined {
