@@ -45,14 +45,52 @@ function contract(action: Record<string, unknown>) {
 function body(prompt = 'Implemente a solicitação sem reinterpretar meu texto.', budget = 4): JsonObject {
   return {
     model: 'chatgpt-web',
-    messages: [{
-      role: 'user',
-      content: `[KITT TURN CONTEXT]\n${JSON.stringify({
-        route: 'agent-loop',
-        loop_action_budget: budget,
-        workspace_context: { files: ['package.json', 'src/'] }
-      })}\n[END KITT TURN CONTEXT]\n\n${prompt}`
-    }],
+    messages: [{ role: 'user', content: prompt }],
+    kitt_meta: {
+      route: 'agent-loop',
+      conversation_id: 'loop-conversation',
+      turn_id: 'loop-turn',
+      request_id: `loop-request-${budget}`
+    },
+    kitt_context: {
+      schema_version: 1,
+      epoch: `loop-epoch-${budget}`,
+      segments: [
+        {
+          id: 'workspace',
+          kind: 'REPOSITORY_MAP',
+          source: 'repository',
+          trust: 'UNTRUSTED_WORKSPACE',
+          stability: 'TURN',
+          priority: 80,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'workspace',
+          token_cost: 4,
+          body_ref: { files: ['package.json', 'src/'] }
+        },
+        {
+          id: 'output',
+          kind: 'OUTPUT_CONTRACT',
+          source: 'run-coordinator',
+          trust: 'TRUSTED',
+          stability: 'TURN',
+          priority: 95,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'output',
+          token_cost: 2,
+          body_ref: {
+            loop_action_budget: budget,
+            discovery_required: true
+          }
+        }
+      ]
+    },
     tools: [{
       type: 'function',
       function: {
