@@ -266,8 +266,8 @@ test('invalid model contract stays recoverable and preserves the named session',
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'X-Kitt-Agent-Contract': 'v1',
-        'X-Kitt-Route': 'code-generation',
+        'X-Kitt-Agent-Contract': 'v2',
+        'X-Kitt-Route': 'agent-loop',
         'X-Kitt-Session-Id': 'recoverableConversation'
       },
       body: JSON.stringify({
