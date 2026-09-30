@@ -296,7 +296,7 @@ test('rejects oversized reasoning while wrapped JSON normalization is covered se
   );
 });
 
-test('mutation intent strengthens an incorrect validate-diff route from the caller', () => {
+test('caller route is authoritative regardless of mutation-like prompt wording', () => {
   const request = body('validate-diff');
   request.messages = [
     ...(request.messages as any[]).slice(0, 2),
@@ -312,14 +312,13 @@ test('mutation intent strengthens an incorrect validate-diff route from the call
   });
   const developer = String((plan.body.messages as any[])[1]?.content || '');
 
-  assert.equal(plan.route, 'code-generation');
-  assert.match(developer, /ROUTE: code-generation/);
-  assert.match(developer, /repo\.write_file/);
-  assert.match(developer, /patch\.apply/);
-  assert.match(developer, /MUTATION_REQUIRED_BEFORE_FINAL: true/);
+  assert.equal(plan.route, 'validate-diff');
+  assert.match(developer, /ROUTE: validate-diff/);
+  assert.doesNotMatch(developer, /repo\.write_file/);
+  assert.doesNotMatch(developer, /patch\.apply/);
 });
 
-test('workspace conversion request strengthens chat to code-edit', () => {
+test('workspace conversion wording does not strengthen chat route', () => {
   const request = body('chat');
   request.messages = [
     ...(request.messages as any[]).slice(0, 2),
@@ -331,11 +330,11 @@ test('workspace conversion request strengthens chat to code-edit', () => {
     route: 'chat'
   });
 
-  assert.equal(plan.route, 'code-edit');
+  assert.equal(plan.route, 'chat');
   assert.equal(plan.mutationToolAvailable, true);
 });
 
-test('explicit edit request strengthens validate-diff to code-edit', () => {
+test('explicit edit wording does not strengthen validate-diff route', () => {
   const request = body('validate-diff');
   request.messages = [
     ...(request.messages as any[]).slice(0, 2),
@@ -347,7 +346,7 @@ test('explicit edit request strengthens validate-diff to code-edit', () => {
     route: 'validate-diff'
   });
 
-  assert.equal(plan.route, 'code-edit');
+  assert.equal(plan.route, 'validate-diff');
 });
 
 test('pure validation request remains validate-diff', () => {
