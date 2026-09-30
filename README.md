@@ -1,3 +1,11 @@
+## Reverse Proxy 4.7.0 — LLM-first agent-contract v2
+
+Reverse Proxy 4.7.0 introduces the internal **agent-contract v2** and the language-neutral `agent-loop` used by Agent CLI 0.79.0. The original user request remains verbatim and WebChat is the only component that interprets its natural language, scope and intent; the proxy no longer strengthens routes from Portuguese/English keywords or project-domain heuristics.
+
+Each agent-loop response carries a bounded loop state with `objective`, `completion_criteria`, `status` and `validation_summary`. The proxy counts completed host round trips and requires a model checkpoint every configured action budget (default **4**) before another slice continues. Checkpoints are evidence-driven: they are based on actual host observations, not model claims.
+
+Safety remains deterministic. The first mutation cannot occur before repository evidence, tools remain allowlisted and schema-validated, policy/approvals stay host-side, and any mutation requires a successful build/test/check after the latest write before `final_response` when validation is available. Contract v1 compatibility is intentionally not retained; Reverse Proxy 4.7.0 is paired with Agent CLI 0.79.0.
+
 ## Reverse Proxy 4.6.8 — WebChat conversation hydration
 
 Fresh browser-backed WebChat sessions now receive the prior caller-visible API conversation exactly once before the current actionable turn. Existing stateful browser sessions continue with delta-only prompts, preventing both lost conversational context and repeated-history superprompt growth.

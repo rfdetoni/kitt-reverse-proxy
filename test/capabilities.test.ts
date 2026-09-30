@@ -72,10 +72,10 @@ test('publishes live session capacity, provider discovery and resilience state',
   try {
     const capabilities = await (await fetch(`${baseUrl}/v1/capabilities`)).json() as any;
     const agentContract = capabilities.kitt_agent_cli.agent_contract;
-    assert.equal(agentContract.version, 'v1');
+    assert.equal(agentContract.version, 'v2');
     assert.equal(agentContract.header, 'X-Kitt-Agent-Contract');
     assert.equal(agentContract.route_header, 'X-Kitt-Route');
-    assert.deepEqual(agentContract.routes, ['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'chat']);
+    assert.deepEqual(agentContract.routes, ['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'agent-loop', 'chat']);
     const sessionContract = capabilities.kitt_agent_cli.session_management;
     assert.equal(sessionContract.version, 1);
     assert.equal(sessionContract.provider, 'chatgpt');

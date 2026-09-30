@@ -114,6 +114,30 @@ function actionConstraints(plan: AgentContractPlan): string[] {
 }
 
 function contractRepairPhaseGuidance(plan: AgentContractPlan): string[] {
+  if (plan.route === 'agent-loop') {
+    if (plan.checkpointRequired) {
+      return [
+        'CURRENT_ROUTE: agent-loop',
+        'CURRENT_EXECUTION_PHASE: checkpoint',
+        `HOST_ROUND_TRIP_COUNT: ${plan.hostRoundTripCount}`,
+        `LOOP_ACTION_BUDGET: ${plan.loopActionBudget}`,
+        'NEXT_ACTION: reassess actual host evidence, set loop.status="checkpoint", update validation_summary, then choose at most one next host action.'
+      ];
+    }
+    if (plan.validationRequiredBeforeFinal && !plan.successfulValidationRoundTripObserved) {
+      return [
+        'CURRENT_ROUTE: agent-loop',
+        'CURRENT_EXECUTION_PHASE: validation',
+        'NEXT_ACTION: run one relevant host build/test/lint/check. Do not claim completion from model reasoning alone.'
+      ];
+    }
+    return [
+      'CURRENT_ROUTE: agent-loop',
+      'CURRENT_EXECUTION_PHASE: loop',
+      'NEXT_ACTION: preserve a bounded loop objective and completion criteria, then choose the next smallest host action from actual evidence.'
+    ];
+  }
+
   if (plan.route !== 'code-generation' && plan.route !== 'code-edit') {
     return [`CURRENT_ROUTE: ${plan.route}`];
   }
