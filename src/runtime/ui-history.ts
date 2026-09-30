@@ -108,6 +108,66 @@ export function selectMinimalUiPrompts(messages: readonly CanonicalMessage[]): U
   });
 }
 
+function matchesSelectedPrompt(message: CanonicalMessage, selected: UiPromptSelection): boolean {
+  if (message.role !== selected.role) return false;
+  if (message.role === 'tool') {
+    if (message.toolCallId && selected.toolCallId) return message.toolCallId === selected.toolCallId;
+    return message.text.replace(/^\[tool:[^\]]*\]\n?/i, '') === selected.text;
+  }
+  return message.text === selected.text;
+}
+
+function historyRoleLabel(message: CanonicalMessage): string {
+  if (message.role === 'user') return 'USER';
+  if (message.role === 'assistant') return 'ASSISTANT';
+  if (message.role === 'tool') return message.toolName ? `TOOL (${message.toolName})` : 'TOOL';
+  return message.role.toUpperCase();
+}
+
+/**
+ * Materialize API conversation history into a fresh browser-backed chat.
+ *
+ * Stateful web chats normally retain earlier turns themselves, so replaying the
+ * full API history on every request would duplicate context. Hydration is only
+ * emitted when the browser executor has no remembered conversation yet. Any
+ * trailing actionable message(s) that are about to be sent normally are
+ * excluded from the history envelope.
+ */
+export function buildUiHistoryHydration(
+  messages: readonly CanonicalMessage[],
+  selectedPrompts: readonly UiPromptSelection[],
+  browserHasHistory: boolean
+): string {
+  if (browserHasHistory || messages.length === 0) return '';
+
+  let contextEnd = messages.length;
+  for (let index = selectedPrompts.length - 1; index >= 0 && contextEnd > 0; index -= 1) {
+    const selected = selectedPrompts[index]!;
+    const candidate = messages[contextEnd - 1]!;
+    if (!matchesSelectedPrompt(candidate, selected)) break;
+    contextEnd -= 1;
+  }
+
+  const context = messages
+    .slice(0, contextEnd)
+    .filter((message) =>
+      !['system', 'developer'].includes(message.role)
+      && Boolean(message.text.trim())
+    );
+  if (context.length === 0) return '';
+
+  const rendered = context
+    .map((message) => `${historyRoleLabel(message)}:\n${message.text}`)
+    .join('\n\n');
+  return [
+    '[API CONVERSATION HISTORY]',
+    'These are earlier turns from the same API conversation. Use them as context for the current turn and do not answer them again.',
+    rendered,
+    '[END API CONVERSATION HISTORY]',
+    ''
+  ].join('\n');
+}
+
 export function deltaFromCumulative(previous: string, current: string): string {
   const before = previous.trim();
   const next = current.trim();

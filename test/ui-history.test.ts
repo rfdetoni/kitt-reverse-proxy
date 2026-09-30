@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalLogicalMessages, canonicalMessages, deltaFromCumulative, historyFingerprint, historyIsPrefix, selectMinimalUiPrompt, userTurnsAreCompatible } from '../src/runtime/ui-history.js';
+import { buildUiHistoryHydration, canonicalLogicalMessages, canonicalMessages, deltaFromCumulative, historyFingerprint, historyIsPrefix, selectMinimalUiPrompt, selectMinimalUiPrompts, userTurnsAreCompatible } from '../src/runtime/ui-history.js';
 
 test('canonical history keeps developer instructions and fingerprints exact retries', () => {
   const body = { messages: [{ role: 'developer', content: 'policy' }, { role: 'user', content: 'hello' }] };
@@ -31,6 +31,43 @@ test('browser policy sends only latest actionable turn without role labels', () 
   assert.equal(selected?.text, 'actual question');
   assert.equal(selected?.text.includes('System:'), false);
   assert.equal(selected?.text.includes('Assistant:'), false);
+});
+
+test('fresh browser session hydrates prior API turns without duplicating the current prompt', () => {
+  const messages = canonicalMessages({
+    messages: [
+      { role: 'system', content: 'hidden policy' },
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'developer', content: 'hidden instruction' },
+      { role: 'user', content: 'follow up' }
+    ]
+  });
+  const selected = selectMinimalUiPrompts(messages);
+  const hydration = buildUiHistoryHydration(messages, selected, false);
+
+  assert.match(hydration, /USER:\nfirst question/);
+  assert.match(hydration, /ASSISTANT:\nfirst answer/);
+  assert.equal(hydration.includes('hidden policy'), false);
+  assert.equal(hydration.includes('hidden instruction'), false);
+  assert.equal(hydration.includes('follow up'), false);
+  assert.equal(buildUiHistoryHydration(messages, selected, true), '');
+});
+
+test('repair prompt keeps the logical current user inside fresh-session hydration', () => {
+  const logical = canonicalMessages({
+    messages: [
+      { role: 'user', content: 'implement feature' },
+      { role: 'assistant', content: 'invalid contract response' }
+    ]
+  });
+  const selected = selectMinimalUiPrompts(canonicalMessages({
+    messages: [{ role: 'user', content: '[KITT CONTRACT REPAIR] return valid JSON' }]
+  }));
+
+  const hydration = buildUiHistoryHydration(logical, selected, false);
+  assert.match(hydration, /USER:\nimplement feature/);
+  assert.match(hydration, /ASSISTANT:\ninvalid contract response/);
 });
 
 test('system/developer-only requests are not injected', () => {
