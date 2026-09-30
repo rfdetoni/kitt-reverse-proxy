@@ -529,3 +529,53 @@ test('direct chat without external context resolves through final_response inste
   })), plan);
   assert.match(result.choices[0]?.message.content ?? '', /supplies dependencies/);
 });
+
+
+test('typed context envelope is lowered without textual rediscovery', () => {
+  const source = body('agent-loop', 'not_provided');
+  source.messages = [{ role: 'user', content: 'Corrija o projeto sem reescrever minha intenção.' }];
+  source.kitt_context = {
+    schema_version: 1,
+    epoch: 'conversation-1:turn-1',
+    segments: [
+      {
+        id: 'intent', kind: 'USER_INTENT', source: 'user', trust: 'TRUSTED',
+        stability: 'TURN', priority: 100, sensitivity: 'private', recovery: 'NONE',
+        cache_region: 'LIVE_ZONE', lifecycle: 'turn', provenance_digest: 'a', token_cost: 5,
+        body_ref: { text: 'Corrija o projeto sem reescrever minha intenção.' }
+      },
+      {
+        id: 'memory', kind: 'MEMORY_RECALL', source: 'kitt-memoryd', trust: 'TRUSTED',
+        stability: 'SESSION', priority: 94, sensitivity: 'private', recovery: 'SOURCE_REF',
+        cache_region: 'SESSION_PREFIX', lifecycle: 'session', provenance_digest: 'b', token_cost: 4,
+        body_ref: { text: 'decision from durable memory' }
+      },
+      {
+        id: 'repo', kind: 'REPOSITORY_MAP', source: 'repository', trust: 'UNTRUSTED_WORKSPACE',
+        stability: 'TURN', priority: 76, sensitivity: 'normal', recovery: 'RECOMPUTE',
+        cache_region: 'LIVE_ZONE', lifecycle: 'turn', provenance_digest: 'c', token_cost: 4,
+        body_ref: { text: 'src/app.ts' }
+      },
+      {
+        id: 'output', kind: 'OUTPUT_CONTRACT', source: 'run-coordinator', trust: 'TRUSTED',
+        stability: 'TURN', priority: 97, sensitivity: 'normal', recovery: 'RECOMPUTE',
+        cache_region: 'LIVE_ZONE', lifecycle: 'turn', provenance_digest: 'd', token_cost: 2,
+        body_ref: { loop_action_budget: 7, discovery_required: true }
+      }
+    ]
+  };
+
+  const plan = prepareAgentContractRequest(source, {
+    sessionId: 'typed-context',
+    route: 'agent-loop'
+  });
+  assert.equal(plan.loopActionBudget, 7);
+  assert.equal(plan.discoveryRequired, true);
+  assert.equal(plan.workspaceProvided, true);
+  const userMessage = (plan.body.messages as any[]).find((message) => message.role === 'user');
+  const lowered = String(userMessage?.content ?? '');
+  assert.match(lowered, /decision from durable memory/);
+  assert.match(lowered, /src\/app\.ts/);
+  assert.doesNotMatch(lowered, /\[KITT TURN CONTEXT\]/);
+  assert.equal(lowered.split('Corrija o projeto sem reescrever minha intenção.').length - 1, 1);
+});

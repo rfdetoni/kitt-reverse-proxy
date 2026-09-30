@@ -281,6 +281,123 @@ function boundedJson(value: unknown, label: string): string {
   return text;
 }
 
+
+interface TypedContextSegment {
+  id: string;
+  kind: string;
+  source: string;
+  trust: 'TRUSTED' | 'UNTRUSTED_WORKSPACE' | 'EXTERNAL';
+  stability: string;
+  priority: number;
+  sensitivity: string;
+  recovery: string;
+  cache_region: string;
+  lifecycle: string;
+  ttl_turns?: number | null;
+  provenance_digest: string;
+  token_cost: number;
+  body_ref: JsonValue;
+}
+
+interface TypedContextEnvelope {
+  schema_version: 1;
+  epoch: string;
+  segments: TypedContextSegment[];
+}
+
+interface TypedContextView {
+  workspaceContext: JsonValue | 'not_provided';
+  orchestratorContext: JsonValue[];
+  loopActionBudget?: number;
+  discoveryRequired?: boolean;
+  executionPhase?: string;
+}
+
+function parseTypedContextEnvelope(value: unknown): TypedContextEnvelope | undefined {
+  if (!isRecord(value) || value.schema_version !== 1 || typeof value.epoch !== 'string' || !value.epoch.trim()) {
+    return undefined;
+  }
+  if (!Array.isArray(value.segments) || value.segments.length > 256) return undefined;
+  const ids = new Set<string>();
+  const segments: TypedContextSegment[] = [];
+  for (const raw of value.segments) {
+    if (!isRecord(raw)) return undefined;
+    const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    const kind = typeof raw.kind === 'string' ? raw.kind.trim() : '';
+    const source = typeof raw.source === 'string' ? raw.source.trim() : '';
+    const trust = raw.trust;
+    if (!id || !kind || !source || ids.has(id)) return undefined;
+    if (trust !== 'TRUSTED' && trust !== 'UNTRUSTED_WORKSPACE' && trust !== 'EXTERNAL') return undefined;
+    if (!Number.isFinite(Number(raw.priority)) || !Number.isFinite(Number(raw.token_cost))) return undefined;
+    ids.add(id);
+    segments.push({
+      id,
+      kind,
+      source,
+      trust,
+      stability: typeof raw.stability === 'string' ? raw.stability : 'TURN',
+      priority: Number(raw.priority),
+      sensitivity: typeof raw.sensitivity === 'string' ? raw.sensitivity : 'normal',
+      recovery: typeof raw.recovery === 'string' ? raw.recovery : 'NONE',
+      cache_region: typeof raw.cache_region === 'string' ? raw.cache_region : 'UNCACHED',
+      lifecycle: typeof raw.lifecycle === 'string' ? raw.lifecycle : 'turn',
+      ...(typeof raw.ttl_turns === 'number' ? { ttl_turns: raw.ttl_turns } : {}),
+      provenance_digest: typeof raw.provenance_digest === 'string' ? raw.provenance_digest : '',
+      token_cost: Math.max(0, Math.trunc(Number(raw.token_cost))),
+      body_ref: (raw.body_ref ?? null) as JsonValue
+    });
+  }
+  boundedJson({ schema_version: 1, epoch: value.epoch, segments }, 'kitt_context');
+  return { schema_version: 1, epoch: value.epoch, segments };
+}
+
+function typedContextView(envelope: TypedContextEnvelope | undefined): TypedContextView | undefined {
+  if (!envelope) return undefined;
+  const workspaceSections: JsonValue[] = [];
+  const orchestratorContext: JsonValue[] = [];
+  let loopActionBudget: number | undefined;
+  let discoveryRequired: boolean | undefined;
+  let executionPhase: string | undefined;
+
+  for (const segment of envelope.segments) {
+    if (segment.kind === 'USER_INTENT') continue;
+    if (segment.kind === 'TOOL_SCHEMA') continue;
+    const body = segment.body_ref;
+    if (segment.kind === 'OUTPUT_CONTRACT' && isRecord(body)) {
+      const rawBudget = Number(body.loop_action_budget);
+      if (Number.isFinite(rawBudget)) loopActionBudget = Math.max(1, Math.min(32, Math.trunc(rawBudget)));
+      if (body.discovery_required === true) discoveryRequired = true;
+      if (typeof body.execution_phase === 'string' && body.execution_phase.trim()) {
+        executionPhase = body.execution_phase.trim();
+      }
+    }
+    const entry = {
+      id: segment.id,
+      kind: segment.kind,
+      source: segment.source,
+      trust: segment.trust,
+      stability: segment.stability,
+      recovery: segment.recovery,
+      body_ref: body
+    } as JsonValue;
+    if (segment.trust === 'UNTRUSTED_WORKSPACE') {
+      workspaceSections.push(entry);
+    } else if (segment.kind !== 'SYSTEM_INSTRUCTION') {
+      orchestratorContext.push(entry);
+    }
+  }
+
+  return {
+    workspaceContext: workspaceSections.length
+      ? ({ trust: 'UNTRUSTED_WORKSPACE_DATA', source: 'kitt-agent-cli', epoch: envelope.epoch, segments: workspaceSections } as JsonValue)
+      : 'not_provided',
+    orchestratorContext,
+    ...(loopActionBudget !== undefined ? { loopActionBudget } : {}),
+    ...(discoveryRequired !== undefined ? { discoveryRequired } : {}),
+    ...(executionPhase !== undefined ? { executionPhase } : {})
+  };
+}
+
 interface ParsedTurnContext {
   context: Record<string, unknown>;
   remainder: string;
@@ -484,21 +601,32 @@ export function prepareAgentContractRequest(
 
   const tools = extractTools(originalBody);
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
+  const typedEnvelope = parseTypedContextEnvelope(originalBody.kitt_context);
+  const typedView = typedContextView(typedEnvelope);
   const forwardedMessages: JsonValue[] = [];
-  const orchestratorContext: string[] = [];
+  const orchestratorContext: string[] = typedView?.orchestratorContext.length
+    ? [boundedJson(typedView.orchestratorContext, 'ORCHESTRATOR_CONTEXT_DATA')]
+    : [];
   const syntheticToolCalls = new Map<string, SyntheticToolCall>();
   let mutationRoundTripObserved = false;
   let validationRoundTripObserved = false;
   let successfulValidationRoundTripObserved = false;
   let explorationRoundTripObserved = false;
   let hostRoundTripCount = 0;
-  let turnContext: Record<string, unknown> | undefined;
+  let turnContext: Record<string, unknown> | undefined = typedView
+    ? {
+        workspace_context: typedView.workspaceContext,
+        ...(typedView.loopActionBudget !== undefined ? { loop_action_budget: typedView.loopActionBudget } : {}),
+        ...(typedView.discoveryRequired !== undefined ? { discovery_required: typedView.discoveryRequired } : {}),
+        ...(typedView.executionPhase ? { execution_phase: typedView.executionPhase } : {})
+      }
+    : undefined;
 
   for (const message of originalMessages) {
     const role = messageRole(message);
     const text = messageText(message);
     const parsedTurnContext = text ? parseTurnContext(text) : undefined;
-    if (parsedTurnContext) {
+    if (parsedTurnContext && !typedEnvelope) {
       turnContext = { ...(turnContext ?? {}), ...parsedTurnContext.context };
       if (parsedTurnContext.remainder) {
         if (role === 'user' && syntheticToolCalls.size === 1) {
@@ -537,7 +665,7 @@ export function prepareAgentContractRequest(
       continue;
     }
     if (role === 'system' || role === 'developer') {
-      if (text.trim()) orchestratorContext.push(text.trim());
+      if (!typedEnvelope && text.trim()) orchestratorContext.push(text.trim());
       continue;
     }
 
@@ -588,11 +716,13 @@ export function prepareAgentContractRequest(
   if (route === 'summarize') tools.clear();
   const mutationToolAvailable = hasMutationCapability(tools);
   const validationToolAvailable = hasValidationCapability(tools);
-  const compactedOrchestratorContext = orchestratorContext
-    .map(compactOrchestratorContext)
-    .filter(Boolean);
+  const compactedOrchestratorContext = typedEnvelope
+    ? orchestratorContext.filter(Boolean)
+    : orchestratorContext.map(compactOrchestratorContext).filter(Boolean);
   const discoveryRequired = MUTATION_ROUTES.has(route) && (
-    turnContext?.discovery_required === true
+    typedView?.discoveryRequired === true
+    || turnContext?.discovery_required === true
+    || typedView?.executionPhase === 'discovery'
     || turnContext?.execution_phase === 'discovery'
     || compactedOrchestratorContext.some((text) =>
       text.includes('[KITT EXECUTION SLICE: DISCOVERY]')
@@ -606,7 +736,7 @@ export function prepareAgentContractRequest(
     && mutationRoundTripObserved
     && validationToolAvailable
   );
-  const rawLoopBudget = Number(turnContext?.loop_action_budget ?? 4);
+  const rawLoopBudget = Number(typedView?.loopActionBudget ?? turnContext?.loop_action_budget ?? 4);
   const loopActionBudget = Number.isFinite(rawLoopBudget)
     ? Math.max(1, Math.min(32, Math.trunc(rawLoopBudget)))
     : 4;
@@ -615,7 +745,7 @@ export function prepareAgentContractRequest(
     && hostRoundTripCount > 0
     && hostRoundTripCount % loopActionBudget === 0
   );
-  const workspaceContext = turnContext?.workspace_context ?? 'not_provided';
+  const workspaceContext = typedView?.workspaceContext ?? turnContext?.workspace_context ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
   const reinject = shouldReinject(sessionId);
 
