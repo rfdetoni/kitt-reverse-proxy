@@ -25,15 +25,50 @@ function body(route: string): JsonObject {
   return {
     model: 'chatgpt-web',
     messages: [
-      {
-        role: 'developer',
-        content: `[KITT TURN CONTEXT]\n${JSON.stringify({
-          route,
-          workspace_context: { files: ['README.md'] }
-        })}`
-      },
       { role: 'user', content: 'Validate the current workspace.' }
-    ]
+    ],
+    kitt_meta: {
+      route,
+      conversation_id: 'normalization-conversation',
+      turn_id: 'normalization-turn',
+      request_id: `normalization-${route}`
+    },
+    kitt_context: {
+      schema_version: 1,
+      epoch: `normalization-epoch-${route}`,
+      segments: [
+        {
+          id: 'workspace',
+          kind: 'REPOSITORY_MAP',
+          source: 'repository',
+          trust: 'UNTRUSTED_WORKSPACE',
+          stability: 'TURN',
+          priority: 80,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'workspace',
+          token_cost: 4,
+          body_ref: { files: ['README.md'] }
+        },
+        {
+          id: 'output',
+          kind: 'OUTPUT_CONTRACT',
+          source: 'run-coordinator',
+          trust: 'TRUSTED',
+          stability: 'TURN',
+          priority: 95,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'output',
+          token_cost: 2,
+          body_ref: { discovery_required: false, loop_action_budget: 4 }
+        }
+      ]
+    }
   };
 }
 
