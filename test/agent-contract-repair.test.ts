@@ -111,6 +111,26 @@ test('semantic retry includes the validation cause and available tool names', ()
 
 
 
+test('semantic repair restates current phase and native runtime call shape', () => {
+  const plan = reinforceAgentContractPlan(
+    prepareAgentContractRequest(body(), { sessionId: 'repair-phase-guidance' })
+  );
+  const retry = buildAgentContractRepairBody(
+    plan,
+    new AgentContractValidationError('Invalid action.')
+  );
+  const content = (retry.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+
+  assert.match(content, /CURRENT_EXECUTION_PHASE: mutation/);
+  assert.match(content, /KITT_RUNTIME_CALL_SHAPE:/);
+  assert.match(content, /action="use_tool"/);
+  assert.match(content, /Never use action="execute_command"/);
+  assert.doesNotMatch(content, /workspace_context/);
+  assert.doesNotMatch(content, /Create backend and frontend/);
+});
+
 test('semantic repair transport is compact and does not resend workspace bootstrap', () => {
   const plan = reinforceAgentContractPlan(
     prepareAgentContractRequest(body(), { sessionId: 'repair-compact-transport' })

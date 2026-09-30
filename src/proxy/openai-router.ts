@@ -89,6 +89,11 @@ function actionConstraints(plan: AgentContractPlan): string[] {
       `AVAILABLE_TOOL_NAMES: ${JSON.stringify([...plan.tools.keys()])}`,
       'ACTION_CONSTRAINT: request_tools is forbidden because TOOLS_AVAILABLE was already supplied. If a listed tool can advance the task, use action="use_tool" with that tool.'
     );
+    if (plan.tools.has('kitt_runtime')) {
+      constraints.push(
+        'KITT_RUNTIME_CALL_SHAPE: action="use_tool", tool="kitt_runtime", tool_input={"operation":"<allowed operation>","arguments":{...}}, content=null. Never use action="execute_command" and never put command at the top level.'
+      );
+    }
   }
   if (plan.workspaceProvided) {
     constraints.push(
@@ -108,11 +113,48 @@ function actionConstraints(plan: AgentContractPlan): string[] {
   return constraints;
 }
 
+function contractRepairPhaseGuidance(plan: AgentContractPlan): string[] {
+  if (plan.route !== 'code-generation' && plan.route !== 'code-edit') {
+    return [`CURRENT_ROUTE: ${plan.route}`];
+  }
+
+  if (plan.discoveryRequired && !plan.explorationRoundTripObserved) {
+    return [
+      `CURRENT_ROUTE: ${plan.route}`,
+      'CURRENT_EXECUTION_PHASE: discovery',
+      'NEXT_ACTION: call exactly one read-only repository inspection through an available tool, then wait for the host result.'
+    ];
+  }
+  if (!plan.mutationRoundTripObserved) {
+    return [
+      `CURRENT_ROUTE: ${plan.route}`,
+      'CURRENT_EXECUTION_PHASE: mutation',
+      'NEXT_ACTION: perform the smallest evidence-backed workspace mutation through an available tool, then wait for the host result.'
+    ];
+  }
+  if (plan.validationRequiredBeforeFinal && !plan.successfulValidationRoundTripObserved) {
+    return [
+      `CURRENT_ROUTE: ${plan.route}`,
+      'CURRENT_EXECUTION_PHASE: validation',
+      'NEXT_ACTION: run one relevant host build/test/lint/check using kitt_runtime process.run. A failed or missing validation cannot be reported as completion.'
+    ];
+  }
+  return [
+    `CURRENT_ROUTE: ${plan.route}`,
+    'CURRENT_EXECUTION_PHASE: response',
+    'NEXT_ACTION: return final_response only if the requested work is complete; otherwise choose the next smallest available host action.'
+  ];
+}
+
+
 function compactContractRepairMessages(plan: AgentContractPlan): JsonObject[] {
   const messages: JsonObject[] = [
     { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT }
   ];
-  const constraints = actionConstraints(plan);
+  const constraints = [
+    ...actionConstraints(plan),
+    ...contractRepairPhaseGuidance(plan)
+  ];
   if (constraints.length) {
     messages.push({
       role: 'developer',
