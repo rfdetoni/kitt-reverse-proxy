@@ -443,7 +443,9 @@ export function normalizeAgentContractLogicalHistory(originalBody: JsonObject): 
     }
   }
 
-  return { ...originalBody, messages };
+  const logical: JsonObject = { ...originalBody, messages };
+  delete logical.kitt_context;
+  return logical;
 }
 
 function normalizeRoute(value: unknown): string {
@@ -601,7 +603,15 @@ export function prepareAgentContractRequest(
 
   const tools = extractTools(originalBody);
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
+  const hasTypedContext = originalBody.kitt_context !== undefined;
   const typedEnvelope = parseTypedContextEnvelope(originalBody.kitt_context);
+  if (hasTypedContext && !typedEnvelope) {
+    throw new AgentContractError(
+      400,
+      'agent_contract_context_invalid',
+      'kitt_context must be a valid ContextEnvelope v1.'
+    );
+  }
   const typedView = typedContextView(typedEnvelope);
   const forwardedMessages: JsonValue[] = [];
   const orchestratorContext: string[] = typedView?.orchestratorContext.length
