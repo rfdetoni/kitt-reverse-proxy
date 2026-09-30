@@ -570,6 +570,7 @@ export function prepareAgentContractRequest(
     );
   }
   const typedView = typedContextView(typedEnvelope);
+  const requestMeta = parseKittRequestMeta(originalBody.kitt_meta);
   const forwardedMessages: JsonValue[] = [];
   const orchestratorContext: string[] = typedView?.orchestratorContext.length
     ? [boundedJson(typedView.orchestratorContext, 'ORCHESTRATOR_CONTEXT_DATA')]
@@ -580,59 +581,10 @@ export function prepareAgentContractRequest(
   let successfulValidationRoundTripObserved = false;
   let explorationRoundTripObserved = false;
   let hostRoundTripCount = 0;
-  let turnContext: Record<string, unknown> | undefined = typedView
-    ? {
-        workspace_context: typedView.workspaceContext,
-        ...(typedView.loopActionBudget !== undefined ? { loop_action_budget: typedView.loopActionBudget } : {}),
-        ...(typedView.discoveryRequired !== undefined ? { discovery_required: typedView.discoveryRequired } : {}),
-        ...(typedView.executionPhase ? { execution_phase: typedView.executionPhase } : {})
-      }
-    : undefined;
-
   for (const message of originalMessages) {
     const role = messageRole(message);
     const text = messageText(message);
-    const parsedTurnContext = text ? parseTurnContext(text) : undefined;
-    if (parsedTurnContext && !typedEnvelope) {
-      turnContext = { ...(turnContext ?? {}), ...parsedTurnContext.context };
-      if (parsedTurnContext.remainder) {
-        if (role === 'user' && syntheticToolCalls.size === 1) {
-          const pending = syntheticToolCalls.entries().next().value as [string, SyntheticToolCall] | undefined;
-          if (pending) {
-            const [callId, toolCall] = pending;
-            const validationCall = isValidationTool(toolCall.name, toolCall.input);
-            if (isMutatingTool(toolCall.name, toolCall.input)) {
-              mutationRoundTripObserved = true;
-              if (!validationCall) {
-                validationRoundTripObserved = false;
-                successfulValidationRoundTripObserved = false;
-              }
-            }
-            if (validationCall) {
-              validationRoundTripObserved = true;
-              successfulValidationRoundTripObserved =
-                hostToolResultStatus(parsedTurnContext.remainder) === 'success';
-            }
-            if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
-            hostRoundTripCount += 1;
-            forwardedMessages.push(contractToolResultMessage(
-              toolCall.name,
-              callId,
-              parsedTurnContext.remainder
-            ));
-            syntheticToolCalls.delete(callId);
-          }
-        } else if (isRecord(message)) {
-          forwardedMessages.push({
-            ...message,
-            content: parsedTurnContext.remainder
-          } as JsonValue);
-        }
-      }
-      continue;
-    }
     if (role === 'system' || role === 'developer') {
-      if (!typedEnvelope && text.trim()) orchestratorContext.push(text.trim());
       continue;
     }
 
@@ -669,31 +621,27 @@ export function prepareAgentContractRequest(
     forwardedMessages.push(message);
   }
 
-  const requestedRoute = normalizeRoute(options.route ?? turnContext?.route);
-  const route = strengthenedRoute(requestedRoute, forwardedMessages);
-  if (route !== requestedRoute) {
-    logger.event('warn', 'agent.contract.route_strengthened', {
-      contract_session_id: sessionId,
-      requested_route: requestedRoute,
-      effective_route: route
-    });
+  const headerRoute = options.route !== undefined
+    ? normalizeRoute(options.route)
+    : undefined;
+  const metadataRoute = requestMeta?.route;
+  if (headerRoute && metadataRoute && headerRoute !== metadataRoute) {
+    throw new AgentContractError(
+      400,
+      'agent_contract_metadata_invalid',
+      'kitt_meta.route does not match X-Kitt-Route.'
+    );
   }
+  const route = headerRoute ?? metadataRoute ?? 'chat';
   // Context summaries must never inherit a generic runtime tool from a
   // caller's implementation prompt; this route never executes workspace work.
   if (route === 'summarize') tools.clear();
   const mutationToolAvailable = hasMutationCapability(tools);
   const validationToolAvailable = hasValidationCapability(tools);
-  const compactedOrchestratorContext = typedEnvelope
-    ? orchestratorContext.filter(Boolean)
-    : orchestratorContext.map(compactOrchestratorContext).filter(Boolean);
+  const compactedOrchestratorContext = orchestratorContext.filter(Boolean);
   const discoveryRequired = (MUTATION_ROUTES.has(route) || route === 'agent-loop') && (
     typedView?.discoveryRequired === true
-    || turnContext?.discovery_required === true
     || typedView?.executionPhase === 'discovery'
-    || turnContext?.execution_phase === 'discovery'
-    || compactedOrchestratorContext.some((text) =>
-      text.includes('[KITT EXECUTION SLICE: DISCOVERY]')
-    )
   );
   const mutationRequiredBeforeFinal = MUTATION_ROUTES.has(route)
     && mutationToolAvailable
@@ -703,7 +651,7 @@ export function prepareAgentContractRequest(
     && mutationRoundTripObserved
     && validationToolAvailable
   );
-  const rawLoopBudget = Number(typedView?.loopActionBudget ?? turnContext?.loop_action_budget ?? 4);
+  const rawLoopBudget = Number(typedView?.loopActionBudget ?? 4);
   const loopActionBudget = Number.isFinite(rawLoopBudget)
     ? Math.max(1, Math.min(32, Math.trunc(rawLoopBudget)))
     : 4;
@@ -712,7 +660,7 @@ export function prepareAgentContractRequest(
     && hostRoundTripCount > 0
     && hostRoundTripCount % loopActionBudget === 0
   );
-  const workspaceContext = typedView?.workspaceContext ?? turnContext?.workspace_context ?? 'not_provided';
+  const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
   const reinject = shouldReinject(sessionId);
 
@@ -747,6 +695,9 @@ export function prepareAgentContractRequest(
   const dynamicParts = [
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
+    ...(requestMeta?.conversation_id ? [`CONVERSATION_ID: ${requestMeta.conversation_id}`] : []),
+    ...(requestMeta?.turn_id ? [`TURN_ID: ${requestMeta.turn_id}`] : []),
+    ...(requestMeta?.request_id ? [`REQUEST_ID: ${requestMeta.request_id}`] : []),
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
     ...(MUTATION_ROUTES.has(route) ? [
       'EXECUTION_PLAN: discovery -> mutation -> validation',
