@@ -24,7 +24,47 @@ function completion(content: string): OpenAiCompletion {
   };
 }
 
-function body(route = 'chat', workspace: JsonValue = { files: ['README.md'] }): JsonObject {
+function body(
+  route = 'chat',
+  workspace: JsonValue | 'not_provided' = { files: ['README.md'] },
+  discoveryRequired = route === 'code-generation' || route === 'code-edit'
+): JsonObject {
+  const segments: JsonValue[] = [];
+  if (workspace !== 'not_provided') {
+    segments.push({
+      id: `workspace-${route}`,
+      kind: 'REPOSITORY_MAP',
+      source: 'repository',
+      trust: 'UNTRUSTED_WORKSPACE',
+      stability: 'TURN',
+      priority: 80,
+      sensitivity: 'normal',
+      recovery: 'RECOMPUTE',
+      cache_region: 'LIVE_ZONE',
+      lifecycle: 'turn',
+      provenance_digest: 'workspace',
+      token_cost: 8,
+      body_ref: workspace
+    });
+  }
+  segments.push({
+    id: `output-${route}`,
+    kind: 'OUTPUT_CONTRACT',
+    source: 'run-coordinator',
+    trust: 'TRUSTED',
+    stability: 'TURN',
+    priority: 95,
+    sensitivity: 'normal',
+    recovery: 'RECOMPUTE',
+    cache_region: 'LIVE_ZONE',
+    lifecycle: 'turn',
+    provenance_digest: 'output',
+    token_cost: 4,
+    body_ref: {
+      loop_action_budget: 4,
+      discovery_required: discoveryRequired
+    }
+  });
   return {
     model: 'chatgpt-web',
     messages: [
@@ -39,41 +79,7 @@ function body(route = 'chat', workspace: JsonValue = { files: ['README.md'] }): 
     kitt_context: {
       schema_version: 1,
       epoch: `epoch-${route}`,
-      segments: [
-        {
-          id: `workspace-${route}`,
-          kind: 'REPOSITORY_MAP',
-          source: 'repository',
-          trust: 'UNTRUSTED_WORKSPACE',
-          stability: 'TURN',
-          priority: 80,
-          sensitivity: 'normal',
-          recovery: 'RECOMPUTE',
-          cache_region: 'LIVE_ZONE',
-          lifecycle: 'turn',
-          provenance_digest: 'workspace',
-          token_cost: 8,
-          body_ref: workspace
-        },
-        {
-          id: `output-${route}`,
-          kind: 'OUTPUT_CONTRACT',
-          source: 'run-coordinator',
-          trust: 'TRUSTED',
-          stability: 'TURN',
-          priority: 95,
-          sensitivity: 'normal',
-          recovery: 'RECOMPUTE',
-          cache_region: 'LIVE_ZONE',
-          lifecycle: 'turn',
-          provenance_digest: 'output',
-          token_cost: 4,
-          body_ref: {
-            loop_action_budget: 4,
-            discovery_required: route === 'code-generation' || route === 'code-edit'
-          }
-        }
-      ]
+      segments
     },
     tools: [{
       type: 'function',
@@ -193,7 +199,10 @@ test('logical history strips typed execution metadata while preserving user mess
 });
 
 test('wrapped Agent CLI tool feedback is recovered as a synthetic tool result', () => {
-  const firstPlan = prepareAgentContractRequest(body('code-edit'), { sessionId: 'wrappedToolFeedback' });
+  const firstPlan = prepareAgentContractRequest(
+    body('code-edit', { files: ['src/example.ts'] }, false),
+    { sessionId: 'wrappedToolFeedback' }
+  );
   const firstResult = transformAgentContractCompletion(completion(JSON.stringify({
     action: 'use_tool',
     tool: 'kitt_runtime',
@@ -209,7 +218,7 @@ test('wrapped Agent CLI tool feedback is recovered as a synthetic tool result', 
   assert.ok(toolCall);
   assert.equal(firstMessage?.content, 'Vou aplicar a alteração.');
 
-  const followUp = body('code-edit');
+  const followUp = body('code-edit', { files: ['src/example.ts'] }, false);
   followUp.messages = [
     { role: 'user', content: 'corrija o arquivo do projeto' },
     { role: 'assistant', content: null, tool_calls: [toolCall] },
@@ -332,12 +341,17 @@ test('caller route is authoritative regardless of mutation-like prompt wording',
     sessionId: 'sessionStrengthenedImplement',
     route: 'validate-diff'
   });
-  const developer = String((plan.body.messages as any[])[1]?.content || '');
+  const dynamic = String(
+    (plan.body.messages as any[]).find(
+      (message) => typeof message.content === 'string'
+        && message.content.includes('[KITT ORCHESTRATOR TURN DATA]')
+    )?.content || ''
+  );
 
   assert.equal(plan.route, 'validate-diff');
-  assert.match(developer, /ROUTE: validate-diff/);
-  assert.doesNotMatch(developer, /repo\.write_file/);
-  assert.doesNotMatch(developer, /patch\.apply/);
+  assert.match(dynamic, /ROUTE: validate-diff/);
+  assert.doesNotMatch(dynamic, /repo\.write_file/);
+  assert.doesNotMatch(dynamic, /patch\.apply/);
 });
 
 test('workspace conversion wording does not strengthen chat route', () => {
@@ -389,23 +403,33 @@ test('pure validation request remains validate-diff', () => {
 test('validate-diff advertises only route-allowed runtime operations', () => {
   const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionScopedTools' });
   const messages = plan.body.messages as any[];
-  const developer = String(messages[1]?.content || '');
+  const dynamic = String(
+    messages.find(
+      (message) => typeof message.content === 'string'
+        && message.content.includes('[KITT ORCHESTRATOR TURN DATA]')
+    )?.content || ''
+  );
 
-  assert.match(developer, /repo\.read/);
-  assert.match(developer, /process\.run/);
-  assert.doesNotMatch(developer, /repo\.write_file/);
-  assert.doesNotMatch(developer, /patch\.apply/);
+  assert.match(dynamic, /repo\.read/);
+  assert.match(dynamic, /process\.run/);
+  assert.doesNotMatch(dynamic, /repo\.write_file/);
+  assert.doesNotMatch(dynamic, /patch\.apply/);
 });
 
 test('context-gather does not advertise mutating runtime operations', () => {
   const plan = prepareAgentContractRequest(body('context-gather'), { sessionId: 'sessionReadOnlyTools' });
   const messages = plan.body.messages as any[];
-  const developer = String(messages[1]?.content || '');
+  const dynamic = String(
+    messages.find(
+      (message) => typeof message.content === 'string'
+        && message.content.includes('[KITT ORCHESTRATOR TURN DATA]')
+    )?.content || ''
+  );
 
-  assert.match(developer, /repo\.read/);
-  assert.doesNotMatch(developer, /repo\.write_file/);
-  assert.doesNotMatch(developer, /patch\.apply/);
-  assert.doesNotMatch(developer, /process\.run/);
+  assert.match(dynamic, /repo\.read/);
+  assert.doesNotMatch(dynamic, /repo\.write_file/);
+  assert.doesNotMatch(dynamic, /patch\.apply/);
+  assert.doesNotMatch(dynamic, /process\.run/);
 });
 
 test('validate-diff rejects file mutation but permits validation command execution', () => {
