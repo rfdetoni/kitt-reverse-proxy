@@ -22,15 +22,50 @@ function body(): JsonObject {
   return {
     model: 'chatgpt-web',
     messages: [
-      {
-        role: 'developer',
-        content: `[KITT TURN CONTEXT]\n${JSON.stringify({
-          route: 'code-edit',
-          workspace_context: { files: ['.kitt-router.json'] }
-        })}`
-      },
       { role: 'user', content: 'Create backend and frontend.' }
     ],
+    kitt_meta: {
+      route: 'code-edit',
+      conversation_id: 'repair-conversation',
+      turn_id: 'repair-turn',
+      request_id: 'repair-request'
+    },
+    kitt_context: {
+      schema_version: 1,
+      epoch: 'repair-epoch',
+      segments: [
+        {
+          id: 'workspace',
+          kind: 'REPOSITORY_MAP',
+          source: 'repository',
+          trust: 'UNTRUSTED_WORKSPACE',
+          stability: 'TURN',
+          priority: 80,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'workspace',
+          token_cost: 4,
+          body_ref: { files: ['.kitt-router.json'] }
+        },
+        {
+          id: 'output',
+          kind: 'OUTPUT_CONTRACT',
+          source: 'run-coordinator',
+          trust: 'TRUSTED',
+          stability: 'TURN',
+          priority: 95,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'output',
+          token_cost: 2,
+          body_ref: { discovery_required: false, loop_action_budget: 4 }
+        }
+      ]
+    },
     tools: [{
       type: 'function',
       function: {
