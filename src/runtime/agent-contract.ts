@@ -411,12 +411,6 @@ function normalizeRoute(value: unknown): string {
   return ROUTES.has(route) ? route : 'chat';
 }
 
-function strengthenedRoute(requestedRoute: string, _messages: JsonValue[]): string {
-  // Contract v2 never infers natural-language intent in KITT. The caller's
-  // protocol route is authoritative; WebChat interprets the human request.
-  return requestedRoute;
-}
-
 function extractTools(body: JsonObject): Map<string, ToolDescriptor> {
   const result = new Map<string, ToolDescriptor>();
   const source = Array.isArray(body.tools)
