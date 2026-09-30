@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+const SELF_STARTED_AT_MS = Math.max(
+  0,
+  Math.floor(Date.now() - process.uptime() * 1000)
+);
+
 function digest(parts: readonly string[]): string {
   return createHash('sha256').update(parts.join('\0')).digest('hex');
 }
@@ -78,6 +83,16 @@ function posixFingerprint(pid: number): string | undefined {
 
 export function processFingerprint(pid: number): string | undefined {
   if (!processAlive(pid)) return undefined;
+  // The control plane fingerprints its own service PID most often. Avoid
+  // spawning PowerShell/ps for that hot path: the module-level start epoch is
+  // stable for this process and changes across PID reuse after restart.
+  if (pid === process.pid) {
+    return digest([
+      process.platform,
+      String(SELF_STARTED_AT_MS),
+      process.execPath
+    ]);
+  }
   if (process.platform === 'linux') return linuxFingerprint(pid);
   if (process.platform === 'win32') return windowsFingerprint(pid);
   return posixFingerprint(pid);
