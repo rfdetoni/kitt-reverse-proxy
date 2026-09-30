@@ -368,6 +368,7 @@ interface KittRequestMeta {
   conversation_id?: string;
   turn_id?: string;
   request_id?: string;
+  session_id?: string;
 }
 
 function parseKittRequestMeta(value: unknown): KittRequestMeta | undefined {
@@ -380,7 +381,7 @@ function parseKittRequestMeta(value: unknown): KittRequestMeta | undefined {
     );
   }
   const result: KittRequestMeta = {};
-  for (const key of ['conversation_id', 'turn_id', 'request_id'] as const) {
+  for (const key of ['conversation_id', 'turn_id', 'request_id', 'session_id'] as const) {
     const raw = value[key];
     if (raw === undefined) continue;
     if (typeof raw !== 'string' || !raw.trim() || raw.length > 256) {
@@ -633,6 +634,7 @@ export function prepareAgentContractRequest(
       conversation_id: requestMeta?.conversation_id,
       turn_id: requestMeta?.turn_id,
       request_id: requestMeta?.request_id,
+      session_id: requestMeta?.session_id,
       route
     });
   }
