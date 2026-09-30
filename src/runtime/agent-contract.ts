@@ -363,7 +363,7 @@ export function normalizeAgentContractLogicalHistory(originalBody: JsonObject): 
   return logical;
 }
 
-interface KittRequestMeta {
+interface KittRequestMetadata {
   route?: string;
   conversation_id?: string;
   turn_id?: string;
@@ -371,7 +371,7 @@ interface KittRequestMeta {
   session_id?: string;
 }
 
-function parseKittRequestMeta(value: unknown): KittRequestMeta | undefined {
+function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
     throw new AgentContractError(
@@ -380,7 +380,23 @@ function parseKittRequestMeta(value: unknown): KittRequestMeta | undefined {
       'kitt_meta must be an object.'
     );
   }
-  const result: KittRequestMeta = {};
+  const allowed = new Set([
+    'conversation_id',
+    'turn_id',
+    'request_id',
+    'route',
+    'session_id'
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new AgentContractError(
+        400,
+        'agent_contract_metadata_invalid',
+        `unknown kitt_meta field: ${key}`
+      );
+    }
+  }
+  const result: KittRequestMetadata = {};
   for (const key of ['conversation_id', 'turn_id', 'request_id', 'session_id'] as const) {
     const raw = value[key];
     if (raw === undefined) continue;
@@ -565,7 +581,7 @@ export function prepareAgentContractRequest(
     );
   }
   const typedView = typedContextView(typedEnvelope);
-  const requestMeta = parseKittRequestMeta(originalBody.kitt_meta);
+  const requestMeta = parseKittRequestMetadata(originalBody.kitt_meta);
   const forwardedMessages: JsonValue[] = [];
   const orchestratorContext: string[] = typedView?.orchestratorContext.length
     ? [boundedJson(typedView.orchestratorContext, 'ORCHESTRATOR_CONTEXT_DATA')]
@@ -625,6 +641,13 @@ export function prepareAgentContractRequest(
       400,
       'agent_contract_metadata_invalid',
       'kitt_meta.route does not match X-Kitt-Route.'
+    );
+  }
+  if (requestMeta?.session_id && requestMeta.session_id !== sessionId) {
+    throw new AgentContractError(
+      400,
+      'agent_contract_metadata_invalid',
+      'kitt_meta.session_id does not match X-Kitt-Session-Id.'
     );
   }
   const route = headerRoute ?? metadataRoute ?? 'chat';
