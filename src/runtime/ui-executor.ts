@@ -32,6 +32,7 @@ import {
   canonicalLogicalMessages,
   computeDeltas,
   selectMinimalUiPrompts,
+  buildUiHistoryHydration,
   historyIsPrefix,
   userTurnsAreCompatible,
   type CanonicalMessage
@@ -324,6 +325,11 @@ export class UiChatExecutor implements ChatExecutor {
     if (!selectedPrompt) {
       throw new UiAutomationError('O transporte UI exige um novo turno user ou tool para avançar a conversa.');
     }
+    const historyHydration = buildUiHistoryHydration(
+      logicalIncoming,
+      selectedPrompts,
+      this.history.length > 0
+    );
 
     const systemPrompt = incoming
       .filter((message) => ['system', 'developer'].includes(message.role))
@@ -417,7 +423,7 @@ export class UiChatExecutor implements ChatExecutor {
       actionablePrompt = `${actionablePrompt}\n\n${fallbackPublicImageUrls.map((url) => `Image: ${url}`).join('\n')}`;
     }
 
-    const prompt = `${prefix}${actionablePrompt}`;
+    const prompt = `${prefix}${historyHydration}${actionablePrompt}`;
     if (prompt.length > RESOURCE_LIMITS.uiPromptChars) {
       throw new UiAutomationError(`Prompt via UI excede ${RESOURCE_LIMITS.uiPromptChars} caracteres.`);
     }
