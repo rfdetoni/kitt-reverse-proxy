@@ -625,3 +625,32 @@ test('typed context envelope is lowered without textual rediscovery', () => {
   assert.doesNotMatch(lowered, /\[KITT TURN CONTEXT\]/);
   assert.equal(lowered.split('Corrija o projeto sem reescrever minha intenção.').length - 1, 1);
 });
+
+
+test('rejects unknown and mismatched request metadata', () => {
+  const unknown = body('chat');
+  unknown.kitt_meta = {
+    ...(unknown.kitt_meta as Record<string, unknown>),
+    unexpected: 'hidden-channel'
+  };
+  assert.throws(
+    () => prepareAgentContractRequest(unknown, {
+      sessionId: 'metadata-session',
+      route: 'chat'
+    }),
+    /unknown kitt_meta field/
+  );
+
+  const mismatch = body('chat');
+  mismatch.kitt_meta = {
+    ...(mismatch.kitt_meta as Record<string, unknown>),
+    session_id: 'session-a'
+  };
+  assert.throws(
+    () => prepareAgentContractRequest(mismatch, {
+      sessionId: 'session-b',
+      route: 'chat'
+    }),
+    /session_id does not match/
+  );
+});
