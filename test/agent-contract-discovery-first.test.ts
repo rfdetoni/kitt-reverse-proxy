@@ -25,9 +25,69 @@ function request(messages?: JsonObject[]): JsonObject {
   return {
     model: 'gemini-web',
     messages: messages ?? [
-      { role: 'system', content: '[KITT EXECUTION SLICE: DISCOVERY]\nFIRST ACTION RULE: inspect first.' },
       { role: 'user', content: 'Intent: IMPLEMENT\n\nGoal:\nBuild the application.' }
     ],
+    kitt_meta: {
+      route: 'code-generation',
+      conversation_id: 'discovery-conversation',
+      turn_id: 'discovery-turn',
+      request_id: 'discovery-request'
+    },
+    kitt_context: {
+      schema_version: 1,
+      epoch: 'discovery-epoch',
+      segments: [
+        {
+          id: 'memory',
+          kind: 'MEMORY_RECALL',
+          source: 'kitt-memoryd',
+          trust: 'TRUSTED',
+          stability: 'SESSION',
+          priority: 90,
+          sensitivity: 'private',
+          recovery: 'SOURCE_REF',
+          cache_region: 'SESSION_PREFIX',
+          lifecycle: 'session',
+          provenance_digest: 'memory',
+          token_cost: 2,
+          body_ref: { text: 'trusted memory' }
+        },
+        {
+          id: 'workspace',
+          kind: 'REPOSITORY_MAP',
+          source: 'repository',
+          trust: 'UNTRUSTED_WORKSPACE',
+          stability: 'TURN',
+          priority: 80,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'workspace',
+          token_cost: 4,
+          body_ref: { files: ['package.json'] }
+        },
+        {
+          id: 'output',
+          kind: 'OUTPUT_CONTRACT',
+          source: 'run-coordinator',
+          trust: 'TRUSTED',
+          stability: 'TURN',
+          priority: 95,
+          sensitivity: 'normal',
+          recovery: 'RECOMPUTE',
+          cache_region: 'LIVE_ZONE',
+          lifecycle: 'turn',
+          provenance_digest: 'output',
+          token_cost: 2,
+          body_ref: {
+            discovery_required: true,
+            execution_phase: 'discovery',
+            loop_action_budget: 4
+          }
+        }
+      ]
+    },
     tools: [{
       type: 'function',
       function: {
@@ -51,30 +111,9 @@ function request(messages?: JsonObject[]): JsonObject {
 
 
 test('bootstrap prompt is staged and does not resend generated persona/tool contract', () => {
-  const source = request([{
-    role: 'system',
-    content: [
-      "You are an autonomous coding agent operating inside the user's workspace.",
-      '',
-      "Tool Contract:",
-      "Available host tools: [{'name':'kitt_runtime'}]",
-      '',
-      'Memory:',
-      'trusted memory',
-      '',
-      '[KITT EXECUTION SLICE: DISCOVERY]',
-      'Inspect first.'
-    ].join('\n')
-  }, {
-    role: 'user',
-    content: `[KITT TURN CONTEXT]\n${JSON.stringify({
-      route: 'code-generation',
-      workspace_context: { files: ['package.json'] },
-      discovery_required: true,
-      execution_plan: ['discovery', 'mutation', 'validation'],
-      execution_phase: 'discovery'
-    })}\n[END KITT TURN CONTEXT]\n\nIntent: IMPLEMENT\n\nGoal:\nBuild the application.`
-  }]);
+  const source = request([
+    { role: 'user', content: 'Intent: IMPLEMENT\n\nGoal:\nBuild the application.' }
+  ]);
   const plan = prepareAgentContractRequest(source, {
     sessionId: 'staged-superprompt-regression',
     route: 'code-generation'
@@ -130,7 +169,6 @@ test('discovery-first contract allows mutation after a read result round trip', 
   assert.ok(call);
 
   const follow = request([
-    { role: 'system', content: '[KITT EXECUTION SLICE: DISCOVERY]\nFIRST ACTION RULE: inspect first.' },
     { role: 'user', content: 'Intent: IMPLEMENT\n\nGoal:\nBuild the application.' },
     { role: 'assistant', content: null, tool_calls: [call] } as unknown as JsonObject,
     { role: 'tool', tool_call_id: call.id, name: 'kitt_runtime', content: 'package.json\nsrc/' } as unknown as JsonObject
@@ -155,15 +193,9 @@ test('discovery-first contract allows mutation after a read result round trip', 
 });
 
 test('structured turn context enables discovery without preserving the textual tool contract marker', () => {
-  const staged = request([{
-    role: 'user',
-    content: `[KITT TURN CONTEXT]\n${JSON.stringify({
-      route: 'code-generation',
-      workspace_context: { files: ['.kitt-router.json'] },
-      discovery_required: true,
-      execution_phase: 'discovery'
-    })}\n[END KITT TURN CONTEXT]\n\nIntent: IMPLEMENT\n\nGoal:\nBuild the application.`
-  }]);
+  const staged = request([
+    { role: 'user', content: 'Intent: IMPLEMENT\n\nGoal:\nBuild the application.' }
+  ]);
   const plan = prepareAgentContractRequest(staged, {
     sessionId: 'discovery-structured-envelope',
     route: 'code-generation'
