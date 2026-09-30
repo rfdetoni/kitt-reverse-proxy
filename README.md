@@ -1,3 +1,9 @@
+## Reverse Proxy 4.6.8 — WebChat conversation hydration
+
+Fresh browser-backed WebChat sessions now receive the prior caller-visible API conversation exactly once before the current actionable turn. Existing stateful browser sessions continue with delta-only prompts, preventing both lost conversational context and repeated-history superprompt growth.
+
+System/developer instructions remain on the dedicated protocol path rather than being replayed as simulated chat messages, and the current user/tool turn is excluded from the hydration envelope to avoid duplication.
+
 ## Reverse Proxy 4.6.7 — validation evidence gate
 
 Agent mutation turns now carry validation state explicitly. A final response is rejected until a host build/test/check reports `HOST_STATUS: success` after the latest mutation; failed validation resets completion eligibility instead of allowing the model to claim that the project was tested successfully.
