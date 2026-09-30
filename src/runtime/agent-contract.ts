@@ -719,7 +719,7 @@ export function prepareAgentContractRequest(
   const compactedOrchestratorContext = typedEnvelope
     ? orchestratorContext.filter(Boolean)
     : orchestratorContext.map(compactOrchestratorContext).filter(Boolean);
-  const discoveryRequired = MUTATION_ROUTES.has(route) && (
+  const discoveryRequired = (MUTATION_ROUTES.has(route) || route === 'agent-loop') && (
     typedView?.discoveryRequired === true
     || turnContext?.discovery_required === true
     || typedView?.executionPhase === 'discovery'
