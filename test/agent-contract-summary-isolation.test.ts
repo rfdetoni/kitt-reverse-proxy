@@ -12,12 +12,36 @@ function summaryBody(): JsonObject {
   return {
     model: 'gemini-web',
     messages: [
-      { role: 'system', content: 'Prepare a short technical context for another model to answer the task.' },
       {
         role: 'user',
-        content: `[KITT TURN CONTEXT]\n${JSON.stringify({ route: 'summarize', workspace_context: { files: ['README.md'] } })}\n[END KITT TURN CONTEXT]\n\nTask: create backend and frontend\n\nProject map: README.md`
+        content: 'Task: create backend and frontend\n\nProject map: README.md'
       }
     ],
+    kitt_meta: {
+      route: 'summarize',
+      conversation_id: 'summary-conversation',
+      turn_id: 'summary-turn',
+      request_id: 'summary-request'
+    },
+    kitt_context: {
+      schema_version: 1,
+      epoch: 'summary-epoch',
+      segments: [{
+        id: 'workspace',
+        kind: 'REPOSITORY_MAP',
+        source: 'repository',
+        trust: 'UNTRUSTED_WORKSPACE',
+        stability: 'TURN',
+        priority: 80,
+        sensitivity: 'normal',
+        recovery: 'RECOMPUTE',
+        cache_region: 'LIVE_ZONE',
+        lifecycle: 'turn',
+        provenance_digest: 'workspace',
+        token_cost: 4,
+        body_ref: { files: ['README.md'] }
+      }]
+    },
     tools: [{
       type: 'function',
       function: {
@@ -90,7 +114,7 @@ test('agent contract marks named browser history as authoritative across local t
   assert.equal(Array.isArray(logicalMessages), true);
   assert.equal(
     (logicalMessages as Array<{ content?: string }>).some(
-      (message) => message.content?.includes('[KITT TURN CONTEXT]')
+      (message) => message.content?.includes('[KITT ORCHESTRATOR TURN DATA]')
     ),
     false
   );
