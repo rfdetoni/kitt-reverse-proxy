@@ -1,10 +1,10 @@
-## Reverse Proxy 4.7.2 — structural-only KITT transport
+## Reverse Proxy 4.7.3 — protocol-owned KITT request metadata
 
-Reverse Proxy 4.7.2 removes the last internal text-parsing compatibility path from agent-contract v2. K.I.T.T. execution context is accepted through typed `kitt_context` only, tools come from the native `tools` schema only, and route/correlation data arrives through `kitt_meta` plus the matching transport headers. Legacy `[KITT TURN CONTEXT]` and textual `Tool Contract:` parsing are no longer part of the runtime.
+Reverse Proxy 4.7.3 uses the shared Protocol `KittRequestMetadata` wire shape for `kitt_meta`, including optional session identity. K.I.T.T. execution context remains accepted through typed `kitt_context` only, tools come from the native `tools` schema only, and route/correlation metadata stays outside provider-visible logical history. Legacy `[KITT TURN CONTEXT]` and textual `Tool Contract:` parsing remain removed.
 
 `conversation_id`, `turn_id` and the unified request ID are logged as structured correlation metadata and are stripped before provider-visible logical history. Typed context likewise remains outside WebChat history, preserving the browser conversation while retry/continue flows reuse the same execution metadata and usage accounting.
 
-The agent-contract regression suite was migrated to structural fixtures, including discovery-first, mutation/validation gating, bounded-loop checkpoints, summarize isolation and repair continuity. This release pairs with Agent CLI **0.80.3**, Protocol **0.5.1** and Memory **0.6.1**.
+The agent-contract regression suite was migrated to structural fixtures, including discovery-first, mutation/validation gating, bounded-loop checkpoints, summarize isolation and repair continuity. This release pairs with Agent CLI **0.80.4**, Protocol **0.5.2** and Memory **0.6.1**.
 
 ## Reverse Proxy 4.7.0 — LLM-first agent-contract v2
 
