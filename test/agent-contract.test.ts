@@ -8,7 +8,7 @@ import {
   prepareAgentContractRequest,
   transformAgentContractCompletion
 } from '../src/runtime/agent-contract.js';
-import type { JsonObject, OpenAiCompletion } from '../src/types.js';
+import type { JsonObject, JsonValue, OpenAiCompletion } from '../src/types.js';
 
 function completion(content: string): OpenAiCompletion {
   return {
@@ -24,7 +24,7 @@ function completion(content: string): OpenAiCompletion {
   };
 }
 
-function body(route = 'chat', workspace: unknown = { files: ['README.md'] }): JsonObject {
+function body(route = 'chat', workspace: JsonValue = { files: ['README.md'] }): JsonObject {
   return {
     model: 'chatgpt-web',
     messages: [
