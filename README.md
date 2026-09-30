@@ -1,3 +1,11 @@
+## Reverse Proxy 4.7.1 — typed context continuity and process controls
+
+Reverse Proxy 4.7.1 completes the Agent CLI 0.80 agent-engineering transport path. Typed `ContextEnvelope` data remains separate from logical WebChat history, survives retry/continue flows without being rehydrated as user-visible chat, and provider usage observations are returned so the Agent can reconcile its global execution budget with actual input/output/cache usage when available.
+
+The proxy treats managed process lifecycle controls (`process.start/stdin/signal/stop/resume`) as mutations for agent-contract validation, while `process.read` remains observational. Multi-instance/browser-host identity is also cross-platform: the service fingerprints its own PID without spawning PowerShell, eliminating the Windows control-plane timeout while preserving PID-reuse protection for persisted instance records.
+
+System prompts remain English, provider plugins remain transport-owned, and the proxy does not acquire memory, autonomy or execution-budget authority.
+
 ## Reverse Proxy 4.7.0 — LLM-first agent-contract v2
 
 Reverse Proxy 4.7.0 introduces the internal **agent-contract v2** and the language-neutral `agent-loop` used by Agent CLI 0.79.0. The original user request remains verbatim and WebChat is the only component that interprets its natural language, scope and intent; the proxy no longer strengthens routes from Portuguese/English keywords or project-domain heuristics.
