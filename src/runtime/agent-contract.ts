@@ -9,13 +9,10 @@ export const AGENT_ROUTE_HEADER = 'X-Kitt-Route';
 export const AGENT_ROUTES = ['context-gather', 'summarize', 'code-generation', 'code-edit', 'validate-diff', 'agent-loop', 'chat'] as const;
 export const AGENT_CONTRACT_RETRY_PROMPT = 'Invalid output. Respond only with the contract JSON object and no extra text. Respect ROUTE and use only tools/operations present in TOOLS_AVAILABLE. When serializing file content, preserve indentation and line breaks exactly using JSON escapes; never flatten or minify the content. For repo.write_file or patch.apply with textual file content, wrap the entire JSON object in exactly one fenced ```json block so the WebChat renderer cannot reinterpret XML/HTML/Markdown/CSS before capture; write nothing outside that block.';
 
-const TURN_CONTEXT_MARKER = '[KITT TURN CONTEXT]';
-const TURN_CONTEXT_END_MARKER = '[END KITT TURN CONTEXT]';
 const TOOL_RESULT_MARKER = '[KITT TOOL RESULT DATA]';
 const TOOL_RESULT_END_MARKER = '[END KITT TOOL RESULT DATA]';
 const MAX_REASONING_SUMMARY_CHARS = 400;
 const MAX_DYNAMIC_CONTEXT_BYTES = 256 * 1024;
-const MAX_ORCHESTRATOR_CONTEXT_BYTES = 4 * 1024;
 const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
@@ -191,50 +188,6 @@ function messageRole(message: unknown): string {
   return typeof message.role === 'string' ? message.role : '';
 }
 
-const KITT_AGENT_PERSONA_PREFIX =
-  "You are an autonomous coding agent operating inside the user's workspace.";
-
-function compactOrchestratorContext(text: string): string {
-  const trimmed = text.trim();
-  const generatedExecutionPrompt = trimmed.startsWith(KITT_AGENT_PERSONA_PREFIX)
-    || trimmed.includes("Tool Contract:");
-  if (!generatedExecutionPrompt) {
-    return Buffer.from(trimmed, 'utf8').subarray(0, MAX_ORCHESTRATOR_CONTEXT_BYTES).toString('utf8').trim();
-  }
-
-  // Never forward the generated persona or textual tool contract. The proxy
-  // already owns the execution contract and receives tools structurally.
-  const markers = [
-    "Memory:",
-    "Learned Harness:",
-    "Mandatory Constraints:",
-    "[PLANNING MODE ACTIVE]",
-    "[KITT EXECUTION SLICE:"
-  ];
-  const matches = markers
-    .flatMap((marker) => {
-      const index = trimmed.indexOf(marker);
-      return index >= 0 ? [{ marker, index }] : [];
-    })
-    .sort((left, right) => left.index - right.index);
-
-  const parts: string[] = [];
-  for (let index = 0; index < matches.length; index += 1) {
-    const current = matches[index]!;
-    const end = matches[index + 1]?.index ?? trimmed.length;
-    const section = trimmed.slice(current.index, end).trim();
-    const payload = section.slice(current.marker.length).trim();
-    if (!payload && !current.marker.startsWith("[KITT ")) continue;
-    parts.push(section);
-  }
-
-  const compact = parts.join("\n\n");
-  return Buffer.from(compact, 'utf8')
-    .subarray(0, MAX_ORCHESTRATOR_CONTEXT_BYTES)
-    .toString('utf8')
-    .trim();
-}
-
 function parseToolInput(value: unknown): JsonObject {
   if (isRecord(value)) return value as JsonObject;
   if (typeof value !== 'string' || !value.trim()) return {};
@@ -403,54 +356,53 @@ function typedContextView(envelope: TypedContextEnvelope | undefined): TypedCont
   };
 }
 
-interface ParsedTurnContext {
-  context: Record<string, unknown>;
-  remainder: string;
-}
-
-function parseTurnContext(content: string): ParsedTurnContext | undefined {
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith(TURN_CONTEXT_MARKER)) return undefined;
-
-  const afterMarker = trimmed.slice(TURN_CONTEXT_MARKER.length);
-  const endIndex = afterMarker.indexOf(TURN_CONTEXT_END_MARKER);
-  const raw = (endIndex >= 0 ? afterMarker.slice(0, endIndex) : afterMarker).trim();
-  const remainder = endIndex >= 0
-    ? afterMarker.slice(endIndex + TURN_CONTEXT_END_MARKER.length).trimStart()
-    : '';
-
-  if (!raw) return { context: {}, remainder };
-  try {
-    const value = JSON.parse(raw);
-    return isRecord(value) ? { context: value, remainder } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function normalizeAgentContractLogicalHistory(originalBody: JsonObject): JsonObject {
-  const source = Array.isArray(originalBody.messages) ? originalBody.messages : [];
-  const messages: JsonValue[] = [];
-
-  for (const message of source) {
-    if (!isRecord(message)) {
-      messages.push(message);
-      continue;
-    }
-    const text = messageText(message);
-    const parsed = text ? parseTurnContext(text) : undefined;
-    if (!parsed) {
-      messages.push(message);
-      continue;
-    }
-    if (parsed.remainder) {
-      messages.push({ ...message, content: parsed.remainder } as JsonValue);
-    }
-  }
-
-  const logical: JsonObject = { ...originalBody, messages };
+  const logical: JsonObject = { ...originalBody };
   delete logical.kitt_context;
+  delete logical.kitt_meta;
   return logical;
+}
+
+interface KittRequestMeta {
+  route?: string;
+  conversation_id?: string;
+  turn_id?: string;
+  request_id?: string;
+}
+
+function parseKittRequestMeta(value: unknown): KittRequestMeta | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new AgentContractError(
+      400,
+      'agent_contract_metadata_invalid',
+      'kitt_meta must be an object.'
+    );
+  }
+  const result: KittRequestMeta = {};
+  for (const key of ['conversation_id', 'turn_id', 'request_id'] as const) {
+    const raw = value[key];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string' || !raw.trim() || raw.length > 256) {
+      throw new AgentContractError(
+        400,
+        'agent_contract_metadata_invalid',
+        `kitt_meta.${key} must be a non-empty string up to 256 characters.`
+      );
+    }
+    result[key] = raw.trim();
+  }
+  if (value.route !== undefined) {
+    if (typeof value.route !== 'string' || !value.route.trim()) {
+      throw new AgentContractError(
+        400,
+        'agent_contract_metadata_invalid',
+        'kitt_meta.route must be a non-empty string.'
+      );
+    }
+    result.route = normalizeRoute(value.route);
+  }
+  return result;
 }
 
 function normalizeRoute(value: unknown): string {
