@@ -491,6 +491,7 @@ export function prepareAgentContractRequest(
   let validationRoundTripObserved = false;
   let successfulValidationRoundTripObserved = false;
   let explorationRoundTripObserved = false;
+  let hostRoundTripCount = 0;
   let turnContext: Record<string, unknown> | undefined;
 
   for (const message of originalMessages) {
@@ -518,6 +519,7 @@ export function prepareAgentContractRequest(
                 hostToolResultStatus(parsedTurnContext.remainder) === 'success';
             }
             if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
+            hostRoundTripCount += 1;
             forwardedMessages.push(contractToolResultMessage(
               toolCall.name,
               callId,
@@ -562,6 +564,7 @@ export function prepareAgentContractRequest(
           successfulValidationRoundTripObserved = hostToolResultStatus(text) === 'success';
         }
         if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
+        hostRoundTripCount += 1;
         forwardedMessages.push(contractToolResultMessage(toolCall.name, callId, text));
         syntheticToolCalls.delete(callId);
         continue;
@@ -595,11 +598,22 @@ export function prepareAgentContractRequest(
       text.includes('[KITT EXECUTION SLICE: DISCOVERY]')
     )
   );
-  const mutationRequiredBeforeFinal = MUTATION_ROUTES.has(route) && mutationToolAvailable && !mutationRoundTripObserved;
+  const mutationRequiredBeforeFinal = MUTATION_ROUTES.has(route)
+    && mutationToolAvailable
+    && !mutationRoundTripObserved;
   const validationRequiredBeforeFinal = (
-    MUTATION_ROUTES.has(route)
+    (MUTATION_ROUTES.has(route) || route === 'agent-loop')
     && mutationRoundTripObserved
     && validationToolAvailable
+  );
+  const rawLoopBudget = Number(turnContext?.loop_action_budget ?? 4);
+  const loopActionBudget = Number.isFinite(rawLoopBudget)
+    ? Math.max(1, Math.min(32, Math.trunc(rawLoopBudget)))
+    : 4;
+  const checkpointRequired = (
+    route === 'agent-loop'
+    && hostRoundTripCount > 0
+    && hostRoundTripCount % loopActionBudget === 0
   );
   const workspaceContext = turnContext?.workspace_context ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
@@ -625,7 +639,13 @@ export function prepareAgentContractRequest(
     ? (!explorationRoundTripObserved && discoveryRequired
         ? 'discovery'
         : (!mutationRoundTripObserved ? 'mutation' : 'validation'))
-    : 'response';
+    : route === 'agent-loop'
+      ? (checkpointRequired
+          ? 'checkpoint'
+          : (mutationRoundTripObserved && validationRequiredBeforeFinal && !successfulValidationRoundTripObserved
+              ? 'validation'
+              : 'loop'))
+      : 'response';
 
   const dynamicParts = [
     '[KITT ORCHESTRATOR TURN DATA]',
@@ -635,6 +655,20 @@ export function prepareAgentContractRequest(
       'EXECUTION_PLAN: discovery -> mutation -> validation',
       `EXECUTION_PHASE: ${executionPhase}`,
       'PHASE_RULE: choose one host action for the current phase, wait for its result, then continue; never plan the entire implementation inside one tool call.'
+    ] : []),
+    ...(route === 'agent-loop' ? [
+      'LLM_FIRST_EXECUTION: true',
+      'ORIGINAL_USER_REQUEST_IS_AUTHORITATIVE: true',
+      `EXECUTION_PHASE: ${executionPhase}`,
+      `LOOP_ACTION_BUDGET: ${loopActionBudget}`,
+      `HOST_ROUND_TRIP_COUNT: ${hostRoundTripCount}`,
+      `CHECKPOINT_REQUIRED: ${checkpointRequired}`,
+      checkpointRequired
+        ? 'CHECKPOINT_RULE: before choosing the next host action, reassess the current loop against actual host evidence and return loop.status="checkpoint".'
+        : 'LOOP_RULE: maintain one bounded loop objective and completion criteria; choose only the next smallest host action from evidence.',
+      hostRoundTripCount === 0
+        ? 'FIRST_ACTION_CONSTRAINT: the first host action must inspect relevant repository evidence before any mutation.'
+        : 'HOST_EVIDENCE_AVAILABLE: true'
     ] : []),
     ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
     ...(route === 'chat' && tools.size === 0 && !workspaceProvided ? [DIRECT_CHAT_ROUTE_INSTRUCTION] : []),
@@ -705,6 +739,9 @@ export function prepareAgentContractRequest(
     validationRequiredBeforeFinal,
     discoveryRequired,
     explorationRoundTripObserved,
+    hostRoundTripCount,
+    loopActionBudget,
+    checkpointRequired,
     sessionId
   };
 }
