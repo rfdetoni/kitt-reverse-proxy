@@ -980,7 +980,8 @@ function recoverMalformedRepoWriteFileContract(text: string): AgentContractRespo
       }
     },
     content: null,
-    reasoning_summary: reasoningSummary
+    reasoning_summary: reasoningSummary,
+    loop: null
   };
 }
 
@@ -1025,7 +1026,8 @@ function contractFromBareRuntimeOperation(text: string): AgentContractResponse |
       arguments: args as JsonObject
     },
     content: null,
-    reasoning_summary: ''
+    reasoning_summary: '',
+    loop: null
   };
 }
 
@@ -1050,7 +1052,8 @@ function contractFromKittToolEnvelope(text: string): AgentContractResponse | und
     tool: name,
     tool_input: input as JsonObject,
     content: null,
-    reasoning_summary: ''
+    reasoning_summary: '',
+    loop: null
   };
 }
 
@@ -1156,8 +1159,9 @@ function parseStrictContract(text: string): AgentContractResponse {
   if (!Object.prototype.hasOwnProperty.call(value, 'tool_input')) value.tool_input = null;
   if (!Object.prototype.hasOwnProperty.call(value, 'content')) value.content = null;
   if (!Object.prototype.hasOwnProperty.call(value, 'reasoning_summary')) value.reasoning_summary = '';
+  if (!Object.prototype.hasOwnProperty.call(value, 'loop')) value.loop = null;
 
-  const expected = new Set(['action', 'tool', 'tool_input', 'content', 'reasoning_summary']);
+  const expected = new Set(['action', 'tool', 'tool_input', 'content', 'reasoning_summary', 'loop']);
   const keys = Object.keys(value);
   if (!Object.prototype.hasOwnProperty.call(value, 'action')) {
     throw new AgentContractValidationError('Missing required field: action.');
@@ -1179,6 +1183,36 @@ function parseStrictContract(text: string): AgentContractResponse {
   }
   if (sentenceCount(value.reasoning_summary) > 2) {
     throw new AgentContractValidationError('reasoning_summary must contain at most 2 sentences.');
+  }
+
+  if (value.loop !== null) {
+    if (!isRecord(value.loop)) throw new AgentContractValidationError('loop must be an object or null.');
+    const loopKeys = Object.keys(value.loop);
+    const allowedLoopKeys = new Set(['objective', 'completion_criteria', 'status', 'validation_summary']);
+    if (loopKeys.some((key) => !allowedLoopKeys.has(key))) {
+      throw new AgentContractValidationError('loop contains fields outside the contract.');
+    }
+    const objective = value.loop.objective;
+    const criteria = value.loop.completion_criteria;
+    const status = value.loop.status;
+    const validationSummary = value.loop.validation_summary;
+    if (typeof objective !== 'string' || !objective.trim() || objective.length > 500) {
+      throw new AgentContractValidationError('loop.objective must be a non-empty string up to 500 characters.');
+    }
+    if (
+      !Array.isArray(criteria)
+      || criteria.length < 1
+      || criteria.length > 8
+      || criteria.some((item) => typeof item !== 'string' || !item.trim() || item.length > 300)
+    ) {
+      throw new AgentContractValidationError('loop.completion_criteria must contain 1 to 8 non-empty strings up to 300 characters each.');
+    }
+    if (!['active', 'checkpoint', 'complete'].includes(String(status))) {
+      throw new AgentContractValidationError('loop.status must be active, checkpoint, or complete.');
+    }
+    if (typeof validationSummary !== 'string' || validationSummary.length > 600) {
+      throw new AgentContractValidationError('loop.validation_summary must be a string up to 600 characters.');
+    }
   }
 
   return value as unknown as AgentContractResponse;
@@ -1249,6 +1283,19 @@ function routeAllowsTool(route: string, name: string, input: JsonObject): boolea
 }
 
 function validateSemantics(response: AgentContractResponse, plan: AgentContractPlan): void {
+  if (plan.route === 'agent-loop' && response.loop === null) {
+    throw new AgentContractValidationError('The agent-loop route requires loop state on every response.');
+  }
+  if (
+    plan.route === 'agent-loop'
+    && plan.checkpointRequired
+    && response.loop?.status !== 'checkpoint'
+    && response.action !== 'final_response'
+  ) {
+    throw new AgentContractValidationError(
+      'The current agent-loop action budget is exhausted. Reassess host evidence and return loop.status=checkpoint before continuing.'
+    );
+  }
   if (plan.route === 'summarize' && response.action !== 'final_response') {
     throw new AgentContractValidationError('The summarize route requires action=final_response.');
   }
@@ -1271,6 +1318,18 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
         'Discovery-first execution requires a read-only repository inspection before other actions.'
       );
     }
+    if (
+      plan.route === 'agent-loop'
+      && plan.hostRoundTripCount === 0
+      && isMutatingTool(response.tool, response.tool_input)
+    ) {
+      throw new AgentContractValidationError(
+        'The first agent-loop host action must inspect repository evidence before any mutation.'
+      );
+    }
+    if (plan.route === 'agent-loop' && response.loop?.status === 'complete') {
+      throw new AgentContractValidationError('use_tool on agent-loop cannot use loop.status=complete.');
+    }
     if (tool.parameters !== undefined) {
       const validation = validateJsonSchema(response.tool_input, tool.parameters);
       if (!validation.valid) {
@@ -1287,6 +1346,9 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
   }
   if (response.action === 'final_response' && response.content === null) {
     throw new AgentContractValidationError('final_response requires content to be a string.');
+  }
+  if (response.action === 'final_response' && plan.route === 'agent-loop' && response.loop?.status !== 'complete') {
+    throw new AgentContractValidationError('final_response on agent-loop requires loop.status=complete.');
   }
   if (
     response.action === 'final_response'
@@ -1377,7 +1439,8 @@ export function transformAgentContractCompletion(
           tool: null,
           tool_input: null,
           content: source.trim(),
-          reasoning_summary: ''
+          reasoning_summary: '',
+          loop: null
         };
         logger.event('warn', 'agent.contract.text_fallback', {
           contract_session_id: plan.sessionId,
