@@ -335,50 +335,9 @@ function normalizeRoute(value: unknown): string {
   return ROUTES.has(route) ? route : 'chat';
 }
 
-const MUTATION_EDIT_TERMS = [
-  'corrija', 'corrigir', 'conserte', 'consertar', 'repare', 'reparar',
-  'refatore', 'refatorar', 'atualize', 'atualizar', 'modifique', 'modificar',
-  'altere', 'alterar', 'edite', 'editar', 'remova', 'remover',
-  'converta', 'converter', 'convert', 'migre', 'migrar', 'migrate',
-  'troque', 'trocar', 'substitua', 'substituir', 'replace', 'switch',
-  'porte', 'portar', 'port', 'fix', 'repair', 'refactor', 'update',
-  'modify', 'change', 'edit', 'remove', 'delete'
-];
-const MUTATION_CREATE_TERMS = [
-  'crie', 'criar', 'cria', 'implemente', 'implementar', 'gere', 'gerar',
-  'construa', 'monte', 'create', 'build', 'implement', 'generate', 'scaffold', 'write', 'mkdir'
-];
-const WORKSPACE_TARGET_TERMS = [
-  'projeto', 'project', 'site', 'app', 'aplicação', 'aplicacao', 'backend',
-  'frontend', 'front end', 'workspace', 'repositório', 'repositorio', 'repository',
-  'repo', 'arquivo', 'file', 'pasta', 'folder', 'diretório', 'diretorio',
-  'directory', 'código', 'codigo', 'code'
-];
-
-function realUserTexts(messages: JsonValue[]): string[] {
-  return messages
-    .filter((message) => messageRole(message) === 'user')
-    .map((message) => messageText(message).trim())
-    .filter((text) => text && !text.startsWith('[KITT TOOL RESULT DATA]') && !text.startsWith('[KITT '));
-}
-
-function strengthenedRoute(requestedRoute: string, messages: JsonValue[]): string {
-  if (requestedRoute === 'summarize') return requestedRoute;
-  const texts = realUserTexts(messages);
-
-  for (const text of texts) {
-    const semantic = text.match(/(?:^|\n)\s*Intent:\s*(IMPLEMENT|DEBUG|REFACTOR)\s*(?:\n|$)/i)?.[1]?.toUpperCase();
-    if (semantic === 'IMPLEMENT') return 'code-generation';
-    if (semantic === 'DEBUG' || semantic === 'REFACTOR') return 'code-edit';
-  }
-
-  for (const text of texts) {
-    const normalized = text.toLocaleLowerCase('pt-BR');
-    if (!WORKSPACE_TARGET_TERMS.some((term) => normalized.includes(term))) continue;
-    if (MUTATION_EDIT_TERMS.some((term) => normalized.includes(term))) return 'code-edit';
-    if (MUTATION_CREATE_TERMS.some((term) => normalized.includes(term))) return 'code-generation';
-  }
-
+function strengthenedRoute(requestedRoute: string, _messages: JsonValue[]): string {
+  // Contract v2 never infers natural-language intent in KITT. The caller's
+  // protocol route is authoritative; WebChat interprets the human request.
   return requestedRoute;
 }
 
