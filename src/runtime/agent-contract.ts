@@ -633,6 +633,15 @@ export function prepareAgentContractRequest(
     );
   }
   const route = headerRoute ?? metadataRoute ?? 'chat';
+  if (requestMeta?.conversation_id || requestMeta?.turn_id || requestMeta?.request_id) {
+    logger.event('info', 'agent.contract.correlation', {
+      contract_session_id: sessionId,
+      conversation_id: requestMeta?.conversation_id,
+      turn_id: requestMeta?.turn_id,
+      request_id: requestMeta?.request_id,
+      route
+    });
+  }
   // Context summaries must never inherit a generic runtime tool from a
   // caller's implementation prompt; this route never executes workspace work.
   if (route === 'summarize') tools.clear();
@@ -695,9 +704,6 @@ export function prepareAgentContractRequest(
   const dynamicParts = [
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
-    ...(requestMeta?.conversation_id ? [`CONVERSATION_ID: ${requestMeta.conversation_id}`] : []),
-    ...(requestMeta?.turn_id ? [`TURN_ID: ${requestMeta.turn_id}`] : []),
-    ...(requestMeta?.request_id ? [`REQUEST_ID: ${requestMeta.request_id}`] : []),
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
     ...(MUTATION_ROUTES.has(route) ? [
       'EXECUTION_PLAN: discovery -> mutation -> validation',
@@ -768,6 +774,7 @@ export function prepareAgentContractRequest(
   delete body.parallel_tool_calls;
   delete body.response_format;
   delete body.kitt_context;
+  delete body.kitt_meta;
   body.messages = [
     { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT },
     ...prependDynamicUserTurn(forwardedMessages, dynamicParts.join('\n'))
