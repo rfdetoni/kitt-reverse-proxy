@@ -1,10 +1,10 @@
-## Reverse Proxy 4.7.1 — typed context continuity and process controls
+## Reverse Proxy 4.7.2 — structural-only KITT transport
 
-Reverse Proxy 4.7.1 completes the Agent CLI 0.80 agent-engineering transport path. Typed `ContextEnvelope` data remains separate from logical WebChat history, survives retry/continue flows without being rehydrated as user-visible chat, and provider usage observations are returned so the Agent can reconcile its global execution budget with actual input/output/cache usage when available.
+Reverse Proxy 4.7.2 removes the last internal text-parsing compatibility path from agent-contract v2. K.I.T.T. execution context is accepted through typed `kitt_context` only, tools come from the native `tools` schema only, and route/correlation data arrives through `kitt_meta` plus the matching transport headers. Legacy `[KITT TURN CONTEXT]` and textual `Tool Contract:` parsing are no longer part of the runtime.
 
-The proxy treats managed process lifecycle controls (`process.start/stdin/signal/stop/resume`) as mutations for agent-contract validation, while `process.read` remains observational. Multi-instance/browser-host identity is also cross-platform: the service fingerprints its own PID without spawning PowerShell, eliminating the Windows control-plane timeout while preserving PID-reuse protection for persisted instance records.
+`conversation_id`, `turn_id` and the unified request ID are logged as structured correlation metadata and are stripped before provider-visible logical history. Typed context likewise remains outside WebChat history, preserving the browser conversation while retry/continue flows reuse the same execution metadata and usage accounting.
 
-System prompts remain English, provider plugins remain transport-owned, and the proxy does not acquire memory, autonomy or execution-budget authority.
+The agent-contract regression suite was migrated to structural fixtures, including discovery-first, mutation/validation gating, bounded-loop checkpoints, summarize isolation and repair continuity. This release pairs with Agent CLI **0.80.3**, Protocol **0.5.1** and Memory **0.6.1**.
 
 ## Reverse Proxy 4.7.0 — LLM-first agent-contract v2
 
