@@ -91,6 +91,20 @@ jobs:
             exit 1
           fi
 
+          if [[ "$relation" == "equal" ]]; then
+            tag="v${current}"
+            head="$(git rev-parse HEAD)"
+            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "Version $current matches the latest release, but immutable tag $tag is missing." >&2
+              exit 1
+            fi
+            tagged="$(git rev-list -n1 "$tag")"
+            if [[ "$tagged" != "$head" ]]; then
+              echo "Version $current was already released at $tagged, but validated SHA $head contains unpublished changes. Bump the package version instead of moving the immutable tag." >&2
+              exit 1
+            fi
+          fi
+
       - name: No release required
         if: steps.state.outputs.relation == 'equal'
         run: echo "Validated main already matches v${{ steps.state.outputs.current }}; no release required."
