@@ -1,3 +1,11 @@
+## Reverse Proxy 4.7.5 — persistent bounded-loop checkpoints and compact recovery
+
+Reverse Proxy 4.7.5 fixes the agent-loop action budget so checkpoints are scoped to a bounded loop rather than inferred from global tool-call multiples. Checkpoint tool responses are now marked structurally, allowing the next host result to start a new loop epoch with `LOOP_ACTION_COUNT=1` instead of incorrectly clearing/retriggering checkpoints based on `HOST_ROUND_TRIP_COUNT % budget`.
+
+The orchestrator now exposes `LOOP_INDEX`, `LOOP_ACTION_COUNT`, `LOOP_ACTION_BUDGET` and `TURN_TOOL_CALL_COUNT` while retaining the total host round-trip counter for diagnostics. Contract-failure bootstrap reinjection also uses a bounded recent-validation window and cooldown, preventing a small number of early malformed responses from forcing repeated full-context bootstrap requests.
+
+This release pairs with Agent CLI **0.81.1**.
+
 ## Reverse Proxy 4.7.4 — protocol-owned request metadata and immutable releases
 
 Reverse Proxy 4.7.4 keeps the shared Protocol `KittRequestMetadata` wire shape for `kitt_meta`, including optional session identity. K.I.T.T. execution context remains accepted through typed `kitt_context` only, tools come from the native `tools` schema only, and route/correlation metadata stays outside provider-visible logical history. Legacy `[KITT TURN CONTEXT]` and textual `Tool Contract:` parsing remain removed.

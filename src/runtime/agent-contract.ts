@@ -121,6 +121,7 @@ interface SyntheticToolCall {
   id: string;
   name: string;
   input: JsonObject;
+  startsNewLoop: boolean;
 }
 
 export interface AgentContractPlan {
@@ -138,6 +139,8 @@ export interface AgentContractPlan {
   discoveryRequired: boolean;
   explorationRoundTripObserved: boolean;
   hostRoundTripCount: number;
+  loopIndex: number;
+  loopActionCount: number;
   loopActionBudget: number;
   checkpointRequired: boolean;
   sessionId: string;
@@ -147,6 +150,8 @@ interface ContractStats {
   turns: number;
   validations: number;
   failures: number;
+  recentValidationOutcomes: boolean[];
+  lastReinjectTurn?: number;
   contextFingerprint?: string;
 }
 
@@ -211,7 +216,8 @@ function syntheticAssistantToolCalls(message: unknown): SyntheticToolCall[] {
     calls.push({
       id: raw.id.trim(),
       name: fn.name.trim(),
-      input: parseToolInput(fn.arguments)
+      input: parseToolInput(fn.arguments),
+      startsNewLoop: raw.id.trim().startsWith('call_loop_')
     });
   }
   return calls;
@@ -517,7 +523,7 @@ function ensureStats(sessionId: string): ContractStats {
       const oldest = statsBySession.keys().next().value as string | undefined;
       if (oldest) statsBySession.delete(oldest);
     }
-    stats = { turns: 0, validations: 0, failures: 0 };
+    stats = { turns: 0, validations: 0, failures: 0, recentValidationOutcomes: [] };
     statsBySession.set(sessionId, stats);
   }
   return stats;
@@ -525,14 +531,30 @@ function ensureStats(sessionId: string): ContractStats {
 
 function shouldReinject(sessionId: string): boolean {
   const stats = ensureStats(sessionId);
-  if (stats.turns > 0 && stats.turns % REINJECT_EVERY_TURNS === 0) return true;
-  return stats.failures >= 2 && stats.validations > 0 && stats.failures / stats.validations >= 0.2;
+  const sinceLast = stats.lastReinjectTurn === undefined
+    ? Number.POSITIVE_INFINITY
+    : stats.turns - stats.lastReinjectTurn;
+  const periodic = stats.turns > 0 && stats.turns % REINJECT_EVERY_TURNS === 0;
+  const recent = stats.recentValidationOutcomes.slice(-8);
+  const recentFailures = recent.filter((ok) => !ok).length;
+  const failureDriven = recent.length >= 4
+    && recentFailures >= 2
+    && recentFailures / recent.length >= 0.25;
+  if ((periodic || failureDriven) && sinceLast >= 4) {
+    stats.lastReinjectTurn = stats.turns;
+    return true;
+  }
+  return false;
 }
 
 export function recordAgentContractValidation(sessionId: string, ok: boolean): void {
   const stats = ensureStats(sessionId);
   stats.validations += 1;
   if (!ok) stats.failures += 1;
+  stats.recentValidationOutcomes.push(ok);
+  if (stats.recentValidationOutcomes.length > 16) {
+    stats.recentValidationOutcomes.splice(0, stats.recentValidationOutcomes.length - 16);
+  }
   const failureRate = stats.validations === 0 ? 0 : stats.failures / stats.validations;
   logger.event(ok ? 'info' : 'warn', 'agent.contract.validation', {
     contract_session_id: sessionId,
@@ -592,6 +614,8 @@ export function prepareAgentContractRequest(
   let successfulValidationRoundTripObserved = false;
   let explorationRoundTripObserved = false;
   let hostRoundTripCount = 0;
+  let loopIndex = 1;
+  let loopActionCount = 0;
   for (const message of originalMessages) {
     const role = messageRole(message);
     const text = messageText(message);
@@ -623,6 +647,12 @@ export function prepareAgentContractRequest(
         }
         if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
         hostRoundTripCount += 1;
+        if (toolCall.startsNewLoop) {
+          loopIndex += 1;
+          loopActionCount = 1;
+        } else {
+          loopActionCount += 1;
+        }
         forwardedMessages.push(contractToolResultMessage(toolCall.name, callId, text));
         syntheticToolCalls.delete(callId);
         continue;
@@ -685,8 +715,7 @@ export function prepareAgentContractRequest(
     : 4;
   const checkpointRequired = (
     route === 'agent-loop'
-    && hostRoundTripCount > 0
-    && hostRoundTripCount % loopActionBudget === 0
+    && loopActionCount >= loopActionBudget
   );
   const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
@@ -733,7 +762,10 @@ export function prepareAgentContractRequest(
       'LLM_FIRST_EXECUTION: true',
       'ORIGINAL_USER_REQUEST_IS_AUTHORITATIVE: true',
       `EXECUTION_PHASE: ${executionPhase}`,
+      `LOOP_INDEX: ${loopIndex}`,
+      `LOOP_ACTION_COUNT: ${loopActionCount}`,
       `LOOP_ACTION_BUDGET: ${loopActionBudget}`,
+      `TURN_TOOL_CALL_COUNT: ${hostRoundTripCount}`,
       `HOST_ROUND_TRIP_COUNT: ${hostRoundTripCount}`,
       `CHECKPOINT_REQUIRED: ${checkpointRequired}`,
       checkpointRequired
@@ -814,6 +846,8 @@ export function prepareAgentContractRequest(
     discoveryRequired,
     explorationRoundTripObserved,
     hostRoundTripCount,
+    loopIndex,
+    loopActionCount,
     loopActionBudget,
     checkpointRequired,
     sessionId
@@ -1546,7 +1580,7 @@ export function transformAgentContractCompletion(
     const input = response.tool_input!;
     choice.message.content = response.reasoning_summary.trim() || null;
     choice.message.tool_calls = [{
-      id: `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      id: `${response.loop?.status === 'checkpoint' ? 'call_loop_' : 'call_'}${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       type: 'function',
       function: { name: tool, arguments: JSON.stringify(input) }
     }];
