@@ -92,7 +92,9 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
       version: AGENT_CONTRACT_VERSION,
       header: AGENT_CONTRACT_HEADER,
       route_header: AGENT_ROUTE_HEADER,
-      routes: [...AGENT_ROUTES]
+      routes: [...AGENT_ROUTES],
+      features: ['host_execution_state_v1', 'task_plan_v1', 'subagent_report_v1', 'hierarchical_request_metadata'],
+      limits: { max_plan_tasks: 12, max_plan_bytes: 32768 }
     },
     session_header: 'X-Kitt-Session-Id',
     request_id_header: 'X-Kitt-Request-Id',

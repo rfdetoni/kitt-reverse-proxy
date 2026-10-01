@@ -143,6 +143,7 @@ export interface AgentContractPlan {
   loopActionCount: number;
   loopActionBudget: number;
   checkpointRequired: boolean;
+  hostCompletionReady?: boolean;
   sessionId: string;
 }
 
@@ -269,12 +270,31 @@ interface TypedContextEnvelope {
   segments: TypedContextSegment[];
 }
 
+interface HostExecutionState {
+  schema_version: 1; conversation_id: string; turn_id: string;
+  tool_call_count: number; mutation_count: number; verified_mutation_count: number;
+  discovery_observed: boolean; validation_observed: boolean; completion_ready: boolean;
+}
+
+function parseHostExecutionState(value: unknown): HostExecutionState {
+  if (!isRecord(value) || value.schema_version !== 1
+      || typeof value.conversation_id !== 'string' || !value.conversation_id.trim()
+      || typeof value.turn_id !== 'string' || !value.turn_id.trim()
+      || ['tool_call_count', 'mutation_count', 'verified_mutation_count'].some(k => !Number.isSafeInteger(value[k]) || Number(value[k]) < 0)
+      || ['discovery_observed', 'validation_observed', 'completion_ready'].some(k => typeof value[k] !== 'boolean')
+      || Number(value.verified_mutation_count) > Number(value.mutation_count)) {
+    throw new AgentContractError(400, 'agent_contract_context_invalid', 'Invalid host_execution state.');
+  }
+  return value as unknown as HostExecutionState;
+}
+
 interface TypedContextView {
   workspaceContext: JsonValue | 'not_provided';
   orchestratorContext: JsonValue[];
   loopActionBudget?: number;
   discoveryRequired?: boolean;
   executionPhase?: string;
+  hostExecution?: HostExecutionState;
 }
 
 function parseTypedContextEnvelope(value: unknown): TypedContextEnvelope | undefined {
@@ -322,12 +342,19 @@ function typedContextView(envelope: TypedContextEnvelope | undefined): TypedCont
   let loopActionBudget: number | undefined;
   let discoveryRequired: boolean | undefined;
   let executionPhase: string | undefined;
+  let hostExecution: HostExecutionState | undefined;
 
   for (const segment of envelope.segments) {
     if (segment.kind === 'USER_INTENT') continue;
     if (segment.kind === 'TOOL_SCHEMA') continue;
     const body = segment.body_ref;
     if (segment.kind === 'OUTPUT_CONTRACT' && isRecord(body)) {
+      if (body.host_execution !== undefined) {
+        if (segment.source !== 'host-execution' || segment.trust !== 'TRUSTED' || hostExecution !== undefined) {
+          throw new AgentContractError(400, 'agent_contract_context_invalid', 'host_execution requires one trusted host-execution segment.');
+        }
+        hostExecution = parseHostExecutionState(body.host_execution);
+      }
       const rawBudget = Number(body.loop_action_budget);
       if (Number.isFinite(rawBudget)) loopActionBudget = Math.max(1, Math.min(32, Math.trunc(rawBudget)));
       if (body.discovery_required === true) discoveryRequired = true;
@@ -358,7 +385,8 @@ function typedContextView(envelope: TypedContextEnvelope | undefined): TypedCont
     orchestratorContext,
     ...(loopActionBudget !== undefined ? { loopActionBudget } : {}),
     ...(discoveryRequired !== undefined ? { discoveryRequired } : {}),
-    ...(executionPhase !== undefined ? { executionPhase } : {})
+    ...(executionPhase !== undefined ? { executionPhase } : {}),
+    ...(hostExecution !== undefined ? { hostExecution } : {})
   };
 }
 
@@ -375,6 +403,9 @@ interface KittRequestMetadata {
   turn_id?: string;
   request_id?: string;
   session_id?: string;
+  agent_role?: string;
+  parent_request_id?: string;
+  task_id?: string;
 }
 
 function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefined {
@@ -391,7 +422,7 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
     'turn_id',
     'request_id',
     'route',
-    'session_id'
+    'session_id', 'agent_role', 'parent_request_id', 'task_id'
   ]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
@@ -403,7 +434,7 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
     }
   }
   const result: KittRequestMetadata = {};
-  for (const key of ['conversation_id', 'turn_id', 'request_id', 'session_id'] as const) {
+  for (const key of ['conversation_id', 'turn_id', 'request_id', 'session_id', 'parent_request_id', 'task_id'] as const) {
     const raw = value[key];
     if (raw === undefined) continue;
     if (typeof raw !== 'string' || !raw.trim() || raw.length > 256) {
@@ -414,6 +445,12 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
       );
     }
     result[key] = raw.trim();
+  }
+  if (value.agent_role !== undefined) {
+    if (typeof value.agent_role !== 'string' || !['DISCOVER', 'ARCHITECT', 'IMPLEMENT', 'VERIFY', 'REVIEW'].includes(value.agent_role)) {
+      throw new AgentContractError(400, 'agent_contract_metadata_invalid', 'Invalid kitt_meta.agent_role.');
+    }
+    result.agent_role = value.agent_role;
   }
   if (value.route !== undefined) {
     if (typeof value.route !== 'string' || !value.route.trim()) {
@@ -633,18 +670,8 @@ export function prepareAgentContractRequest(
       const callId = message.tool_call_id.trim();
       const toolCall = syntheticToolCalls.get(callId);
       if (callId && toolCall) {
-        const validationCall = isValidationTool(toolCall.name, toolCall.input);
-        if (isMutatingTool(toolCall.name, toolCall.input)) {
-          mutationRoundTripObserved = true;
-          if (!validationCall) {
-            validationRoundTripObserved = false;
-            successfulValidationRoundTripObserved = false;
-          }
-        }
-        if (validationCall) {
-          validationRoundTripObserved = true;
-          successfulValidationRoundTripObserved = hostToolResultStatus(text) === 'success';
-        }
+        if (isMutatingTool(toolCall.name, toolCall.input)) mutationRoundTripObserved = true;
+        // Textual history is presentation only. Host facts below decide verification.
         if (isExplorationTool(toolCall.name, toolCall.input)) explorationRoundTripObserved = true;
         hostRoundTripCount += 1;
         if (toolCall.startsNewLoop) {
@@ -681,12 +708,29 @@ export function prepareAgentContractRequest(
     );
   }
   const route = headerRoute ?? metadataRoute ?? 'chat';
+  const host = typedView?.hostExecution;
+  if (host && (host.conversation_id !== requestMeta?.conversation_id || host.turn_id !== requestMeta?.turn_id)) {
+    throw new AgentContractError(400, 'agent_contract_metadata_invalid', 'host_execution identity does not match kitt_meta.');
+  }
+  if (route === 'agent-loop' && !host) {
+    throw new AgentContractError(400, 'agent_contract_context_invalid', 'agent-loop requires host_execution v1; update KITT Agent CLI.');
+  }
+  if (host) {
+    mutationRoundTripObserved = host.mutation_count > 0;
+    explorationRoundTripObserved = host.discovery_observed;
+    validationRoundTripObserved = host.validation_observed;
+    successfulValidationRoundTripObserved = host.validation_observed && host.verified_mutation_count === host.mutation_count;
+    hostRoundTripCount = host.tool_call_count;
+  }
   if (requestMeta?.conversation_id || requestMeta?.turn_id || requestMeta?.request_id) {
     logger.event('info', 'agent.contract.correlation', {
       contract_session_id: sessionId,
       conversation_id: requestMeta?.conversation_id,
       turn_id: requestMeta?.turn_id,
       request_id: requestMeta?.request_id,
+      agent_role: requestMeta?.agent_role,
+      parent_request_id: requestMeta?.parent_request_id,
+      task_id: requestMeta?.task_id,
       session_id: requestMeta?.session_id,
       route
     });
@@ -715,7 +759,7 @@ export function prepareAgentContractRequest(
     : 4;
   const checkpointRequired = (
     route === 'agent-loop'
-    && loopActionCount >= loopActionBudget
+    && loopActionCount >= Math.min(loopActionBudget, Math.max(2, Math.ceil(loopActionBudget / 2)))
   );
   const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
@@ -761,6 +805,8 @@ export function prepareAgentContractRequest(
     ...(route === 'agent-loop' ? [
       'LLM_FIRST_EXECUTION: true',
       'ORIGINAL_USER_REQUEST_IS_AUTHORITATIVE: true',
+      'PLANNING_RULE: for multi-task work, propose a bounded DAG using kitt_runtime plan.submit after discovery; plan.next selects dependency-ready tasks; plan.dispatch delegates through host policy; plan.verify runs registered checks. Simple requests need no separate planner call.',
+      `HOST_COMPLETION_READY: ${host?.completion_ready ?? false}`,
       `EXECUTION_PHASE: ${executionPhase}`,
       `LOOP_INDEX: ${loopIndex}`,
       `LOOP_ACTION_COUNT: ${loopActionCount}`,
@@ -850,6 +896,7 @@ export function prepareAgentContractRequest(
     loopActionCount,
     loopActionBudget,
     checkpointRequired,
+    ...(host ? { hostCompletionReady: host.completion_ready } : {}),
     sessionId
   };
 }
@@ -1331,32 +1378,6 @@ function runtimeOperation(input: JsonObject): string | undefined {
   return typeof operation === 'string' ? operation : undefined;
 }
 
-function runtimeCommandText(input: JsonObject): string {
-  const args = isRecord(input.arguments) ? input.arguments : {};
-  if (Array.isArray(args.argv)) {
-    const argv = args.argv.filter((value): value is string => typeof value === 'string');
-    if (argv.length) return argv.join(' ').trim();
-  }
-  return typeof args.command === 'string' ? args.command.trim() : '';
-}
-
-const VALIDATION_COMMAND_RE = /(?:^|\s)(?:npm|pnpm|yarn)\s+(?:start|test|build|lint|check|run\s+(?:start|test|build|lint|check))\b|(?:^|\s)ng\s+(?:test|build)\b|(?:^|\s)(?:pytest|mvnw?|gradlew?|cargo|go|dotnet)\b.*\b(?:test|verify|check|build)\b/iu;
-
-function isValidationTool(name: string, input: JsonObject): boolean {
-  return name === 'kitt_runtime'
-    && runtimeOperation(input) === 'process.run'
-    && VALIDATION_COMMAND_RE.test(runtimeCommandText(input));
-}
-
-type HostToolResultStatus = 'success' | 'error' | 'unknown';
-
-function hostToolResultStatus(content: string): HostToolResultStatus {
-  const explicit = content.match(/HOST_STATUS:\s*(success|error)\b/iu)?.[1]?.toLowerCase();
-  if (explicit === 'success' || explicit === 'error') return explicit;
-  if (/^\s*ERROR:/imu.test(content)) return 'error';
-  return 'unknown';
-}
-
 function isMutatingTool(name: string, input: JsonObject): boolean {
   if (name === 'kitt_runtime') {
     const operation = runtimeOperation(input);
@@ -1401,7 +1422,7 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
     && response.action !== 'final_response'
   ) {
     throw new AgentContractValidationError(
-      'The current agent-loop action budget is exhausted. Reassess host evidence and return loop.status=checkpoint before continuing.'
+      'A proactive agent-loop checkpoint is due. Reassess host evidence and return loop.status=checkpoint before continuing.'
     );
   }
   if (plan.route === 'summarize' && response.action !== 'final_response') {
@@ -1457,6 +1478,9 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
   }
   if (response.action === 'final_response' && plan.route === 'agent-loop' && response.loop?.status !== 'complete') {
     throw new AgentContractValidationError('final_response on agent-loop requires loop.status=complete.');
+  }
+  if (response.action === 'final_response' && plan.hostCompletionReady === false) {
+    throw new AgentContractValidationError('Host completion is blocked by pending tasks, children, or verification.');
   }
   if (
     response.action === 'final_response'

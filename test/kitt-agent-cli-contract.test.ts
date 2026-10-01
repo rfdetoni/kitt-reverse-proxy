@@ -273,6 +273,12 @@ test('invalid model contract stays recoverable and preserves the named session',
       body: JSON.stringify({
         model: 'chatgpt-web',
         messages: [{ role: 'user', content: 'Inspect the workspace and continue.' }],
+        kitt_meta: { conversation_id: 'c', turn_id: 't', request_id: 'r', route: 'agent-loop' },
+        kitt_context: { schema_version: 1, epoch: 't', segments: [{
+          id: 'host', kind: 'OUTPUT_CONTRACT', source: 'host-execution', trust: 'TRUSTED', priority: 100, token_cost: 4,
+          body_ref: { host_execution: { schema_version: 1, conversation_id: 'c', turn_id: 't', tool_call_count: 0,
+            mutation_count: 0, verified_mutation_count: 0, discovery_observed: false, validation_observed: false, completion_ready: true } }
+        }] },
         tools: [{
           type: 'function',
           function: {

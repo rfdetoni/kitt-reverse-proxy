@@ -1,3 +1,11 @@
+## Reverse Proxy 4.8.0 — typed host evidence and planning transport
+
+Reverse Proxy 4.8.0 consumes `HostExecutionState` v1 from the executing Agent host. It no longer parses `HOST_STATUS`, `ERROR:` or command-name regexes to decide verification success. It binds facts to conversation/turn metadata, rejects untrusted workspace host-state segments and keeps final responses blocked while the host reports pending tasks, children or verification.
+
+Capability discovery advertises host evidence, bounded task plans, subagent reports and hierarchical request correlation. The existing roles DISCOVER/ARCHITECT/IMPLEMENT/VERIFY/REVIEW are preserved; role metadata grants no authority. Optional `parent_request_id` and `task_id` survive the structural request pipeline. Proactive checkpoints occur halfway through longer action cadences while the global turn budget remains host-owned.
+
+Update together with Agent CLI **0.82.0** and Protocol **0.7.0**. `agent-loop` requires typed host facts; missing or mismatched facts produce an actionable HTTP 400. The proxy remains a transport/provider gateway: it does not execute the task DAG, own memory, grant approval or spawn children.
+
 ## Reverse Proxy 4.7.5 — persistent bounded-loop checkpoints and compact recovery
 
 Reverse Proxy 4.7.5 fixes the agent-loop action budget so checkpoints are scoped to a bounded loop rather than inferred from global tool-call multiples. Checkpoint tool responses are now marked structurally, allowing the next host result to start a new loop epoch with `LOOP_ACTION_COUNT=1` instead of incorrectly clearing/retriggering checkpoints based on `HOST_ROUND_TRIP_COUNT % budget`.

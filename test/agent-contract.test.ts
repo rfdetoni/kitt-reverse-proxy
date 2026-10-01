@@ -1,3 +1,4 @@
+import { withHostEvidence } from './helpers/host-evidence.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -611,7 +612,7 @@ test('typed context envelope is lowered without textual rediscovery', () => {
     ]
   };
 
-  const plan = prepareAgentContractRequest(source, {
+  const plan = prepareAgentContractRequest(withHostEvidence(source), {
     sessionId: 'typed-context',
     route: 'agent-loop'
   });

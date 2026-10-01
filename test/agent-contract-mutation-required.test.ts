@@ -1,3 +1,4 @@
+import { withHostEvidence } from './helpers/host-evidence.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -201,7 +202,7 @@ test('failed validation keeps final response blocked', () => {
       content: 'HOST_STATUS: error\nHOST_ERROR: Command exited with code 1\nHOST_OUTPUT:\nTS2551'
     }
   ];
-  const failedPlan = prepareAgentContractRequest(afterFailure, { sessionId: 'validation-failed' });
+  const failedPlan = prepareAgentContractRequest(withHostEvidence(afterFailure, {tool_call_count: 2, mutation_count: 1, verified_mutation_count: 0, validation_observed: true, completion_ready: false}), { sessionId: 'validation-failed' });
   assert.equal(failedPlan.validationRoundTripObserved, true);
   assert.equal(failedPlan.successfulValidationRoundTripObserved, false);
   assert.throws(
@@ -258,7 +259,10 @@ test('successful validation after mutation allows final response', () => {
       content: 'HOST_STATUS: success\nHOST_OUTPUT:\nbuild completed'
     }
   ];
-  const successPlan = prepareAgentContractRequest(afterSuccess, { sessionId: 'validation-success' });
+  const successPlan = prepareAgentContractRequest(withHostEvidence(afterSuccess, {
+    tool_call_count: 2, mutation_count: 1, verified_mutation_count: 1,
+    validation_observed: true, completion_ready: true,
+  }), { sessionId: 'validation-success' });
   assert.equal(successPlan.successfulValidationRoundTripObserved, true);
   const result = transformAgentContractCompletion(completion(contract({
     action: 'final_response',
