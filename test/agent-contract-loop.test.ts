@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   AgentContractValidationError,
   prepareAgentContractRequest,
+  recordAgentContractValidation,
   transformAgentContractCompletion
 } from '../src/runtime/agent-contract.js';
 import type { JsonObject, OpenAiCompletion } from '../src/types.js';
@@ -246,7 +247,7 @@ test('mutation requires successful host validation before final response', () =>
   );
 });
 
-test('configured action budget requires checkpoint at exact host round-trip boundary', () => {
+test('configured action budget starts a new bounded loop after checkpoint tool action', () => {
   const base = body('Implemente em loops curtos.', 2);
   const firstPlan = prepareAgentContractRequest(base, {
     sessionId: 'checkpoint-budget',
@@ -266,6 +267,9 @@ test('configured action budget requires checkpoint at exact host round-trip boun
     sessionId: 'checkpoint-budget',
     route: 'agent-loop'
   });
+  assert.equal(secondPlan.loopIndex, 1);
+  assert.equal(secondPlan.loopActionCount, 1);
+
   const second = transformAgentContractCompletion(completion(contract({
     action: 'use_tool',
     tool: 'kitt_runtime',
@@ -282,6 +286,8 @@ test('configured action budget requires checkpoint at exact host round-trip boun
   });
 
   assert.equal(checkpointPlan.hostRoundTripCount, 2);
+  assert.equal(checkpointPlan.loopIndex, 1);
+  assert.equal(checkpointPlan.loopActionCount, 2);
   assert.equal(checkpointPlan.loopActionBudget, 2);
   assert.equal(checkpointPlan.checkpointRequired, true);
 
@@ -296,13 +302,61 @@ test('configured action budget requires checkpoint at exact host round-trip boun
     AgentContractValidationError
   );
 
-  assert.doesNotThrow(
-    () => transformAgentContractCompletion(completion(contract({
-      action: 'use_tool',
-      tool: 'kitt_runtime',
-      tool_input: { operation: 'repo.read', arguments: { path: 'package.json' } },
-      content: null,
-      loop: loop('checkpoint')
-    })), checkpointPlan)
+  const checkpoint = transformAgentContractCompletion(completion(contract({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.read', arguments: { path: 'package.json' } },
+    content: null,
+    loop: loop('checkpoint')
+  })), checkpointPlan);
+  const checkpointCall = checkpoint.choices[0]!.message.tool_calls![0]!;
+  assert.match(checkpointCall.id, /^call_loop_/);
+
+  const afterCheckpoint = appendRoundTrip(
+    afterSecond,
+    checkpointCall,
+    'HOST_STATUS: success\n{"name":"kitt"}'
   );
+  const nextLoopPlan = prepareAgentContractRequest(afterCheckpoint, {
+    sessionId: 'checkpoint-budget',
+    route: 'agent-loop'
+  });
+
+  assert.equal(nextLoopPlan.hostRoundTripCount, 3);
+  assert.equal(nextLoopPlan.loopIndex, 2);
+  assert.equal(nextLoopPlan.loopActionCount, 1);
+  assert.equal(nextLoopPlan.checkpointRequired, false);
+  const nextContext = (nextLoopPlan.body.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+  assert.match(nextContext, /LOOP_INDEX: 2/);
+  assert.match(nextContext, /LOOP_ACTION_COUNT: 1/);
+  assert.match(nextContext, /TURN_TOOL_CALL_COUNT: 3/);
+  assert.match(nextContext, /CHECKPOINT_REQUIRED: false/);
+});
+
+test('contract failure reinjection uses cooldown instead of repeated bootstrap', () => {
+  const sessionId = 'reinject-cooldown';
+  const first = prepareAgentContractRequest(body(), { sessionId, route: 'agent-loop' });
+  const firstText = (first.body.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+  assert.match(firstText, /CONTEXT_MODE: bootstrap/);
+
+  recordAgentContractValidation(sessionId, false);
+  recordAgentContractValidation(sessionId, false);
+  recordAgentContractValidation(sessionId, true);
+  recordAgentContractValidation(sessionId, true);
+
+  const reinjected = prepareAgentContractRequest(body(), { sessionId, route: 'agent-loop' });
+  const reinjectedText = (reinjected.body.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+  assert.match(reinjectedText, /CONTEXT_MODE: bootstrap/);
+
+  const cooled = prepareAgentContractRequest(body(), { sessionId, route: 'agent-loop' });
+  const cooledText = (cooled.body.messages as Array<{ content?: string }>)
+    .map((message) => message.content ?? '')
+    .join('\n');
+  assert.match(cooledText, /CONTEXT_MODE: delta/);
 });
