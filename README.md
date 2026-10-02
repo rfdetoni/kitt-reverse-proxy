@@ -1,3 +1,11 @@
+## Reverse Proxy 4.9.4 — transport-only Agent boundary
+
+The Agent/WebChat boundary remains the canonical agent-contract v2, but the Reverse Proxy no longer acts as an execution-policy authority. It transports route, tools, typed context and correlation metadata; validates the canonical response shape and caller-supplied tool schema; converts `use_tool` into native OpenAI `tool_calls`; and preserves bounded same-session repair for invalid model output.
+
+Route-specific tool filtering, mutation/discovery/validation inference, local `host_execution` interpretation, checkpoint enforcement and completion gating now stay with the Agent host. Existing structured correlation logs remain unchanged, and local health continues to use the existing session/capacity states rather than a new tracing or lifecycle framework.
+
+This release pairs with Agent CLI **0.83.8** and KITT Protocol **0.9.0**.
+
 ## Reverse Proxy 4.9.3 — canonical Agent contract
 
 The Agent/WebChat boundary now accepts one semantic response shape only: the agent-contract v2 JSON object with explicit `action`, `tool`, `tool_input`, `content`, `reasoning_summary` and `loop` fields. A single fenced `json` block remains accepted as transport tolerance, but legacy `<kitt-tool>`, bare runtime-operation objects, `tool_name/arguments` aliases, malformed write-file repair, and plain-text final-response fallback are no longer reinterpreted as valid Agent actions.
