@@ -1,3 +1,4 @@
+import { waitForDrain } from './stream-io.js';
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../logger.js';
 import { requestMayReturnToolCalls } from '../mapping/tool-calling.js';
@@ -36,9 +37,10 @@ export function createOllamaRouter(manager: SessionManager): Router {
 
         if (body.stream === true || body.stream === undefined) {
           const writer = new OllamaChatStreamWriter(res, model);
+          writer.begin();
           const result = await manager.execute(sessionId, body, {
             signal,
-            ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
+            ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
           });
           if (result.metadata?.structured_output === 'failed' && !res.headersSent) {
             res.setHeader('X-Kitt-Structured-Output', 'failed');
@@ -66,14 +68,15 @@ export function createOllamaRouter(manager: SessionManager): Router {
 
         if (req.body?.stream === true || req.body?.stream === undefined) {
           const writer = new OllamaGenerateStreamWriter(res, model);
+          writer.begin();
           const result = await manager.execute(sessionId, chatBody, {
             signal,
-            onDelta: (delta) => writer.delta(delta)
+            onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); }
           });
           if (result.metadata?.structured_output === 'failed' && !res.headersSent) {
             res.setHeader('X-Kitt-Structured-Output', 'failed');
           }
-          writer.finish();
+          writer.finish(result.completion);
           return;
         }
 

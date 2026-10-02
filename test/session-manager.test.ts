@@ -287,7 +287,7 @@ test('capacity reports resource-aware eviction budgets', async () => {
 });
 
 
-test('soft resource pressure admits work when no idle session is recyclable', async () => {
+test('resource pressure rejects admission when protected sessions cannot be recycled', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
     provider: 'chatgpt',
@@ -300,14 +300,10 @@ test('soft resource pressure admits work when no idle session is recyclable', as
     factory: async (id) => ({ executor: executor(id) })
   });
   try {
-    const result = await manager.execute('resourcebound', {
+    await assert.rejects(manager.execute('resourcebound', {
       messages: [{ role: 'user', content: 'x' }]
-    });
-    assert.equal(result.completion.choices[0]?.message.content, 'ok');
-    assert.deepEqual(
-      manager.list().map((session) => session.id).sort(),
-      ['default', 'resourcebound']
-    );
+    }), SessionLimitExceededError);
+    assert.deepEqual(manager.list().map((session) => session.id), ['default']);
   } finally {
     await manager.close();
   }

@@ -112,7 +112,9 @@ export class NetworkChatExecutor implements ChatExecutor {
 
     if (options?.signal?.aborted) throw new RequestAbortedError();
     const mapped = this.adapter.mapRequest(requestBody);
+    options?.lifecycle?.beforeSubmit(JSON.stringify(mapped));
     const result = await this.upstream.post(mapped, options?.signal);
+    options?.lifecycle?.received(JSON.stringify(result.body));
     const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
     const structuredCalls = extractStructuredToolCalls(result.body, plan);
 

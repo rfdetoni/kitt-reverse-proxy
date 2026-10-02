@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { RESOURCE_LIMITS } from '../core/resource-limits.js';
 import { logger } from '../logger.js';
 import type { ProviderPreset } from '../providers/catalog.js';
@@ -103,14 +103,6 @@ function completion(model: string, content: string | null, toolCalls?: OpenAiToo
   };
 }
 
-function requestFingerprint(body: JsonObject, reasoningEffort?: number): string {
-  const hash = createHash('sha256');
-  hash.update(JSON.stringify(body));
-  hash.update('\u0000');
-  hash.update(reasoningEffort === undefined ? '-' : String(reasoningEffort));
-  return hash.digest('hex');
-}
-
 function historyChars(messages: readonly CanonicalMessage[]): number {
   let total = 0;
   for (const message of messages) total += message.role.length + message.text.length + (message.toolCallId?.length ?? 0) + (message.toolName?.length ?? 0);
@@ -129,8 +121,6 @@ export class UiChatExecutor implements ChatExecutor {
   private toolProtocolWasEnabled = false;
   private systemContextWasEnabled = false;
   private readonly toolNamesByCallId = new Map<string, string>();
-  private lastRequestFingerprint = '';
-  private lastResult: ChatExecutionResult | undefined;
   private enforcementTaskKey = '';
   private activeTaskUserText = '';
   private explorationEvidence = false;
@@ -181,8 +171,6 @@ export class UiChatExecutor implements ChatExecutor {
   async reset(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     this.history = [];
-    this.lastRequestFingerprint = '';
-    this.lastResult = undefined;
     this.protocolFingerprint = '';
     this.toolProtocolWasEnabled = false;
     this.systemContextWasEnabled = false;
@@ -274,8 +262,6 @@ export class UiChatExecutor implements ChatExecutor {
       throw new UiAutomationError(`Histórico UI excede ${RESOURCE_LIMITS.uiHistoryChars} caracteres.`);
     }
 
-    const fingerprint = requestFingerprint(body, options?.reasoningEffort);
-    if (incoming.length > 1 && fingerprint === this.lastRequestFingerprint && this.lastResult) return this.lastResult;
 
     const previousUserTurns = this.history.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
     const incomingUserTurns = logicalIncoming.filter((message) => message.role === 'user' && !isSyntheticToolResult(message)).length;
@@ -434,6 +420,7 @@ export class UiChatExecutor implements ChatExecutor {
     }
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     const promptSendStartedAt = Date.now();
+    options?.lifecycle?.beforeSubmit(prompt);
     await this.sendPrompt(prompt, options?.signal);
     const promptSentAt = Date.now();
 
@@ -445,6 +432,7 @@ export class UiChatExecutor implements ChatExecutor {
       options?.signal
     );
     throwIfAborted(options?.signal);
+    options?.lifecycle?.received(result.text);
     const readDiagnostics = result.readDiagnostics ?? {
       mode: this.config.readMode ?? 'dom',
       source: 'dom' as const,
@@ -453,7 +441,7 @@ export class UiChatExecutor implements ChatExecutor {
       tap_trusted: false
     };
 
-    const model = typeof body.model === 'string' && body.model.trim() ? body.model : this.modelId;
+    const model = this.modelId;
     let textToParse = result.text;
     const artifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
     const knownArtifacts: Set<string> = this.artifactFingerprints ?? new Set<string>();
@@ -503,8 +491,10 @@ export class UiChatExecutor implements ChatExecutor {
           ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
+        options?.lifecycle?.received(textToParse);
         const retryArtifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
         const retryKnown: Set<string> = this.artifactFingerprints ?? new Set<string>();
         const freshArtifacts = retryArtifactsAfter.filter(
@@ -516,18 +506,19 @@ export class UiChatExecutor implements ChatExecutor {
       }
     }
 
-    let structuredOutputFailed = false;
     if (!parsed.tool_calls?.length && structured) {
       let checked = validateStructuredOutput(textToParse, structured);
       if (!checked.ok) {
         const retryPrompt = buildStructuredRetryPrompt(structured, checked.error);
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal);
+        options?.lifecycle?.received(retryResult.text);
         checked = validateStructuredOutput(retryResult.text, structured);
       }
       if (checked.ok) textToParse = checked.text;
-      else structuredOutputFailed = true;
+      else throw Object.assign(new Error('Provider did not satisfy the requested structured output contract.'), { name: 'StructuredOutputFailedError' });
     }
 
     for (const prompt of selectedPrompts) {
@@ -578,18 +569,13 @@ export class UiChatExecutor implements ChatExecutor {
       completion: output,
       deltas,
       metadata: {
-        ...(structuredOutputFailed ? { structured_output: 'failed' } : {}),
         timing
       }
     };
 
     if (incoming.length > 1) {
-      this.lastRequestFingerprint = fingerprint;
-      this.lastResult = execution;
     } else {
-      this.lastRequestFingerprint = '';
-      this.lastResult = undefined;
-    }
+        }
     return execution;
   }
 
@@ -600,6 +586,8 @@ export class UiChatExecutor implements ChatExecutor {
       transport: 'ui',
       targetOrigin: new URL(this.config.targetUrl).origin,
       persistentSession: this.session.persistent,
+      modelSelection: 'ui_alias_only',
+      observedModel: null,
       manualChallengeHandling: true,
       progressiveUiStreaming: true,
       boundedHistoryChars: RESOURCE_LIMITS.uiHistoryChars,

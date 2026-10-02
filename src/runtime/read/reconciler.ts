@@ -7,6 +7,10 @@ export interface ReconcilerResult {
   diagnostics: ReadDiagnostics;
 }
 
+export class StreamMismatchError extends Error {
+  constructor() { super('The final response diverged from the emitted stream; retrieve the canonical response before retrying.'); this.name = 'StreamMismatchError'; }
+}
+
 export class ResponseReconciler {
   private source: 'tap' | 'dom';
   private emitted = '';
@@ -85,12 +89,19 @@ export class ResponseReconciler {
   }
 
   private async flushDomSuffix(): Promise<void> {
-    if (!this.domText) return;
+    if (!this.domText) {
+      if (this.emitted && this.onDelta) throw new StreamMismatchError();
+      if (!this.onDelta) { this.emitted = ''; this.deltas.length = 0; }
+      return;
+    }
     if (!this.emitted) {
       await this.emit(this.domText);
       return;
     }
-    if (!this.domText.startsWith(this.emitted)) return;
+    if (!this.domText.startsWith(this.emitted)) {
+      if (this.onDelta) throw new StreamMismatchError();
+      this.emitted = ''; this.deltas.length = 0; await this.emit(this.domText); return;
+    }
     const suffix = this.domText.slice(this.emitted.length);
     if (suffix) await this.emit(suffix);
   }

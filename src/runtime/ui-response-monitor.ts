@@ -207,7 +207,6 @@ export async function awaitUiResponse(
     if (domChanged) lastActivityAt = Date.now();
   }
 
-  if (lastText && !isThinkingIndicator(lastText)) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
   throw new UiTimeoutError(
     `O chat excedeu o teto absoluto de ${Math.round(watchdog.absoluteMs / 1000)}s sem resposta final.`
   );

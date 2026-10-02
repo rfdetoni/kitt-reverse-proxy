@@ -1,3 +1,5 @@
+import { writeStreamChunk } from './stream-io.js';
+import { StreamMismatchError } from '../runtime/read/reconciler.js';
 import type { Response } from 'express';
 import type { JsonObject, OpenAiCompletion } from '../types.js';
 import { isJsonObject, toJsonValue } from '../util/json.js';
@@ -123,6 +125,7 @@ function prepareNdjson(res: Response): void {
 
 export class OllamaChatStreamWriter {
   private started = false;
+  private accumulated = '';
 
   constructor(private readonly res: Response, private readonly model: string) {}
 
@@ -134,8 +137,9 @@ export class OllamaChatStreamWriter {
 
   delta(text: string): void {
     if (!text) return;
+    this.accumulated += text;
     this.begin();
-    this.res.write(
+    writeStreamChunk(this.res,
       JSON.stringify({
         model: this.model,
         created_at: new Date().toISOString(),
@@ -150,14 +154,17 @@ export class OllamaChatStreamWriter {
 
   finish(completion?: OpenAiCompletion): void {
     this.begin();
+    const text = completion?.choices[0]?.message.content || '';
+    if (!text.startsWith(this.accumulated)) throw new StreamMismatchError();
+    this.delta(text.slice(this.accumulated.length));
     const calls = completion?.choices[0]?.message.tool_calls || [];
-    this.res.write(
+    writeStreamChunk(this.res,
       JSON.stringify({
         model: completion?.model || this.model,
         created_at: new Date().toISOString(),
         message: {
           role: 'assistant',
-          content: completion?.choices[0]?.message.content || '',
+          content: '',
           ...(calls.length ? {
             tool_calls: calls.map((call) => ({
               function: {
@@ -168,7 +175,8 @@ export class OllamaChatStreamWriter {
           } : {})
         },
         done: true,
-        done_reason: calls.length ? 'tool_calls' : 'stop'
+        done_reason: calls.length ? 'tool_calls' : 'stop',
+        ...(completion?.usage ? { prompt_eval_count: completion.usage.prompt_tokens, eval_count: completion.usage.completion_tokens } : {})
       }) + '\n'
     );
     this.res.end();
@@ -177,6 +185,7 @@ export class OllamaChatStreamWriter {
 
 export class OllamaGenerateStreamWriter {
   private started = false;
+  private accumulated = '';
 
   constructor(private readonly res: Response, private readonly model: string) {}
 
@@ -188,8 +197,9 @@ export class OllamaGenerateStreamWriter {
 
   delta(text: string): void {
     if (!text) return;
+    this.accumulated += text;
     this.begin();
-    this.res.write(
+    writeStreamChunk(this.res,
       JSON.stringify({
         model: this.model,
         created_at: new Date().toISOString(),
@@ -199,16 +209,22 @@ export class OllamaGenerateStreamWriter {
     );
   }
 
-  finish(): void {
+  finish(completion?: OpenAiCompletion): void {
     this.begin();
-    this.res.write(
+    if (completion) {
+      const text = completion.choices[0]?.message.content || '';
+      if (!text.startsWith(this.accumulated)) throw new StreamMismatchError();
+      this.delta(text.slice(this.accumulated.length));
+    }
+    writeStreamChunk(this.res,
       JSON.stringify({
         model: this.model,
         created_at: new Date().toISOString(),
         response: '',
         done: true,
         done_reason: 'stop',
-        context: []
+        context: [],
+        ...(completion?.usage ? { prompt_eval_count: completion.usage.prompt_tokens, eval_count: completion.usage.completion_tokens } : {})
       }) + '\n'
     );
     this.res.end();

@@ -1,7 +1,7 @@
 import { RequestAbortedError } from './serial-queue.js';
 
 export function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new RequestAbortedError();
+  if (signal?.aborted) throw signal.reason instanceof Error && signal.reason.name === 'RequestDeadlineError' ? signal.reason : new RequestAbortedError();
 }
 
 export async function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -15,7 +15,7 @@ export async function abortableSleep(ms: number, signal?: AbortSignal): Promise<
     const onAbort = (): void => {
       clearTimeout(timer);
       cleanup();
-      reject(new RequestAbortedError());
+      reject(signal?.reason instanceof Error && signal.reason.name === 'RequestDeadlineError' ? signal.reason : new RequestAbortedError());
     };
     function cleanup(): void {
       signal?.removeEventListener('abort', onAbort);

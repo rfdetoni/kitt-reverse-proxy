@@ -1,3 +1,6 @@
+import { StreamMismatchError } from '../runtime/read/reconciler.js';
+import { RequestDeadlineError, AttemptBudgetError } from '../runtime/request-state.js';
+import { SlowConsumerError } from '../proxy/stream-io.js';
 import {
   ConversationStateConflictError,
   ManualInterventionRequiredError,
@@ -58,7 +61,12 @@ export interface ProxyErrorDescriptor {
 export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   const message = error instanceof Error ? error.message : 'Erro interno do proxy.';
 
+  if (error instanceof Error && error.name === 'StructuredOutputFailedError') return { status: 502, code: 'structured_output_failed', message };
   if (error instanceof InvalidRequestError) return { status: error.status, code: error.code, message };
+  if (error instanceof StreamMismatchError) return { status: 502, code: 'stream_mismatch', message };
+  if (error instanceof RequestDeadlineError) return { status: 504, code: 'request_deadline_exceeded', message };
+  if (error instanceof AttemptBudgetError) return { status: 409, code: 'upstream_budget_exhausted', message, recoverable: true, recoveryAction: 'continue' };
+  if (error instanceof SlowConsumerError) return { status: 502, code: 'slow_consumer', message };
   if (error instanceof AgentContractError) {
     return {
       status: error.status,

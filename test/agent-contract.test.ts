@@ -7,6 +7,7 @@ import {
   AgentContractValidationError,
   normalizeAgentContractLogicalHistory,
   prepareAgentContractRequest,
+  commitAgentContractContext,
   transformAgentContractCompletion
 } from '../src/runtime/agent-contract.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../src/types.js';
@@ -172,6 +173,7 @@ test('stable contract sessions switch from bootstrap to compact delta context', 
   assert.match(firstUser, /TOOLS_AVAILABLE:/);
   assert.match(firstUser, /WORKSPACE_CONTEXT:/);
 
+  commitAgentContractContext(first);
   const second = prepareAgentContractRequest(body('code-generation'), { sessionId });
   const secondUser = (second.body.messages as Array<{ role?: string; content?: string }>)
     .find((message) => message.role === 'user')?.content ?? '';

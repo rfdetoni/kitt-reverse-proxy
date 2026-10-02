@@ -268,7 +268,7 @@ export class ServiceManager {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
-          env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1' }
+          env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1', ...(browserHostPid ? { KITT_SHARED_BROWSER_PID: String(browserHostPid) } : {}) }
         }
       );
       browserHostChild.unref();
@@ -307,7 +307,7 @@ export class ServiceManager {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-      env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1' }
+      env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1', ...(browserHostPid ? { KITT_SHARED_BROWSER_PID: String(browserHostPid) } : {}) }
     });
     child.unref();
     if (!child.pid) {

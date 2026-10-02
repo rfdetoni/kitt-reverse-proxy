@@ -30,7 +30,7 @@ function availabilityFailure(error: unknown): boolean {
 }
 
 function isRequestAborted(error: unknown): boolean {
-  return error instanceof Error && error.name === 'RequestAbortedError';
+  return error instanceof Error && ['RequestAbortedError', 'RequestDeadlineError'].includes(error.name);
 }
 
 export interface ResilienceSnapshot extends JsonObject {
@@ -44,16 +44,22 @@ export interface ResilienceSnapshot extends JsonObject {
   failures: number;
 }
 
+export class ProviderCircuitState {
+  consecutiveFailures = 0;
+  openUntil = 0;
+  halfOpenProbe = false;
+  latencyEwmaMs: number | undefined = undefined;
+  successes = 0;
+  failures = 0;
+
+}
+
 export class ResilientChatExecutor implements ChatExecutor {
   readonly modelId: string;
   readonly transport: ChatExecutor['transport'];
   readonly reset?: () => Promise<void>;
-  private consecutiveFailures = 0;
-  private openUntil = 0;
-  private halfOpenProbe = false;
-  private latencyEwmaMs: number | undefined;
-  private successes = 0;
-  private failures = 0;
+  state = new ProviderCircuitState();
+  shareState(state: ProviderCircuitState): void { this.state = state; }
 
   constructor(
     private readonly delegate: ChatExecutor,
@@ -68,16 +74,16 @@ export class ResilientChatExecutor implements ChatExecutor {
 
   async execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
     const now = Date.now();
-    if (this.openUntil > now) {
+    if (this.state.openUntil > now) {
       telemetry.recordProviderEvent(this.provider, this.transport, 'circuit_reject');
-      throw new ProviderCircuitOpenError(this.provider, this.transport, this.openUntil - now);
+      throw new ProviderCircuitOpenError(this.provider, this.transport, this.state.openUntil - now);
     }
-    if (this.openUntil > 0) {
-      if (this.halfOpenProbe) {
+    if (this.state.openUntil > 0) {
+      if (this.state.halfOpenProbe) {
         telemetry.recordProviderEvent(this.provider, this.transport, 'circuit_reject');
         throw new ProviderCircuitOpenError(this.provider, this.transport, this.cooldownMs);
       }
-      this.halfOpenProbe = true;
+      this.state.halfOpenProbe = true;
       telemetry.recordProviderEvent(this.provider, this.transport, 'half_open_probe');
     }
 
@@ -93,9 +99,9 @@ export class ResilientChatExecutor implements ChatExecutor {
       return result;
     } catch (error) {
       if (isRequestAborted(error)) {
-        if (this.halfOpenProbe) {
-          this.halfOpenProbe = false;
-          this.openUntil = Date.now() + Math.min(1_000, this.cooldownMs);
+        if (this.state.halfOpenProbe) {
+          this.state.halfOpenProbe = false;
+          this.state.openUntil = Date.now() + Math.min(1_000, this.cooldownMs);
         }
         throw error;
       }
@@ -120,56 +126,56 @@ export class ResilientChatExecutor implements ChatExecutor {
   }
 
   snapshot(now = Date.now()): ResilienceSnapshot {
-    const retryAfterMs = Math.max(0, this.openUntil - now);
-    const circuit: ResilienceSnapshot['circuit'] = this.halfOpenProbe
+    const retryAfterMs = Math.max(0, this.state.openUntil - now);
+    const circuit: ResilienceSnapshot['circuit'] = this.state.halfOpenProbe
       ? 'half_open'
       : retryAfterMs > 0
         ? 'open'
         : 'closed';
     return {
       circuit,
-      consecutive_failures: this.consecutiveFailures,
+      consecutive_failures: this.state.consecutiveFailures,
       failure_threshold: this.failureThreshold,
       cooldown_ms: this.cooldownMs,
       retry_after_ms: retryAfterMs,
-      latency_ewma_ms: this.latencyEwmaMs === undefined ? null : Math.round(this.latencyEwmaMs * 100) / 100,
-      successes: this.successes,
-      failures: this.failures
+      latency_ewma_ms: this.state.latencyEwmaMs === undefined ? null : Math.round(this.state.latencyEwmaMs * 100) / 100,
+      successes: this.state.successes,
+      failures: this.state.failures
     };
   }
 
   private updateLatency(durationMs: number): void {
     const value = Math.max(0, durationMs);
-    this.latencyEwmaMs = this.latencyEwmaMs === undefined
+    this.state.latencyEwmaMs = this.state.latencyEwmaMs === undefined
       ? value
-      : (EWMA_ALPHA * value) + ((1 - EWMA_ALPHA) * this.latencyEwmaMs);
+      : (EWMA_ALPHA * value) + ((1 - EWMA_ALPHA) * this.state.latencyEwmaMs);
   }
 
   private recordSuccess(durationMs: number): void {
-    const wasOpen = this.openUntil > 0 || this.halfOpenProbe;
+    const wasOpen = this.state.openUntil > 0 || this.state.halfOpenProbe;
     this.updateLatency(durationMs);
-    this.successes += 1;
-    this.consecutiveFailures = 0;
-    this.openUntil = 0;
-    this.halfOpenProbe = false;
+    this.state.successes += 1;
+    this.state.consecutiveFailures = 0;
+    this.state.openUntil = 0;
+    this.state.halfOpenProbe = false;
     telemetry.recordProviderEvent(this.provider, this.transport, wasOpen ? 'circuit_close' : 'success');
   }
 
   private recordReachable(durationMs: number): void {
     this.updateLatency(durationMs);
-    this.consecutiveFailures = 0;
-    this.openUntil = 0;
-    this.halfOpenProbe = false;
+    this.state.consecutiveFailures = 0;
+    this.state.openUntil = 0;
+    this.state.halfOpenProbe = false;
     telemetry.recordProviderEvent(this.provider, this.transport, 'reachable_error');
   }
 
   private recordFailure(): void {
-    this.failures += 1;
-    this.consecutiveFailures += 1;
-    this.halfOpenProbe = false;
+    this.state.failures += 1;
+    this.state.consecutiveFailures += 1;
+    this.state.halfOpenProbe = false;
     telemetry.recordProviderEvent(this.provider, this.transport, 'failure');
-    if (this.consecutiveFailures < this.failureThreshold) return;
-    this.openUntil = Date.now() + this.cooldownMs;
+    if (this.state.consecutiveFailures < this.failureThreshold) return;
+    this.state.openUntil = Date.now() + this.cooldownMs;
     telemetry.recordProviderEvent(this.provider, this.transport, 'circuit_open');
   }
 }

@@ -1,3 +1,6 @@
+import { startSseHeartbeat } from './openai.js';
+import { writeStreamChunk } from './stream-io.js';
+import { StreamMismatchError } from '../runtime/read/reconciler.js';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
@@ -199,18 +202,19 @@ export function sendAnthropicError(
 }
 
 export class AnthropicStreamWriter {
+  private stopHeartbeat?: () => void;
   private started = false;
   private textStarted = false;
   private accumulated = '';
   private readonly messageId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
 
-  constructor(private readonly res: Response, private readonly model: string) {}
+  constructor(private readonly res: Response, private readonly model: string, private readonly heartbeatMs = 15_000) {}
 
   private event(name: string, data: JsonObject): void {
-    this.res.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+    writeStreamChunk(this.res, `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
-  private begin(): void {
+  begin(): void {
     if (this.started) return;
     this.started = true;
     this.res.status(200);
@@ -218,6 +222,7 @@ export class AnthropicStreamWriter {
     this.res.setHeader('cache-control', 'no-cache, no-transform');
     this.res.setHeader('connection', 'keep-alive');
     this.res.flushHeaders?.();
+    this.stopHeartbeat = startSseHeartbeat(this.res, this.heartbeatMs);
     this.event('message_start', {
       type: 'message_start',
       message: {
@@ -256,12 +261,14 @@ export class AnthropicStreamWriter {
     this.begin();
     const message = completion.choices[0]?.message;
     const text = message?.content || '';
+    if (!text.startsWith(this.accumulated)) throw new StreamMismatchError();
     const toolCalls = message?.tool_calls || [];
     let contentIndex = 0;
 
     if (text || this.textStarted) {
       if (!this.accumulated) this.delta(text);
       else if (text.startsWith(this.accumulated)) this.delta(text.slice(this.accumulated.length));
+      else throw new StreamMismatchError();
       this.event('content_block_stop', {
         type: 'content_block_stop',
         index: contentIndex
@@ -307,6 +314,7 @@ export class AnthropicStreamWriter {
       }
     });
     this.event('message_stop', { type: 'message_stop' });
+    this.stopHeartbeat?.();
     this.res.end();
   }
 }

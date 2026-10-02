@@ -46,7 +46,7 @@ function hasUsableUsage(usage: JsonObject | undefined): boolean {
   return (
     typeof prompt === 'number' && Number.isFinite(prompt) && prompt >= 0
     && typeof completion === 'number' && Number.isFinite(completion) && completion >= 0
-    && typeof total === 'number' && Number.isFinite(total) && total > 0
+    && typeof total === 'number' && Number.isFinite(total) && total >= 0
   );
 }
 

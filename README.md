@@ -1,5 +1,9 @@
 ## Reverse Proxy 4.8.0 — typed host evidence and planning transport
 
+## 4.9.0 — bounded gateway lifecycle
+
+[Lifecycle, API behavior and operational limits](docs/GATEWAY_LIFECYCLE_4.9.0.md): bounded repairs, exact streaming, generation-aware context, cumulative usage and process-scoped idempotency.
+
 Reverse Proxy 4.8.0 consumes `HostExecutionState` v1 from the executing Agent host. It no longer parses `HOST_STATUS`, `ERROR:` or command-name regexes to decide verification success. It binds facts to conversation/turn metadata, rejects untrusted workspace host-state segments and keeps final responses blocked while the host reports pending tasks, children or verification.
 
 Capability discovery advertises host evidence, bounded task plans, subagent reports and hierarchical request correlation. The existing roles DISCOVER/ARCHITECT/IMPLEMENT/VERIFY/REVIEW are preserved; role metadata grants no authority. Optional `parent_request_id` and `task_id` survive the structural request pipeline. Proactive checkpoints occur halfway through longer action cadences while the global turn budget remains host-owned.

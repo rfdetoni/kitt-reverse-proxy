@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { ProviderRequestState } from './request-state.js';
+import { throwIfAborted } from './cancellation.js';
 import type {
   AppConfig,
   ChatExecutionOptions,
@@ -11,7 +14,8 @@ import {
   BrowserAutomationSession,
   BrowserAutomationUnavailableError
 } from './browser-automation.js';
-import { ResilientChatExecutor } from './resilient-executor.js';
+import { ProcessMemorySampler } from './process-memory.js';
+import { ResilientChatExecutor, type ProviderCircuitState } from './resilient-executor.js';
 import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
 import { updateRequestContext } from '../util/request-context.js';
@@ -100,13 +104,22 @@ export interface SessionCapacitySnapshot {
   browser_pages: number;
   max_browser_pages: number;
   resident_rss_bytes: number;
+  memory_measurement: string;
+  memory_measurement_partial: boolean;
+  measured_processes: number;
   max_resident_rss_bytes: number;
   eviction: 'resource_lru_idle';
   accepts_named_sessions: boolean;
   shutting_down: boolean;
 }
 
+export interface SessionExecutionLease {
+  sessionId: string; contextKey: string; generation: number;
+  execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult>;
+}
+
 interface ManagedSession {
+  generation: number;
   id: string;
   provider: string;
   executor: ChatExecutor;
@@ -122,8 +135,12 @@ interface ManagedSession {
   isDefault: boolean;
 }
 
-function resilient(executor: ChatExecutor, provider: string): ChatExecutor {
-  return executor instanceof ResilientChatExecutor ? executor : new ResilientChatExecutor(executor, provider);
+function resilient(executor: ChatExecutor, provider: string, states: Map<string, ProviderCircuitState>): ChatExecutor {
+  const key = `${provider}:${executor.transport}`;
+  const wrapper = executor instanceof ResilientChatExecutor ? executor : new ResilientChatExecutor(executor, provider);
+  const shared = states.get(key);
+  if (shared) wrapper.shareState(shared); else states.set(key, wrapper.state);
+  return wrapper;
 }
 
 function awaitsToolResult(session: ManagedSession): boolean {
@@ -131,11 +148,15 @@ function awaitsToolResult(session: ManagedSession): boolean {
 }
 
 export class SessionManager {
+  private readonly memorySampler = new ProcessMemorySampler();
+  private readonly circuitStates = new Map<string, ProviderCircuitState>();
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
   private readonly timer: NodeJS.Timeout;
   private readonly shutdownController = new AbortController();
   private closed = false;
+  private generation = 0;
+  private readonly instanceId = randomUUID();
 
   constructor(private readonly options: {
     defaultExecutor: ChatExecutor;
@@ -147,8 +168,9 @@ export class SessionManager {
     const now = Date.now();
     this.sessions.set('default', {
       id: 'default',
+      generation: ++this.generation,
       provider: options.provider,
-      executor: resilient(options.defaultExecutor, options.provider),
+      executor: resilient(options.defaultExecutor, options.provider, this.circuitStates),
       ...(options.defaultBrowserSession ? { browserSession: options.defaultBrowserSession } : {}),
       queue: new SerialQueue(options.config.maxQueue, options.config.minIntervalMs),
       automationQueue: new SerialQueue(options.config.maxQueue, 0),
@@ -233,77 +255,53 @@ export class SessionManager {
   }
 
   async execute(requestedId: string | undefined, body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult> {
-    const requestStartedAt = Date.now();
-    logger.trace('session.execute.request', {
-      requested_session_id: requestedId ?? null,
-      body,
-      options: options ?? null
-    });
-    const session = await traceSpan('kitt.session.resolve', {
-      'kitt.session.requested': requestedId ?? 'default',
-      'kitt.provider': this.options.provider
-    }, () => this.resolve(requestedId));
-    const resolvedAt = Date.now();
-    updateRequestContext({ sessionId: session.id, provider: session.provider });
-    session.lastActivity = Date.now();
-    const queuedAt = Date.now();
-    const signalWithShutdown = combinedSignal(options?.signal, this.shutdownController.signal);
-    const executionOptions: ChatExecutionOptions = { ...(options ?? {}), signal: signalWithShutdown };
-    return session.queue.run(async () => {
-      const dequeuedAt = Date.now();
-      const queueWaitMs = Math.max(0, dequeuedAt - queuedAt);
-      telemetry.recordQueueWait(session.provider, queueWaitMs);
-      session.activeOperations += 1;
-      session.status = 'busy';
+    return this.transaction(requestedId, options ?? {}, (lease) => lease.execute(body, options));
+  }
+  async transaction<T>(requestedId: string | undefined, options: ChatExecutionOptions, operation: (lease: SessionExecutionLease) => Promise<T>): Promise<T> {
+    const ownsLifecycle = !options.lifecycle;
+    const lifecycle = options.lifecycle ?? new ProviderRequestState({ ...(options.signal ? { signal: options.signal } : {}) });
+    const signal = combinedSignal(lifecycle.signal, this.shutdownController.signal);
+    const startedAt = Date.now();
+    try {
+      throwIfAborted(signal);
+      const session = await traceSpan('kitt.session.resolve', { 'kitt.session.requested': requestedId ?? 'default', 'kitt.provider': this.options.provider }, () => this.resolve(requestedId));
+      throwIfAborted(signal);
+      const resolvedAt = Date.now();
+      updateRequestContext({ sessionId: session.id, provider: session.provider });
       session.lastActivity = Date.now();
-      const executorStartedAt = Date.now();
-      try {
-        const result = await traceSpan('kitt.transport.execute', {
-          'kitt.provider': session.provider,
-          'kitt.transport': session.executor.transport,
-          'kitt.session.id': session.id,
-          'kitt.queue.wait_ms': queueWaitMs
-        }, () => session.executor.execute(body, executionOptions));
-        logger.trace('session.execute.response', {
-          session_id: session.id,
-          provider: session.provider,
-          transport: session.executor.transport,
-          result
-        });
-        const completedAt = Date.now();
-        const timing: JsonObject = {
-          session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
-          queue_wait_ms: queueWaitMs,
-          executor_ms: Math.max(0, completedAt - executorStartedAt),
-          total_ms: Math.max(0, completedAt - requestStartedAt),
-          transport: session.executor.transport,
-          ...(result.metadata?.timing !== undefined ? { executor_timing: result.metadata.timing } : {})
+      return await session.queue.run(async () => {
+        const queueWaitMs = Date.now() - resolvedAt;
+        telemetry.recordQueueWait(session.provider, queueWaitMs);
+        session.activeOperations += 1; session.status = 'busy';
+        const lease: SessionExecutionLease = {
+          sessionId: session.id, generation: session.generation, contextKey: `${this.instanceId}:${session.id}:${session.generation}`,
+          execute: async (body, executionOptions = {}) => {
+            throwIfAborted(signal);
+            const before = lifecycle.attempts; const executorStarted = Date.now();
+            // Third-party adapters must also obey the attempt grant before dispatch.
+            if (before >= lifecycle.maxAttempts) { lifecycle.beforeSubmit(''); }
+            try {
+              const result = await session.executor.execute(body, { ...options, ...executionOptions, lifecycle, signal });
+              if (lifecycle.attempts === before) {
+                lifecycle.beforeSubmit(JSON.stringify(body)); lifecycle.received(JSON.stringify(result.completion.choices[0]?.message ?? {}));
+              }
+              throwIfAborted(signal);
+              const timing: JsonObject = { session_resolve_ms: resolvedAt - startedAt, queue_wait_ms: queueWaitMs,
+                executor_ms: Date.now() - executorStarted, total_ms: Date.now() - lifecycle.startedAt, transport: session.executor.transport,
+                ...(result.metadata?.timing !== undefined ? { executor_timing: result.metadata.timing } : {}) };
+              logger.event('info', 'chat.timing', timing);
+              return { ...result, completion: { ...result.completion, usage: lifecycle.usage() }, metadata: { ...result.metadata, timing } };
+            } catch (error) { session.generation = ++this.generation; throw error; }
+          }
         };
-        logger.event('info', 'chat.timing', timing);
-        return { ...result, metadata: { ...(result.metadata ?? {}), timing } };
-      } catch (error) {
-        logger.trace('session.execute.error', {
-          session_id: session.id,
-          provider: session.provider,
-          transport: session.executor.transport,
-          error
-        });
-        const failedAt = Date.now();
-        logger.event('warn', 'chat.timing', {
-          session_resolve_ms: Math.max(0, resolvedAt - requestStartedAt),
-          queue_wait_ms: queueWaitMs,
-          executor_ms: Math.max(0, failedAt - executorStartedAt),
-          total_ms: Math.max(0, failedAt - requestStartedAt),
-          transport: session.executor.transport,
-          outcome: 'error'
-        });
-        throw error;
-      } finally {
-        session.lastActivity = Date.now();
-        session.activeOperations = Math.max(0, session.activeOperations - 1);
-        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
-      }
-    }, signalWithShutdown);
+        try { return await operation(lease); }
+        catch (error) { session.generation = ++this.generation; throw error; }
+        finally { session.lastActivity = Date.now(); session.activeOperations = Math.max(0, session.activeOperations - 1); session.status = session.activeOperations > 0 ? 'busy' : 'idle'; }
+      }, signal);
+    } catch (error) {
+      if (error instanceof Error && ownsLifecycle) Object.assign(error, { usage: lifecycle.usage(), requestId: lifecycle.requestId, outcome: lifecycle.submitted ? 'outcome_unknown' : 'failed' });
+      throw error;
+    } finally { if (ownsLifecycle) lifecycle.dispose(); }
   }
 
   async reset(requestedId: string | undefined, signal?: AbortSignal): Promise<void> {
@@ -315,6 +313,7 @@ export class SessionManager {
       session.status = 'busy';
       try {
         await session.executor.reset!();
+        session.generation = ++this.generation;
       } finally {
         session.lastActivity = Date.now();
         session.activeOperations = Math.max(0, session.activeOperations - 1);
@@ -353,7 +352,8 @@ export class SessionManager {
   capacity(): SessionCapacitySnapshot {
     const values = [...this.sessions.values()];
     const browserPages = this.browserPageCount(values);
-    const residentRss = process.memoryUsage().rss;
+    const memory = this.memorySampler.snapshot();
+    const residentRss = memory.bytes;
     const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
     const maxResidentRssBytes = this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
     const busy = values.filter((session) =>
@@ -392,6 +392,7 @@ export class SessionManager {
       browser_pages: browserPages,
       max_browser_pages: maxBrowserPages,
       resident_rss_bytes: residentRss,
+      memory_measurement: memory.mode, memory_measurement_partial: memory.partial, measured_processes: memory.processes,
       max_resident_rss_bytes: maxResidentRssBytes,
       eviction: 'resource_lru_idle',
       accepts_named_sessions: Boolean(this.options.factory),
@@ -505,8 +506,9 @@ export class SessionManager {
     const now = Date.now();
     const session: ManagedSession = {
       id,
+      generation: ++this.generation,
       provider: this.options.provider,
-      executor: resilient(result.executor, this.options.provider),
+      executor: resilient(result.executor, this.options.provider, this.circuitStates),
       ...(result.browserSession ? { browserSession: result.browserSession } : {}),
       queue: new SerialQueue(this.options.config.maxQueue, this.options.config.minIntervalMs),
       automationQueue: new SerialQueue(this.options.config.maxQueue, 0),
@@ -529,10 +531,8 @@ export class SessionManager {
 
     const candidate = this.oldestRecyclableSession();
     if (!candidate) {
-      // Resource pressure is advisory when every live session is protected.
-      // Only the hard session-count limit can reject admission.
-      if (atCountLimit) throw new SessionLimitExceededError();
-      return;
+      // Protected sessions must not be evicted, nor may new work amplify pressure.
+      throw new SessionLimitExceededError();
     }
     await this.removeSession(candidate);
   }
@@ -573,7 +573,7 @@ export class SessionManager {
       this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
     return (
       this.browserPageCount() >= maxBrowserPages
-      || process.memoryUsage().rss >= maxResidentRssBytes
+      || this.memorySampler.snapshot().bytes >= maxResidentRssBytes
     );
   }
 

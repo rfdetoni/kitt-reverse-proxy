@@ -1,3 +1,5 @@
+import { writeStreamChunk } from './stream-io.js';
+import { StreamMismatchError } from '../runtime/read/reconciler.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
@@ -163,7 +165,8 @@ function prepareSse(res: Response): void {
   res.flushHeaders?.();
 }
 
-function startSseHeartbeat(res: Response, intervalMs = SSE_HEARTBEAT_MS): () => void {
+export function startSseHeartbeat(res: Response, intervalMs = SSE_HEARTBEAT_MS): () => void {
+  if (intervalMs <= 0) return () => {};
   let stopped = false;
   const stop = (): void => {
     if (stopped) return;
@@ -176,7 +179,7 @@ function startSseHeartbeat(res: Response, intervalMs = SSE_HEARTBEAT_MS): () => 
       stop();
       return;
     }
-    res.write(': ping\n\n');
+    try { writeStreamChunk(res, ': ping\n\n'); } catch { stop(); res.destroy(); }
   }, intervalMs);
   timer.unref();
   res.once?.('close', stop);
@@ -188,6 +191,7 @@ export class ChatStreamWriter {
   private readonly created = Math.floor(Date.now() / 1000);
   private started = false;
   private streamedChars = 0;
+  private streamedText = '';
   private stopHeartbeat?: () => void;
 
   constructor(
@@ -201,7 +205,7 @@ export class ChatStreamWriter {
     this.started = true;
     prepareSse(this.res);
     this.stopHeartbeat = startSseHeartbeat(this.res, this.heartbeatMs);
-    this.res.write(`data: ${JSON.stringify({
+    writeStreamChunk(this.res, `data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
       created: this.created,
@@ -214,7 +218,8 @@ export class ChatStreamWriter {
     if (!text) return;
     this.begin();
     this.streamedChars += text.length;
-    this.res.write(`data: ${JSON.stringify({
+    this.streamedText += text;
+    writeStreamChunk(this.res, `data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
       created: this.created,
@@ -226,10 +231,11 @@ export class ChatStreamWriter {
   finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
     this.begin();
     const fullText = completion.choices[0]?.message.content || '';
+    if (!fullText.startsWith(this.streamedText)) throw new StreamMismatchError();
     const toolCalls = completion.choices[0]?.message.tool_calls;
 
     if (this.streamedChars === 0) {
-      for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
+      for (const delta of fallbackDeltas.length && fallbackDeltas.join('') === fullText ? fallbackDeltas : [fullText]) {
         if (delta) this.delta(delta);
       }
     } else if (fullText.length > this.streamedChars) {
@@ -238,7 +244,7 @@ export class ChatStreamWriter {
     }
 
     if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-      this.res.write(`data: ${JSON.stringify({
+      writeStreamChunk(this.res, `data: ${JSON.stringify({
         id: this.id,
         object: 'chat.completion.chunk',
         created: this.created,
@@ -263,7 +269,7 @@ export class ChatStreamWriter {
 
     const legacyFunctionCall = completion.choices[0]?.message.function_call;
     if (legacyFunctionCall) {
-      this.res.write(`data: ${JSON.stringify({
+      writeStreamChunk(this.res, `data: ${JSON.stringify({
         id: this.id,
         object: 'chat.completion.chunk',
         created: this.created,
@@ -276,7 +282,7 @@ export class ChatStreamWriter {
       })}\n\n`);
     }
 
-    this.res.write(`data: ${JSON.stringify({
+    writeStreamChunk(this.res, `data: ${JSON.stringify({
       id: this.id,
       object: 'chat.completion.chunk',
       created: this.created,
@@ -301,6 +307,7 @@ export class ResponsesStreamWriter {
   private started = false;
   private messageStarted = false;
   private streamedChars = 0;
+  private streamedText = '';
   private stopHeartbeat?: () => void;
 
   constructor(
@@ -311,10 +318,10 @@ export class ResponsesStreamWriter {
 
   private event(type: string, payload: Record<string, unknown>): void {
     this.sequence += 1;
-    this.res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: this.sequence, ...payload })}\n\n`);
+    writeStreamChunk(this.res, `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: this.sequence, ...payload })}\n\n`);
   }
 
-  private beginResponse(): void {
+  beginResponse(): void {
     if (this.started) return;
     this.started = true;
     prepareSse(this.res);
@@ -344,6 +351,7 @@ export class ResponsesStreamWriter {
     if (!text) return;
     this.beginMessage();
     this.streamedChars += text.length;
+    this.streamedText += text;
     this.event('response.output_text.delta', {
       item_id: this.messageItemId,
       output_index: 0,
@@ -355,13 +363,14 @@ export class ResponsesStreamWriter {
   finish(completion: OpenAiCompletion, fallbackDeltas: string[] = []): void {
     this.beginResponse();
     const fullText = completion.choices[0]?.message.content || '';
+    if (!fullText.startsWith(this.streamedText)) throw new StreamMismatchError();
     const toolCalls = completion.choices[0]?.message.tool_calls || [];
     const output: unknown[] = [];
     let outputIndex = 0;
 
     if (fullText) {
       if (this.streamedChars === 0) {
-        for (const delta of fallbackDeltas.length ? fallbackDeltas : [fullText]) {
+        for (const delta of fallbackDeltas.length && fallbackDeltas.join('') === fullText ? fallbackDeltas : [fullText]) {
           if (delta) this.delta(delta);
         }
       } else if (fullText.length > this.streamedChars) {

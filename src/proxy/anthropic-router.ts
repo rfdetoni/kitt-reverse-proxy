@@ -1,3 +1,4 @@
+import { waitForDrain } from './stream-io.js';
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../logger.js';
 import { requestMayReturnToolCalls } from '../mapping/tool-calling.js';
@@ -25,9 +26,10 @@ export function createAnthropicRouter(manager: SessionManager): Router {
 
         if (req.body?.stream === true) {
           const writer = new AnthropicStreamWriter(res, requestedModel);
+          writer.begin();
           const result = await manager.execute(sessionId, body, {
             signal,
-            ...(!bufferTools ? { onDelta: (delta) => writer.delta(delta) } : {})
+            ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
           });
           if (result.metadata?.structured_output === 'failed' && !res.headersSent) {
             res.setHeader('X-Kitt-Structured-Output', 'failed');

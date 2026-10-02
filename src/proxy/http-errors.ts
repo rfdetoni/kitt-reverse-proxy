@@ -7,8 +7,17 @@ export type ErrorProtocol = 'openai' | 'anthropic';
 
 export function sendProxyError(res: Response, error: unknown, protocol: ErrorProtocol = 'openai'): void {
   if (res.headersSent) {
-    res.end();
-    return;
+    const descriptor = describeProxyError(error);
+    const usage = (error as { usage?: unknown })?.usage;
+    const payload = JSON.stringify({ error: { message: descriptor.message, code: descriptor.code, type: 'api_error',
+      ...((error as { requestId?: string })?.requestId ? { request_id: (error as { requestId: string }).requestId } : {}),
+      ...((error as { outcome?: string })?.outcome ? { outcome: (error as { outcome: string }).outcome } : {}),
+      ...(descriptor.recoverable !== undefined ? { recoverable: descriptor.recoverable, recovery_action: descriptor.recoveryAction } : {}) }, ...(usage ? { usage } : {}) });
+    if (!res.destroyed && !res.writableEnded && (res.writableLength ?? 0) < 4 * 1024 * 1024) {
+      const sse = String(res.getHeader('content-type') ?? '').includes('text/event-stream');
+      res.write(sse ? `event: error\ndata: ${payload}\n\n` : `${payload}\n`);
+    }
+    res.end(); return;
   }
   const descriptor = describeProxyError(error);
   if (protocol === 'anthropic') {
@@ -26,6 +35,9 @@ export function sendProxyError(res: Response, error: unknown, protocol: ErrorPro
     descriptor.message,
     descriptor.code,
     {
+      ...((error as { requestId?: string })?.requestId ? { request_id: (error as { requestId: string }).requestId } : {}),
+      ...((error as { outcome?: string })?.outcome ? { outcome: (error as { outcome: string }).outcome } : {}),
+      ...((error as { usage?: unknown })?.usage ? { usage: (error as { usage: never }).usage } : {}),
       ...(descriptor.recoverable !== undefined
         ? { recoverable: descriptor.recoverable }
         : {}),

@@ -226,6 +226,7 @@ export interface UpstreamResult {
 }
 
 export interface ChatExecutionOptions {
+  lifecycle?: import('./runtime/request-state.js').ProviderRequestState;
   onDelta?: (delta: string) => void | Promise<void>;
   reasoningEffort?: number;
   signal?: AbortSignal;

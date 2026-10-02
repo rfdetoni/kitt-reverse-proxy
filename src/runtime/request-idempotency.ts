@@ -1,3 +1,4 @@
+import { QueueFullError } from './serial-queue.js';
 import { createHash } from 'node:crypto';
 
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -7,6 +8,8 @@ interface Entry<T> {
   fingerprint: string;
   promise: Promise<T>;
   expiresAt: number;
+  pending: boolean;
+  uncertain: boolean;
 }
 
 export class RequestIdConflictError extends Error {
@@ -32,7 +35,8 @@ export class RequestIdempotencyCache<T> {
     scope: string,
     requestId: string | undefined,
     payload: unknown,
-    factory: () => Promise<T>
+    factory: () => Promise<T>,
+    options: { submitted?: () => boolean } = {}
   ): Promise<T> {
     const normalizedRequestId = requestId?.trim();
     if (!normalizedRequestId) return factory();
@@ -47,22 +51,28 @@ export class RequestIdempotencyCache<T> {
     }
 
     if (this.entries.size >= this.maxEntries) {
-      const oldest = this.entries.keys().next().value as string | undefined;
+      const oldest = [...this.entries].find(([, entry]) => !entry.pending && !entry.uncertain)?.[0];
       if (oldest) this.entries.delete(oldest);
+      else return Promise.reject(new QueueFullError());
     }
 
-    const promise = factory();
-    this.entries.set(key, {
-      fingerprint: digest,
-      promise,
-      expiresAt: Date.now() + this.ttlMs
+    const entry: Entry<T> = { fingerprint: digest, promise: Promise.resolve().then(factory),
+      pending: true, uncertain: false, expiresAt: Number.POSITIVE_INFINITY };
+    this.entries.set(key, entry);
+    entry.promise = entry.promise.then((result) => {
+      entry.pending = false; entry.expiresAt = Date.now() + this.ttlMs; return result;
+    }, (error: unknown) => {
+      entry.pending = false;
+      if (options.submitted?.()) entry.uncertain = true;
+      else if (this.entries.get(key) === entry) this.entries.delete(key);
+      throw error;
     });
-    return promise;
+    return entry.promise;
   }
 
   private prune(now = Date.now()): void {
     for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(key);
+      if (!entry.pending && !entry.uncertain && entry.expiresAt <= now) this.entries.delete(key);
     }
   }
 }

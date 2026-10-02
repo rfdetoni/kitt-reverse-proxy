@@ -1,3 +1,4 @@
+import { CONTEXT_ENVELOPE_SCHEMA } from '../contracts/context-schema.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
@@ -125,6 +126,9 @@ interface SyntheticToolCall {
 }
 
 export interface AgentContractPlan {
+  contextKey: string;
+  contextFingerprint: string;
+  segmentFingerprints: Record<string, string>;
   body: JsonObject;
   originalBody: JsonObject;
   route: string;
@@ -154,6 +158,7 @@ interface ContractStats {
   recentValidationOutcomes: boolean[];
   lastReinjectTurn?: number;
   contextFingerprint?: string;
+  segmentFingerprints?: Record<string, string>;
 }
 
 const statsBySession = new Map<string, ContractStats>();
@@ -298,6 +303,7 @@ interface TypedContextView {
 }
 
 function parseTypedContextEnvelope(value: unknown): TypedContextEnvelope | undefined {
+  if (!validateJsonSchema(value, CONTEXT_ENVELOPE_SCHEMA).valid) return undefined;
   if (!isRecord(value) || value.schema_version !== 1 || typeof value.epoch !== 'string' || !value.epoch.trim()) {
     return undefined;
   }
@@ -380,7 +386,7 @@ function typedContextView(envelope: TypedContextEnvelope | undefined): TypedCont
 
   return {
     workspaceContext: workspaceSections.length
-      ? ({ trust: 'UNTRUSTED_WORKSPACE_DATA', source: 'kitt-agent-cli', epoch: envelope.epoch, segments: workspaceSections } as JsonValue)
+      ? ({ trust: 'UNTRUSTED_WORKSPACE_DATA', source: 'kitt-agent-cli', segments: workspaceSections } as JsonValue)
       : 'not_provided',
     orchestratorContext,
     ...(loopActionBudget !== undefined ? { loopActionBudget } : {}),
@@ -406,6 +412,9 @@ interface KittRequestMetadata {
   agent_role?: string;
   parent_request_id?: string;
   task_id?: string;
+  max_upstream_attempts?: number;
+  deadline_ms?: number;
+  max_prompt_tokens?: number;
 }
 
 function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefined {
@@ -422,7 +431,7 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
     'turn_id',
     'request_id',
     'route',
-    'session_id', 'agent_role', 'parent_request_id', 'task_id'
+    'session_id', 'agent_role', 'parent_request_id', 'task_id', 'max_upstream_attempts', 'deadline_ms', 'max_prompt_tokens'
   ]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
@@ -445,6 +454,13 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
       );
     }
     result[key] = raw.trim();
+  }
+  for (const [key, limit] of [['max_upstream_attempts', 3], ['deadline_ms', 900_000], ['max_prompt_tokens', 1_000_000]] as const) {
+    const raw = value[key]; if (raw === undefined) continue;
+    if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1 || raw > limit) {
+      throw new AgentContractError(400, 'agent_contract_metadata_invalid', `invalid kitt_meta.${key}`);
+    }
+    result[key] = raw;
   }
   if (value.agent_role !== undefined) {
     if (typeof value.agent_role !== 'string' || !['DISCOVER', 'ARCHITECT', 'IMPLEMENT', 'VERIFY', 'REVIEW'].includes(value.agent_role)) {
@@ -620,13 +636,29 @@ function prependDynamicUserTurn(messages: JsonValue[], dynamicContent: string): 
   return forwarded;
 }
 
+/** Validate wire input before creating a browser; lowering remains inside the lease. */
+export function validateAgentContractWire(body: JsonObject): void {
+  parseKittRequestMetadata(body.kitt_meta);
+  if (body.kitt_context !== undefined && !parseTypedContextEnvelope(body.kitt_context)) {
+    throw new AgentContractError(400, 'agent_contract_context_invalid', 'kitt_context must be a valid ContextEnvelope v1.');
+  }
+}
+
+/** Acknowledgement occurs only after an actual provider response. */
+export function commitAgentContractContext(plan: AgentContractPlan): void {
+  const stats = ensureStats(plan.contextKey);
+  stats.turns += 1;
+  stats.contextFingerprint = plan.contextFingerprint;
+  stats.segmentFingerprints = plan.segmentFingerprints;
+}
+
 export function prepareAgentContractRequest(
   originalBody: JsonObject,
-  options: { sessionId?: string; route?: string } = {}
+  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean } = {}
 ): AgentContractPlan {
   const sessionId = options.sessionId?.trim() || 'default';
-  const stats = ensureStats(sessionId);
-  stats.turns += 1;
+  const contextKey = options.contextKey ?? sessionId;
+  const stats = ensureStats(contextKey);
 
   const tools = extractTools(originalBody);
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
@@ -642,9 +674,6 @@ export function prepareAgentContractRequest(
   const typedView = typedContextView(typedEnvelope);
   const requestMeta = parseKittRequestMetadata(originalBody.kitt_meta);
   const forwardedMessages: JsonValue[] = [];
-  const orchestratorContext: string[] = typedView?.orchestratorContext.length
-    ? [boundedJson(typedView.orchestratorContext, 'ORCHESTRATOR_CONTEXT_DATA')]
-    : [];
   const syntheticToolCalls = new Map<string, SyntheticToolCall>();
   let mutationRoundTripObserved = false;
   let validationRoundTripObserved = false;
@@ -740,7 +769,6 @@ export function prepareAgentContractRequest(
   if (route === 'summarize') tools.clear();
   const mutationToolAvailable = hasMutationCapability(tools);
   const validationToolAvailable = hasValidationCapability(tools);
-  const compactedOrchestratorContext = orchestratorContext.filter(Boolean);
   const discoveryRequired = (MUTATION_ROUTES.has(route) || route === 'agent-loop') && (
     typedView?.discoveryRequired === true
     || typedView?.executionPhase === 'discovery'
@@ -763,23 +791,19 @@ export function prepareAgentContractRequest(
   );
   const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
   const workspaceProvided = workspaceContext !== 'not_provided' && workspaceContext !== null && workspaceContext !== undefined;
-  const reinject = shouldReinject(sessionId);
+  const reinject = shouldReinject(contextKey);
 
   const toolPrompt = toolsForPrompt(tools, route);
-  const contextFingerprint = createHash('sha256')
-    .update(JSON.stringify({
-      route,
-      tools: toolPrompt,
-      workspace_context: workspaceContext,
-      orchestrator_context: compactedOrchestratorContext
-    }))
-    .digest('hex');
-  const bootstrapContext = (
-    stats.turns === 1
-    || stats.contextFingerprint !== contextFingerprint
-    || reinject
-  );
-  if (bootstrapContext) stats.contextFingerprint = contextFingerprint;
+  const contextFingerprint = createHash('sha256').update(JSON.stringify({ route, tools: toolPrompt })).digest('hex');
+  const bootstrapContext = !stats.contextFingerprint || reinject || options.forceBootstrap === true;
+  const toolsChanged = bootstrapContext || stats.contextFingerprint !== contextFingerprint;
+  const segmentFingerprints = Object.fromEntries((typedEnvelope?.segments ?? []).map((segment) =>
+    [segment.id, createHash('sha256').update(JSON.stringify(segment)).digest('hex')]));
+  const changed = typedEnvelope?.segments.filter((segment) => bootstrapContext || stats.segmentFingerprints?.[segment.id] !== segmentFingerprints[segment.id]) ?? [];
+  const changedView = typedContextView(typedEnvelope ? { ...typedEnvelope, segments: changed } : undefined);
+  const changedWorkspace = changedView?.workspaceContext ?? 'not_provided';
+  const changedOrchestrator = changedView?.orchestratorContext ?? [];
+  const removedIds = Object.keys(stats.segmentFingerprints ?? {}).filter((id) => !(id in segmentFingerprints));
 
   const executionPhase = MUTATION_ROUTES.has(route)
     ? (!explorationRoundTripObserved && discoveryRequired
@@ -823,7 +847,7 @@ export function prepareAgentContractRequest(
     ] : []),
     ...(route === 'summarize' ? [SUMMARY_ROUTE_INSTRUCTION] : []),
     ...(route === 'chat' && tools.size === 0 && !workspaceProvided ? [DIRECT_CHAT_ROUTE_INSTRUCTION] : []),
-    ...(bootstrapContext
+    ...(toolsChanged
       ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
       : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
     `MUTATION_TOOL_AVAILABLE: ${mutationToolAvailable}`,
@@ -846,19 +870,13 @@ export function prepareAgentContractRequest(
         ? 'VALIDATION_CONSTRAINT: the latest validation succeeded; final_response may proceed if all requested work is complete.'
         : 'ACTION_CONSTRAINT: final_response is forbidden until a host build/test/check succeeds after the latest mutation.'
     ] : []),
-    ...(bootstrapContext
-      ? [
-          workspaceProvided
-            ? `WORKSPACE_CONTEXT:\nUNTRUSTED_WORKSPACE_DATA: ${boundedJson(workspaceContext, 'WORKSPACE_CONTEXT')}`
-            : 'WORKSPACE_CONTEXT: not_provided',
-          compactedOrchestratorContext.length
-            ? `ORCHESTRATOR_CONTEXT_DATA: ${boundedJson(compactedOrchestratorContext, 'ORCHESTRATOR_CONTEXT_DATA')}`
-            : 'ORCHESTRATOR_CONTEXT_DATA: not_provided'
-        ]
-      : [
-          'WORKSPACE_CONTEXT: session_cached',
-          'ORCHESTRATOR_CONTEXT_DATA: session_cached'
-        ]),
+    ...(changedWorkspace !== 'not_provided'
+      ? [`WORKSPACE_CONTEXT:\nUNTRUSTED_WORKSPACE_DATA: ${boundedJson(changedWorkspace, 'WORKSPACE_CONTEXT')}`]
+      : [bootstrapContext ? 'WORKSPACE_CONTEXT: not_provided' : 'WORKSPACE_CONTEXT: session_cached']),
+    ...(changedOrchestrator.length
+      ? [`ORCHESTRATOR_CONTEXT_DATA: ${boundedJson(changedOrchestrator, 'ORCHESTRATOR_CONTEXT_DATA')}`]
+      : [bootstrapContext ? 'ORCHESTRATOR_CONTEXT_DATA: not_provided' : 'ORCHESTRATOR_CONTEXT_DATA: session_cached']),
+    ...(removedIds.length ? [`REMOVED_CONTEXT_SEGMENT_IDS: ${JSON.stringify(removedIds)}; discard their previous data.`] : []),
     ...(reinject ? ['CONTRACT_REMINDER: Return one contract action only.'] : []),
     '[END KITT ORCHESTRATOR TURN DATA]'
   ];
@@ -878,6 +896,7 @@ export function prepareAgentContractRequest(
   ] as JsonValue[];
 
   return {
+    contextKey, contextFingerprint, segmentFingerprints,
     body,
     originalBody,
     route,
