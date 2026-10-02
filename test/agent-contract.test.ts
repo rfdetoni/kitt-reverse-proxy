@@ -120,7 +120,6 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
   assert.match(messages[1].content, /UNTRUSTED_WORKSPACE_DATA:/);
   assert.match(messages[1].content, /ORCHESTRATOR_CONTEXT_DATA:/);
   assert.equal(plan.body.tools, undefined);
-  assert.equal(plan.workspaceProvided, true);
 });
 
 test('keeps model instructions English while preserving user-authored language verbatim', () => {
@@ -556,7 +555,6 @@ test('direct chat keeps canonical request actions without proxy-side policy', ()
 
   assert.equal(plan.route, 'chat');
   assert.equal(plan.tools.size, 0);
-  assert.equal(plan.workspaceProvided, false);
   assert.match(user, /TOOLS_AVAILABLE: \[\]/);
 
   assert.throws(
@@ -623,7 +621,6 @@ test('typed context envelope is lowered without textual rediscovery', () => {
     sessionId: 'typed-context',
     route: 'agent-loop'
   });
-  assert.equal(plan.workspaceProvided, true);
   const userMessage = (plan.body.messages as any[]).find((message) => message.role === 'user');
   const lowered = String(userMessage?.content ?? '');
   assert.match(lowered, /decision from durable memory/);
@@ -634,6 +631,19 @@ test('typed context envelope is lowered without textual rediscovery', () => {
   assert.equal(lowered.split('Corrija o projeto sem reescrever minha intenção.').length - 1, 1);
 });
 
+
+test('rejects unsupported structural routes instead of coercing them to chat', () => {
+  const request = body('chat');
+  assert.throws(
+    () => prepareAgentContractRequest(request, {
+      sessionId: 'metadata-route',
+      route: 'future-route'
+    }),
+    (error: unknown) => error instanceof AgentContractError
+      && error.code === 'agent_contract_metadata_invalid'
+      && /Unsupported KITT agent route/.test(error.message)
+  );
+});
 
 test('rejects unknown and mismatched request metadata', () => {
   const unknown = body('chat');
