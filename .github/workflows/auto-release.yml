@@ -100,8 +100,26 @@ jobs:
             fi
             tagged="$(git rev-list -n1 "$tag")"
             if [[ "$tagged" != "$head" ]]; then
-              echo "Version $current was already released at $tagged, but validated SHA $head contains unpublished changes. Bump the package version instead of moving the immutable tag." >&2
-              exit 1
+              if ! git merge-base --is-ancestor "$tagged" "$head"; then
+                echo "Published tag $tag at $tagged is not an ancestor of validated main $head." >&2
+                exit 1
+              fi
+              release_changes=()
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  .github/*|docs/*|test/*|README.md|SECURITY.md|LICENSE)
+                    ;;
+                  *)
+                    release_changes+=("$changed_path")
+                    ;;
+                esac
+              done < <(git diff --name-only "$tagged..$head")
+              if (( ${#release_changes[@]} )); then
+                echo "Version $current already exists at $tagged, but release-impacting files changed:" >&2
+                printf '  - %s\n' "${release_changes[@]}" >&2
+                echo "Bump the package version instead of moving the immutable tag." >&2
+                exit 1
+              fi
             fi
           fi
 
