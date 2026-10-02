@@ -569,7 +569,6 @@ export function prepareAgentContractRequest(
     });
   }
 
-  const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
   const reinject = shouldReinject(contextKey);
   const toolPrompt = toolsForPrompt(tools);
   const contextFingerprint = createHash('sha256').update(JSON.stringify({ route, tools: toolPrompt })).digest('hex');
