@@ -214,7 +214,8 @@ test('wrapped Agent CLI tool feedback is recovered as a synthetic tool result', 
       arguments: { path: 'src/example.ts', content: 'export const ok = true;' }
     },
     content: null,
-    reasoning_summary: 'Vou aplicar a alteração.'
+    reasoning_summary: 'Vou aplicar a alteração.',
+    loop: null
   })), firstPlan);
   const firstMessage = firstResult.choices[0]?.message;
   const toolCall = firstMessage?.tool_calls?.[0];
@@ -253,7 +254,8 @@ test('converts a valid use_tool contract into a native OpenAI tool call', () => 
     tool: 'kitt_runtime',
     tool_input: { operation: 'repo.read', arguments: { path: 'README.md' } },
     content: null,
-    reasoning_summary: 'Preciso ler o arquivo solicitado.'
+    reasoning_summary: 'Preciso ler o arquivo solicitado.',
+    loop: null
   })), plan);
 
   const message = result.choices[0]?.message;
@@ -273,7 +275,8 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
     tool: 'kitt_runtime',
     tool_input: { operation: 'repo.read', arguments: { path: 'README.md' } },
     content: null,
-    reasoning_summary: 'Vou ler o arquivo antes de continuar.'
+    reasoning_summary: 'Vou ler o arquivo antes de continuar.',
+    loop: null
   })), firstPlan);
 
   const toolCall = firstResult.choices[0]?.message.tool_calls?.[0];
@@ -324,10 +327,56 @@ test('rejects oversized reasoning while wrapped JSON normalization is covered se
       tool: null,
       tool_input: null,
       content: 'ok',
-      reasoning_summary: 'x'.repeat(401)
+      reasoning_summary: 'x'.repeat(401),
+      loop: null
     })), plan),
     AgentContractValidationError
   );
+});
+
+test('accepts only the canonical contract shape after provider extraction', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'canonical-only' });
+  const canonical = {
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.read', arguments: { path: 'README.md' } },
+    content: null,
+    reasoning_summary: 'Vou ler o arquivo.',
+    loop: null
+  };
+
+  const fenced = transformAgentContractCompletion(
+    completion(`\`\`\`json\n${JSON.stringify(canonical)}\n\`\`\``),
+    plan
+  );
+  assert.equal(fenced.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
+
+  const legacyDialects = [
+    JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }),
+    '<kitt-tool>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</kitt-tool>',
+    JSON.stringify({
+      action: 'use_tool',
+      tool_name: 'kitt_runtime',
+      arguments: { operation: 'repo.read', arguments: { path: 'README.md' } },
+      content: null,
+      reasoning_summary: '',
+      loop: null
+    }),
+    JSON.stringify({
+      action: 'final_response',
+      tool: null,
+      tool_input: null,
+      content: 'ok',
+      reasoning_summary: ''
+    })
+  ];
+
+  for (const candidate of legacyDialects) {
+    assert.throws(
+      () => transformAgentContractCompletion(completion(candidate), plan),
+      AgentContractValidationError
+    );
+  }
 });
 
 test('caller route is authoritative regardless of mutation-like prompt wording', () => {
@@ -443,7 +492,8 @@ test('validate-diff rejects file mutation but permits validation command executi
       tool: 'kitt_runtime',
       tool_input: { operation: 'patch.apply', arguments: { patch: '...' } },
       content: null,
-      reasoning_summary: 'A alteração seria aplicada.'
+      reasoning_summary: 'A alteração seria aplicada.',
+      loop: null
     })), plan),
     AgentContractValidationError
   );
@@ -453,7 +503,8 @@ test('validate-diff rejects file mutation but permits validation command executi
     tool: 'kitt_runtime',
     tool_input: { operation: 'process.run', arguments: { command: 'npm test' } },
     content: null,
-    reasoning_summary: 'Vou executar a validação solicitada.'
+    reasoning_summary: 'Vou executar a validação solicitada.',
+    loop: null
   })), plan);
   assert.equal(result.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
 });
@@ -468,7 +519,8 @@ test('summarize never exposes a generic workspace runtime tool', () => {
       tool: 'kitt_runtime',
       tool_input: { operation: 'repo.create_directory', arguments: { path: 'backend' } },
       content: null,
-      reasoning_summary: 'Não devo executar workspace durante resumo.'
+      reasoning_summary: 'Não devo executar workspace durante resumo.',
+      loop: null
     })), plan),
     AgentContractValidationError
   );
@@ -482,7 +534,8 @@ test('returns a structured orchestration error when workspace is explicitly requ
       tool: null,
       tool_input: null,
       content: 'Preciso do workspace atual.',
-      reasoning_summary: 'O workspace não foi fornecido.'
+      reasoning_summary: 'O workspace não foi fornecido.',
+      loop: null
     })), plan),
     (error: unknown) => error instanceof AgentContractError && error.code === 'workspace_context_required' && error.status === 409
   );
@@ -563,7 +616,8 @@ test('direct chat without external context resolves through final_response inste
       tool: null,
       tool_input: null,
       content: 'I need tools.',
-      reasoning_summary: 'Requesting tools.'
+      reasoning_summary: 'Requesting tools.',
+      loop: null
     })), plan),
     (error: unknown) => error instanceof AgentContractValidationError
       && /Direct chat without external execution context/.test(error.message)
@@ -574,7 +628,8 @@ test('direct chat without external context resolves through final_response inste
     tool: null,
     tool_input: null,
     content: 'Dependency injection supplies dependencies from outside an object.',
-    reasoning_summary: ''
+    reasoning_summary: '',
+    loop: null
   })), plan);
   assert.match(result.choices[0]?.message.content ?? '', /supplies dependencies/);
 });

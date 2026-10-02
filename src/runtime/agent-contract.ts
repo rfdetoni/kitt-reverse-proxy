@@ -18,7 +18,6 @@ const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const STRICT_READ_ONLY_ROUTES = new Set(['context-gather', 'summarize']);
 const MUTATION_ROUTES = new Set(['code-generation', 'code-edit']);
-const TEXT_FALLBACK_ROUTES = new Set(['validate-diff', 'summarize']);
 const ROUTES = new Set<string>(AGENT_ROUTES);
 const CONTRACT_ACTIONS = new Set(['use_tool', 'final_response', 'request_workspace', 'request_tools']);
 const NON_JSON_CONTRACT_MESSAGE = 'The model response is not a pure JSON object.';
@@ -489,11 +488,7 @@ function normalizeRoute(value: unknown): string {
 
 function extractTools(body: JsonObject): Map<string, ToolDescriptor> {
   const result = new Map<string, ToolDescriptor>();
-  const source = Array.isArray(body.tools)
-    ? body.tools
-    : Array.isArray(body.functions)
-      ? body.functions.map((entry) => ({ type: 'function', function: entry }))
-      : [];
+  const source = Array.isArray(body.tools) ? body.tools : [];
   for (const raw of source) {
     if (!isRecord(raw)) continue;
     const fn = isRecord(raw.function) ? raw.function : undefined;
@@ -926,419 +921,29 @@ function sentenceCount(text: string): number {
   return normalized.split(/(?<=[.!?])\s+/u).filter((part) => part.trim()).length;
 }
 
-function nextNonWhitespace(text: string, start: number): number {
-  for (let index = start; index < text.length; index += 1) {
-    if (!/\s/u.test(text[index]!)) return index;
-  }
-  return -1;
-}
-
-function jsonValueStartsAt(text: string, index: number): boolean {
-  const char = text[index];
-  if (char === '"' || char === '{' || char === '[' || char === '-' || /[0-9]/u.test(char || '')) {
-    return true;
-  }
-  return text.startsWith('true', index)
-    || text.startsWith('false', index)
-    || text.startsWith('null', index);
-}
-
-function likelyStringTerminator(
-  text: string,
-  quoteIndex: number,
-  role: 'key' | 'value',
-  container: 'object' | 'array' | undefined
-): boolean {
-  const nextIndex = nextNonWhitespace(text, quoteIndex + 1);
-  if (nextIndex < 0) return true;
-  const next = text[nextIndex]!;
-
-  if (role === 'key') return next === ':';
-
-  if (next === ',') {
-    const afterComma = nextNonWhitespace(text, nextIndex + 1);
-    if (afterComma < 0) return false;
-    if (container === 'object') return text[afterComma] === '"';
-    if (container === 'array') return jsonValueStartsAt(text, afterComma);
-    return false;
-  }
-
-  if (next === '}' || next === ']') {
-    const afterClose = nextNonWhitespace(text, nextIndex + 1);
-    return afterClose < 0 || [',', '}', ']'].includes(text[afterClose]!);
-  }
-
-  return false;
-}
-
-function repairJsonSerialization(text: string): string {
-  let repaired = '';
-  let inString = false;
-  let role: 'key' | 'value' = 'value';
-  const stack: Array<'object' | 'array'> = [];
-  let lastSignificant = '';
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-
-    if (!inString) {
-      if (char === '"') {
-        const container = stack.at(-1);
-        role = container === 'object' && (lastSignificant === '{' || lastSignificant === ',')
-          ? 'key'
-          : 'value';
-        inString = true;
-        repaired += char;
-        continue;
-      }
-      if (char === '{') stack.push('object');
-      else if (char === '[') stack.push('array');
-      else if (char === '}' && stack.at(-1) === 'object') stack.pop();
-      else if (char === ']' && stack.at(-1) === 'array') stack.pop();
-
-      repaired += char;
-      if (!/\s/u.test(char)) lastSignificant = char;
-      continue;
-    }
-
-    if (char === '\\') {
-      const next = text[index + 1];
-      if (next && ['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'].includes(next)) {
-        repaired += char + next;
-        index += 1;
-      } else {
-        repaired += '\\\\';
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      if (likelyStringTerminator(text, index, role, stack.at(-1))) {
-        inString = false;
-        repaired += char;
-        lastSignificant = '"';
-      } else {
-        repaired += '\\"';
-      }
-      continue;
-    }
-
-    const code = char.charCodeAt(0);
-    if (code < 0x20) {
-      if (char === '\n') repaired += '\\n';
-      else if (char === '\r') repaired += '\\r';
-      else if (char === '\t') repaired += '\\t';
-      else if (char === '\b') repaired += '\\b';
-      else if (char === '\f') repaired += '\\f';
-      else repaired += `\\u${code.toString(16).padStart(4, '0')}`;
-      continue;
-    }
-
-    repaired += char;
-  }
-
-  return repaired;
-}
-
-function decodeLooseStringPayload(raw: string): string | undefined {
-  let escaped = '';
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index]!;
-    if (char === '\\') {
-      const next = raw[index + 1];
-      if (next === 'u') {
-        const unicode = raw.slice(index + 2, index + 6);
-        if (/^[0-9a-fA-F]{4}$/u.test(unicode)) {
-          escaped += `\\u${unicode}`;
-          index += 5;
-          continue;
-        }
-        escaped += '\\\\';
-        continue;
-      }
-      if (next && ['"', '\\', '/', 'b', 'f', 'n', 'r', 't'].includes(next)) {
-        escaped += char + next;
-        index += 1;
-        continue;
-      }
-      escaped += '\\\\';
-      continue;
-    }
-    if (char === '"') {
-      escaped += '\\"';
-      continue;
-    }
-    const code = char.charCodeAt(0);
-    if (code < 0x20) {
-      if (char === '\n') escaped += '\\n';
-      else if (char === '\r') escaped += '\\r';
-      else if (char === '\t') escaped += '\\t';
-      else if (char === '\b') escaped += '\\b';
-      else if (char === '\f') escaped += '\\f';
-      else escaped += `\\u${code.toString(16).padStart(4, '0')}`;
-      continue;
-    }
-    escaped += char;
-  }
-
-  try {
-    const parsed = JSON.parse(`"${escaped}"`);
-    return typeof parsed === 'string' ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function recoverMalformedRepoWriteFileContract(text: string): AgentContractResponse | undefined {
-  const source = text.trim();
-  if (!/"action"\s*:\s*"use_tool"/u.test(source)) return undefined;
-  if (!/"tool"\s*:\s*"kitt_runtime"/u.test(source)) return undefined;
-
-  const operationMatch = /"operation"\s*:\s*"repo\.write_file"/u.exec(source);
-  if (!operationMatch?.index && operationMatch?.index !== 0) return undefined;
-
-  const argumentsIndex = source.indexOf('"arguments"', operationMatch.index);
-  if (argumentsIndex < 0) return undefined;
-
-  const contentField = /"content"\s*:\s*"/gu;
-  contentField.lastIndex = argumentsIndex;
-  const contentMatch = contentField.exec(source);
-  if (!contentMatch?.index) return undefined;
-  const contentStart = contentField.lastIndex;
-
-  const pathPrefix = source.slice(argumentsIndex, contentMatch.index);
-  const pathMatch = /"path"\s*:\s*("(?:\\.|[^"\\])*")/u.exec(pathPrefix);
-  if (!pathMatch) return undefined;
-
-  let pathValue: unknown;
-  try {
-    pathValue = JSON.parse(pathMatch[1]!);
-  } catch {
-    return undefined;
-  }
-  if (typeof pathValue !== 'string' || !pathValue.trim()) return undefined;
-
-  const suffix = /,\s*"content"\s*:\s*null\s*,\s*"reasoning_summary"\s*:\s*("(?:\\.|[^"\\])*")\s*\}\s*$/u.exec(source);
-  if (!suffix?.index) return undefined;
-
-  let cursor = suffix.index - 1;
-  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
-  if (source[cursor] !== '}') return undefined;
-  cursor -= 1;
-  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
-  if (source[cursor] !== '}') return undefined;
-  cursor -= 1;
-  while (cursor >= contentStart && /\s/u.test(source[cursor]!)) cursor -= 1;
-  if (source[cursor] !== '"') return undefined;
-
-  const rawContent = source.slice(contentStart, cursor);
-  const decodedContent = decodeLooseStringPayload(rawContent);
-  if (decodedContent === undefined) return undefined;
-
-  let reasoningSummary: unknown;
-  try {
-    reasoningSummary = JSON.parse(suffix[1]!);
-  } catch {
-    return undefined;
-  }
-  if (typeof reasoningSummary !== 'string') return undefined;
-
-  return {
-    action: 'use_tool',
-    tool: 'kitt_runtime',
-    tool_input: {
-      operation: 'repo.write_file',
-      arguments: {
-        path: pathValue,
-        content: decodedContent
-      }
-    },
-    content: null,
-    reasoning_summary: reasoningSummary,
-    loop: null
-  };
-}
-
-function parseLooseJsonObject(text: string): Record<string, unknown> | undefined {
+function canonicalContractJson(text: string): string {
   const trimmed = text.trim();
-  const attempts = [trimmed];
-  const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    attempts.push(trimmed.slice(firstBrace, lastBrace + 1));
-  }
-
-  for (const attempt of attempts) {
-    for (const candidate of [attempt, repairJsonSerialization(attempt)]) {
-      try {
-        const parsed = JSON.parse(candidate);
-        if (isRecord(parsed)) return parsed;
-      } catch {
-        // Try the next deterministic representation.
-      }
-    }
-  }
-  return undefined;
-}
-
-function contractFromBareRuntimeOperation(text: string): AgentContractResponse | undefined {
-  const parsed = parseLooseJsonObject(text);
-  if (!parsed || Object.prototype.hasOwnProperty.call(parsed, 'action')) return undefined;
-
-  const operation = parsed.operation;
-  const args = parsed.arguments;
-  if (typeof operation !== 'string' || !isRecord(args)) return undefined;
-
-  const keys = Object.keys(parsed);
-  if (keys.some((key) => key !== 'operation' && key !== 'arguments')) return undefined;
-
-  return {
-    action: 'use_tool',
-    tool: 'kitt_runtime',
-    tool_input: {
-      operation,
-      arguments: args as JsonObject
-    },
-    content: null,
-    reasoning_summary: '',
-    loop: null
-  };
-}
-
-function contractFromKittToolEnvelope(text: string): AgentContractResponse | undefined {
-  const tagged = text.match(/<kitt-tool>\s*([\s\S]*?)\s*<\/kitt-tool>/iu)?.[1];
-  const parsed = parseLooseJsonObject(tagged ?? text);
-  if (!parsed) return undefined;
-
-  const name = typeof parsed.name === 'string'
-    ? parsed.name
-    : (typeof parsed.tool === 'string' ? parsed.tool : undefined);
-  const input = isRecord(parsed.arguments)
-    ? parsed.arguments
-    : (isRecord(parsed.tool_input) ? parsed.tool_input : undefined);
-
-  if (!name || !input || Object.prototype.hasOwnProperty.call(parsed, 'action')) {
-    return undefined;
-  }
-
-  return {
-    action: 'use_tool',
-    tool: name,
-    tool_input: input as JsonObject,
-    content: null,
-    reasoning_summary: '',
-    loop: null
-  };
-}
-
-function contractJsonCandidates(text: string): Record<string, unknown>[] {
-  const candidates: Record<string, unknown>[] = [];
-  const seen = new Set<string>();
-
-  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-
-    for (let index = start; index < text.length; index += 1) {
-      const char = text[index];
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (char === '\\') {
-          escaped = true;
-        } else if (char === '"') {
-          inString = false;
-        }
-        continue;
-      }
-
-      if (char === '"') {
-        inString = true;
-        continue;
-      }
-      if (char === '{') {
-        depth += 1;
-        continue;
-      }
-      if (char !== '}') continue;
-
-      depth -= 1;
-      if (depth !== 0) continue;
-
-      const candidateText = text.slice(start, index + 1);
-      try {
-        const candidate = JSON.parse(candidateText);
-        if (
-          isRecord(candidate)
-          && typeof candidate.action === 'string'
-          && CONTRACT_ACTIONS.has(candidate.action)
-          && !seen.has(candidateText)
-        ) {
-          candidates.push(candidate);
-          seen.add(candidateText);
-        }
-      } catch {
-        // Keep scanning later opening braces; surrounding prose may contain braces too.
-      }
-      break;
-    }
-  }
-
-  return candidates;
-}
-
-function parseContractValue(text: string): unknown {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const candidates = contractJsonCandidates(trimmed);
-    if (candidates.length === 1) return candidates[0];
-    if (candidates.length > 1) {
-      throw new AgentContractValidationError('The response contains multiple JSON objects compatible with the contract.');
-    }
-
-    const repaired = repairJsonSerialization(trimmed);
-    if (repaired !== trimmed) {
-      try {
-        return JSON.parse(repaired);
-      } catch {
-        const repairedCandidates = contractJsonCandidates(repaired);
-        if (repairedCandidates.length === 1) return repairedCandidates[0];
-        if (repairedCandidates.length > 1) {
-          throw new AgentContractValidationError('The response contains multiple JSON objects compatible with the contract.');
-        }
-      }
-    }
-
-    throw new AgentContractValidationError(NON_JSON_CONTRACT_MESSAGE);
-  }
+  const fenced = trimmed.match(/^```json\s*([\s\S]*?)\s*```$/iu);
+  return fenced ? fenced[1]!.trim() : trimmed;
 }
 
 function parseStrictContract(text: string): AgentContractResponse {
-  const parsed = parseContractValue(text);
-  if (!isRecord(parsed)) throw new AgentContractValidationError('The model response must be a JSON object.');
-
-  const value: Record<string, unknown> = { ...parsed };
-  if (!Object.prototype.hasOwnProperty.call(value, 'tool') && typeof value.tool_name === 'string') {
-    value.tool = value.tool_name;
-    delete value.tool_name;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(canonicalContractJson(text));
+  } catch {
+    throw new AgentContractValidationError(NON_JSON_CONTRACT_MESSAGE);
   }
-  if (!Object.prototype.hasOwnProperty.call(value, 'tool_input') && isRecord(value.arguments)) {
-    value.tool_input = value.arguments;
-    delete value.arguments;
+  if (!isRecord(parsed)) {
+    throw new AgentContractValidationError('The model response must be a JSON object.');
   }
-  if (!Object.prototype.hasOwnProperty.call(value, 'tool')) value.tool = null;
-  if (!Object.prototype.hasOwnProperty.call(value, 'tool_input')) value.tool_input = null;
-  if (!Object.prototype.hasOwnProperty.call(value, 'content')) value.content = null;
-  if (!Object.prototype.hasOwnProperty.call(value, 'reasoning_summary')) value.reasoning_summary = '';
-  if (!Object.prototype.hasOwnProperty.call(value, 'loop')) value.loop = null;
 
+  const value = parsed as Record<string, unknown>;
   const expected = new Set(['action', 'tool', 'tool_input', 'content', 'reasoning_summary', 'loop']);
   const keys = Object.keys(value);
-  if (!Object.prototype.hasOwnProperty.call(value, 'action')) {
-    throw new AgentContractValidationError('Missing required field: action.');
+  const missing = [...expected].filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
+  if (missing.length) {
+    throw new AgentContractValidationError(`Missing required field(s): ${missing.join(', ')}.`);
   }
   if (keys.some((key) => !expected.has(key))) {
     throw new AgentContractValidationError('The response contains fields outside the contract.');
@@ -1348,10 +953,18 @@ function parseStrictContract(text: string): AgentContractResponse {
   if (!CONTRACT_ACTIONS.has(String(action))) {
     throw new AgentContractValidationError('Invalid action.');
   }
-  if (value.tool !== null && typeof value.tool !== 'string') throw new AgentContractValidationError('tool must be a string or null.');
-  if (value.tool_input !== null && !isRecord(value.tool_input)) throw new AgentContractValidationError('tool_input must be an object or null.');
-  if (value.content !== null && typeof value.content !== 'string') throw new AgentContractValidationError('content must be a string or null.');
-  if (typeof value.reasoning_summary !== 'string') throw new AgentContractValidationError('reasoning_summary must be a string.');
+  if (value.tool !== null && typeof value.tool !== 'string') {
+    throw new AgentContractValidationError('tool must be a string or null.');
+  }
+  if (value.tool_input !== null && !isRecord(value.tool_input)) {
+    throw new AgentContractValidationError('tool_input must be an object or null.');
+  }
+  if (value.content !== null && typeof value.content !== 'string') {
+    throw new AgentContractValidationError('content must be a string or null.');
+  }
+  if (typeof value.reasoning_summary !== 'string') {
+    throw new AgentContractValidationError('reasoning_summary must be a string.');
+  }
   if (value.reasoning_summary.length > MAX_REASONING_SUMMARY_CHARS) {
     throw new AgentContractValidationError(`reasoning_summary exceeds ${MAX_REASONING_SUMMARY_CHARS} characters.`);
   }
@@ -1360,11 +973,16 @@ function parseStrictContract(text: string): AgentContractResponse {
   }
 
   if (value.loop !== null) {
-    if (!isRecord(value.loop)) throw new AgentContractValidationError('loop must be an object or null.');
+    if (!isRecord(value.loop)) {
+      throw new AgentContractValidationError('loop must be an object or null.');
+    }
     const loopKeys = Object.keys(value.loop);
     const allowedLoopKeys = new Set(['objective', 'completion_criteria', 'status', 'validation_summary']);
-    if (loopKeys.some((key) => !allowedLoopKeys.has(key))) {
-      throw new AgentContractValidationError('loop contains fields outside the contract.');
+    const missingLoop = [...allowedLoopKeys].filter(
+      (key) => !Object.prototype.hasOwnProperty.call(value.loop as Record<string, unknown>, key)
+    );
+    if (missingLoop.length || loopKeys.some((key) => !allowedLoopKeys.has(key))) {
+      throw new AgentContractValidationError('loop must contain exactly objective, completion_criteria, status and validation_summary.');
     }
     const objective = value.loop.objective;
     const criteria = value.loop.completion_criteria;
@@ -1539,71 +1157,16 @@ function validateSemantics(response: AgentContractResponse, plan: AgentContractP
   }
 }
 
-function looksLikeContractAttempt(source: string): boolean {
-  const text = source.trim();
-  if (!text) return false;
-  if (text.startsWith('{')) return true;
-  if (/```(?:json)?\s*\{/i.test(text)) return true;
-  return /"(?:action|tool|tool_input|reasoning_summary)"\s*:/.test(text);
-}
-
 export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
   plan: AgentContractPlan
 ): OpenAiCompletion {
   const source = completion.choices[0]?.message.content;
-  if (typeof source !== 'string') throw new AgentContractValidationError('Model response has no textual JSON content.');
-
-  let response: AgentContractResponse;
-  try {
-    response = parseStrictContract(source);
-  } catch (error) {
-    const normalizedWriteFile = recoverMalformedRepoWriteFileContract(source);
-    const normalizedBareRuntime = normalizedWriteFile
-      ? undefined
-      : contractFromBareRuntimeOperation(source);
-    const normalizedToolCall = normalizedWriteFile
-      ?? normalizedBareRuntime
-      ?? contractFromKittToolEnvelope(source);
-    if (normalizedToolCall) {
-      response = normalizedToolCall;
-      logger.event('warn', normalizedWriteFile
-        ? 'agent.contract.write_file_serialization_normalized'
-        : normalizedBareRuntime
-          ? 'agent.contract.bare_runtime_operation_normalized'
-          : 'agent.contract.tool_envelope_normalized', {
-        contract_session_id: plan.sessionId,
-        route: plan.route,
-        response_bytes: Buffer.byteLength(source, 'utf8')
-      });
-    } else {
-      const contractAttempt = looksLikeContractAttempt(source);
-      const readOnlyFallback = TEXT_FALLBACK_ROUTES.has(plan.route) && !contractAttempt;
-      if (
-        error instanceof AgentContractValidationError
-        && error.message === NON_JSON_CONTRACT_MESSAGE
-        && source.trim()
-        && readOnlyFallback
-      ) {
-        response = {
-          action: 'final_response',
-          tool: null,
-          tool_input: null,
-          content: source.trim(),
-          reasoning_summary: '',
-          loop: null
-        };
-        logger.event('warn', 'agent.contract.text_fallback', {
-          contract_session_id: plan.sessionId,
-          route: plan.route,
-          response_bytes: Buffer.byteLength(source, 'utf8'),
-          contract_attempt: contractAttempt
-        });
-      } else {
-        throw error;
-      }
-    }
+  if (typeof source !== 'string') {
+    throw new AgentContractValidationError('Model response has no textual JSON content.');
   }
+
+  const response = parseStrictContract(source);
 
   validateSemantics(response, plan);
 
