@@ -86,7 +86,6 @@ export interface AgentContractPlan {
   body: JsonObject;
   originalBody: JsonObject;
   route: string;
-  workspaceProvided: boolean;
   tools: Map<string, ToolDescriptor>;
   sessionId: string;
 }
@@ -571,7 +570,6 @@ export function prepareAgentContractRequest(
   }
 
   const workspaceContext = typedView?.workspaceContext ?? 'not_provided';
-  const workspaceProvided = workspaceContext !== 'not_provided';
   const reinject = shouldReinject(contextKey);
   const toolPrompt = toolsForPrompt(tools);
   const contextFingerprint = createHash('sha256').update(JSON.stringify({ route, tools: toolPrompt })).digest('hex');
@@ -626,7 +624,6 @@ export function prepareAgentContractRequest(
     body,
     originalBody,
     route,
-    workspaceProvided,
     tools,
     sessionId
   };
