@@ -508,7 +508,6 @@ export function prepareAgentContractRequest(
       'kitt_context must be a valid ContextEnvelope v1.'
     );
   }
-  const typedView = typedContextView(typedEnvelope);
   const requestMeta = parseKittRequestMetadata(originalBody.kitt_meta);
   const forwardedMessages: JsonValue[] = [];
   const syntheticToolCalls = new Map<string, SyntheticToolCall>();
