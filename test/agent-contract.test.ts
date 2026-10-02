@@ -1,4 +1,3 @@
-import { withHostEvidence } from './helpers/host-evidence.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -121,7 +120,6 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
   assert.match(messages[1].content, /UNTRUSTED_WORKSPACE_DATA:/);
   assert.match(messages[1].content, /ORCHESTRATOR_CONTEXT_DATA:/);
   assert.equal(plan.body.tools, undefined);
-  assert.equal(plan.workspaceProvided, true);
 });
 
 test('keeps model instructions English while preserving user-authored language verbatim', () => {
@@ -235,7 +233,6 @@ test('wrapped Agent CLI tool feedback is recovered as a synthetic tool result', 
   ] as any[];
 
   const secondPlan = prepareAgentContractRequest(followUp, { sessionId: 'wrappedToolFeedback' });
-  assert.equal(secondPlan.mutationRoundTripObserved, true);
   const messages = secondPlan.body.messages as any[];
   const resultMessage = messages.find((message) =>
     message.role === 'user'
@@ -379,7 +376,7 @@ test('accepts only the canonical contract shape after provider extraction', () =
   }
 });
 
-test('caller route is authoritative regardless of mutation-like prompt wording', () => {
+test('caller route remains structural metadata and does not rewrite the host tool surface', () => {
   const request = body('validate-diff');
   request.messages = [
     ...(request.messages as any[]).slice(0, 2),
@@ -390,7 +387,7 @@ test('caller route is authoritative regardless of mutation-like prompt wording',
   ];
 
   const plan = prepareAgentContractRequest(request, {
-    sessionId: 'sessionStrengthenedImplement',
+    sessionId: 'sessionRouteMetadata',
     route: 'validate-diff'
   });
   const dynamic = String(
@@ -401,9 +398,8 @@ test('caller route is authoritative regardless of mutation-like prompt wording',
   );
 
   assert.equal(plan.route, 'validate-diff');
-  assert.match(dynamic, /ROUTE: validate-diff/);
-  assert.doesNotMatch(dynamic, /repo\.write_file/);
-  assert.doesNotMatch(dynamic, /patch\.apply/);
+  assert.match(dynamic, /repo\.write_file/);
+  assert.match(dynamic, /patch\.apply/);
 });
 
 test('workspace conversion wording does not strengthen chat route', () => {
@@ -419,7 +415,6 @@ test('workspace conversion wording does not strengthen chat route', () => {
   });
 
   assert.equal(plan.route, 'chat');
-  assert.equal(plan.mutationToolAvailable, true);
 });
 
 test('explicit edit wording does not strengthen validate-diff route', () => {
@@ -452,8 +447,8 @@ test('pure validation request remains validate-diff', () => {
   assert.equal(plan.route, 'validate-diff');
 });
 
-test('validate-diff advertises only route-allowed runtime operations', () => {
-  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionScopedTools' });
+test('proxy preserves caller-provided tools and leaves execution policy to the host', () => {
+  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionHostPolicy' });
   const messages = plan.body.messages as any[];
   const dynamic = String(
     messages.find(
@@ -463,67 +458,22 @@ test('validate-diff advertises only route-allowed runtime operations', () => {
   );
 
   assert.match(dynamic, /repo\.read/);
+  assert.match(dynamic, /repo\.write_file/);
+  assert.match(dynamic, /patch\.apply/);
   assert.match(dynamic, /process\.run/);
-  assert.doesNotMatch(dynamic, /repo\.write_file/);
-  assert.doesNotMatch(dynamic, /patch\.apply/);
-});
-
-test('context-gather does not advertise mutating runtime operations', () => {
-  const plan = prepareAgentContractRequest(body('context-gather'), { sessionId: 'sessionReadOnlyTools' });
-  const messages = plan.body.messages as any[];
-  const dynamic = String(
-    messages.find(
-      (message) => typeof message.content === 'string'
-        && message.content.includes('[KITT ORCHESTRATOR TURN DATA]')
-    )?.content || ''
-  );
-
-  assert.match(dynamic, /repo\.read/);
-  assert.doesNotMatch(dynamic, /repo\.write_file/);
-  assert.doesNotMatch(dynamic, /patch\.apply/);
-  assert.doesNotMatch(dynamic, /process\.run/);
-});
-
-test('validate-diff rejects file mutation but permits validation command execution', () => {
-  const plan = prepareAgentContractRequest(body('validate-diff'), { sessionId: 'sessionD' });
-  assert.throws(
-    () => transformAgentContractCompletion(completion(JSON.stringify({
-      action: 'use_tool',
-      tool: 'kitt_runtime',
-      tool_input: { operation: 'patch.apply', arguments: { patch: '...' } },
-      content: null,
-      reasoning_summary: 'A alteração seria aplicada.',
-      loop: null
-    })), plan),
-    AgentContractValidationError
-  );
 
   const result = transformAgentContractCompletion(completion(JSON.stringify({
     action: 'use_tool',
     tool: 'kitt_runtime',
-    tool_input: { operation: 'process.run', arguments: { command: 'npm test' } },
+    tool_input: { operation: 'patch.apply', arguments: { patch: '...' } },
     content: null,
-    reasoning_summary: 'Vou executar a validação solicitada.',
+    reasoning_summary: 'Encaminhando a ação estrutural para o host.',
     loop: null
   })), plan);
   assert.equal(result.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
-});
 
-test('summarize never exposes a generic workspace runtime tool', () => {
-  const plan = prepareAgentContractRequest(body('summarize'), { sessionId: 'summarySession' });
-
-  assert.equal(plan.tools.size, 0);
-  assert.throws(
-    () => transformAgentContractCompletion(completion(JSON.stringify({
-      action: 'use_tool',
-      tool: 'kitt_runtime',
-      tool_input: { operation: 'repo.create_directory', arguments: { path: 'backend' } },
-      content: null,
-      reasoning_summary: 'Não devo executar workspace durante resumo.',
-      loop: null
-    })), plan),
-    AgentContractValidationError
-  );
+  const summarize = prepareAgentContractRequest(body('summarize'), { sessionId: 'summaryHostPolicy' });
+  assert.equal(summarize.tools.size, 1);
 });
 
 test('returns a structured orchestration error when workspace is explicitly requested', () => {
@@ -580,7 +530,6 @@ test('mutation route keeps rejecting plain text after a mutation round trip', ()
   ];
 
   const plan = prepareAgentContractRequest(followUp, { sessionId: 'sessionMutationTextFallback' });
-  assert.equal(plan.mutationRoundTripObserved, true);
 
   assert.throws(
     () => transformAgentContractCompletion(
@@ -592,7 +541,7 @@ test('mutation route keeps rejecting plain text after a mutation round trip', ()
 });
 
 
-test('direct chat without external context resolves through final_response instead of requesting tools', () => {
+test('direct chat keeps canonical request actions without proxy-side policy', () => {
   const request: JsonObject = {
     model: 'gemini-web',
     messages: [{ role: 'user', content: 'Explain dependency injection briefly.' }]
@@ -606,9 +555,7 @@ test('direct chat without external context resolves through final_response inste
 
   assert.equal(plan.route, 'chat');
   assert.equal(plan.tools.size, 0);
-  assert.equal(plan.workspaceProvided, false);
-  assert.match(user, /direct chat turn with no external execution context/i);
-  assert.match(user, /TOOLS_AVAILABLE=\[\]/);
+  assert.match(user, /TOOLS_AVAILABLE: \[\]/);
 
   assert.throws(
     () => transformAgentContractCompletion(completion(JSON.stringify({
@@ -619,8 +566,9 @@ test('direct chat without external context resolves through final_response inste
       reasoning_summary: 'Requesting tools.',
       loop: null
     })), plan),
-    (error: unknown) => error instanceof AgentContractValidationError
-      && /Direct chat without external execution context/.test(error.message)
+    (error: unknown) => error instanceof AgentContractError
+      && error.code === 'tools_context_required'
+      && error.status === 409
   );
 
   const result = transformAgentContractCompletion(completion(JSON.stringify({
@@ -669,21 +617,33 @@ test('typed context envelope is lowered without textual rediscovery', () => {
     ]
   };
 
-  const plan = prepareAgentContractRequest(withHostEvidence(source), {
+  const plan = prepareAgentContractRequest(source, {
     sessionId: 'typed-context',
     route: 'agent-loop'
   });
-  assert.equal(plan.loopActionBudget, 7);
-  assert.equal(plan.discoveryRequired, true);
-  assert.equal(plan.workspaceProvided, true);
   const userMessage = (plan.body.messages as any[]).find((message) => message.role === 'user');
   const lowered = String(userMessage?.content ?? '');
   assert.match(lowered, /decision from durable memory/);
   assert.match(lowered, /src\/app\.ts/);
+  assert.match(lowered, /loop_action_budget/);
+  assert.match(lowered, /discovery_required/);
   assert.doesNotMatch(lowered, /\[KITT TURN CONTEXT\]/);
   assert.equal(lowered.split('Corrija o projeto sem reescrever minha intenção.').length - 1, 1);
 });
 
+
+test('rejects unsupported structural routes instead of coercing them to chat', () => {
+  const request = body('chat');
+  assert.throws(
+    () => prepareAgentContractRequest(request, {
+      sessionId: 'metadata-route',
+      route: 'future-route'
+    }),
+    (error: unknown) => error instanceof AgentContractError
+      && error.code === 'agent_contract_metadata_invalid'
+      && /Unsupported KITT agent route/.test(error.message)
+  );
+});
 
 test('rejects unknown and mismatched request metadata', () => {
   const unknown = body('chat');

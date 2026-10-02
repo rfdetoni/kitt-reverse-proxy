@@ -81,110 +81,10 @@ function agentContractEnabled(req: Request): boolean {
   return (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase() === AGENT_CONTRACT_VERSION;
 }
 
-function actionConstraints(plan: AgentContractPlan): string[] {
-  const constraints: string[] = [];
-  if (plan.tools.size > 0) {
-    constraints.push(
-      'TOOLS_ALREADY_AVAILABLE: true',
-      `AVAILABLE_TOOL_NAMES: ${JSON.stringify([...plan.tools.keys()])}`,
-      'ACTION_CONSTRAINT: request_tools is forbidden because TOOLS_AVAILABLE was already supplied. If a listed tool can advance the task, use action="use_tool" with that tool.'
-    );
-    if (plan.tools.has('kitt_runtime')) {
-      constraints.push(
-        'KITT_RUNTIME_CALL_SHAPE: action="use_tool", tool="kitt_runtime", tool_input={"operation":"<allowed operation>","arguments":{...}}, content=null. Never use action="execute_command" and never put command at the top level.'
-      );
-    }
-  }
-  if (plan.workspaceProvided) {
-    constraints.push(
-      'WORKSPACE_ALREADY_AVAILABLE: true',
-      'ACTION_CONSTRAINT: request_workspace is forbidden because WORKSPACE_CONTEXT was already supplied. Use the supplied workspace evidence and available tools.'
-    );
-  }
-  if (plan.route === 'chat' && plan.tools.size === 0 && !plan.workspaceProvided) {
-    constraints.push(
-      'DIRECT_CHAT_NO_EXTERNAL_CONTEXT: true',
-      'ACTION_CONSTRAINT: request_tools and request_workspace are forbidden for this direct chat turn. Return action="final_response"; if the user asks for unavailable external state or side effects, state that limitation in content instead of requesting orchestration context.'
-    );
-  }
-  if (plan.route === 'summarize') {
-    constraints.push('ACTION_CONSTRAINT: route summarize requires action="final_response".');
-  }
-  return constraints;
-}
-
-function contractRepairPhaseGuidance(plan: AgentContractPlan): string[] {
-  if (plan.route === 'agent-loop') {
-    if (plan.checkpointRequired) {
-      return [
-        'CURRENT_ROUTE: agent-loop',
-        'CURRENT_EXECUTION_PHASE: checkpoint',
-        `HOST_ROUND_TRIP_COUNT: ${plan.hostRoundTripCount}`,
-        `LOOP_ACTION_BUDGET: ${plan.loopActionBudget}`,
-        'NEXT_ACTION: reassess actual host evidence, set loop.status="checkpoint", update validation_summary, then choose at most one next host action.'
-      ];
-    }
-    if (plan.validationRequiredBeforeFinal && !plan.successfulValidationRoundTripObserved) {
-      return [
-        'CURRENT_ROUTE: agent-loop',
-        'CURRENT_EXECUTION_PHASE: validation',
-        'NEXT_ACTION: run one relevant host build/test/lint/check. Do not claim completion from model reasoning alone.'
-      ];
-    }
-    return [
-      'CURRENT_ROUTE: agent-loop',
-      'CURRENT_EXECUTION_PHASE: loop',
-      'NEXT_ACTION: preserve a bounded loop objective and completion criteria, then choose the next smallest host action from actual evidence.'
-    ];
-  }
-
-  if (plan.route !== 'code-generation' && plan.route !== 'code-edit') {
-    return [`CURRENT_ROUTE: ${plan.route}`];
-  }
-
-  if (plan.discoveryRequired && !plan.explorationRoundTripObserved) {
-    return [
-      `CURRENT_ROUTE: ${plan.route}`,
-      'CURRENT_EXECUTION_PHASE: discovery',
-      'NEXT_ACTION: call exactly one read-only repository inspection through an available tool, then wait for the host result.'
-    ];
-  }
-  if (!plan.mutationRoundTripObserved) {
-    return [
-      `CURRENT_ROUTE: ${plan.route}`,
-      'CURRENT_EXECUTION_PHASE: mutation',
-      'NEXT_ACTION: perform the smallest evidence-backed workspace mutation through an available tool, then wait for the host result.'
-    ];
-  }
-  if (plan.validationRequiredBeforeFinal && !plan.successfulValidationRoundTripObserved) {
-    return [
-      `CURRENT_ROUTE: ${plan.route}`,
-      'CURRENT_EXECUTION_PHASE: validation',
-      'NEXT_ACTION: run one relevant host build/test/lint/check using kitt_runtime process.run. A failed or missing validation cannot be reported as completion.'
-    ];
-  }
-  return [
-    `CURRENT_ROUTE: ${plan.route}`,
-    'CURRENT_EXECUTION_PHASE: response',
-    'NEXT_ACTION: return final_response only if the requested work is complete; otherwise choose the next smallest available host action.'
-  ];
-}
-
-
 function compactContractRepairMessages(plan: AgentContractPlan, candidate: string): JsonObject[] {
   const messages: JsonObject[] = [
     { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT }
   ];
-  const constraints = [
-    ...actionConstraints(plan),
-    ...contractRepairPhaseGuidance(plan)
-  ];
-  if (constraints.length) {
-    messages.push({
-      role: 'developer',
-      content: ['[KITT ACTION CONSTRAINTS]', ...constraints, '[END KITT ACTION CONSTRAINTS]'].join('\n')
-    });
-  }
   const originalMessages = Array.isArray(plan.originalBody.messages) ? plan.originalBody.messages : [];
   const task = [...originalMessages].reverse().find((item) => item && typeof item === 'object' && !Array.isArray(item) && item.role === 'user');
   const data = JSON.stringify({ task, context: plan.originalBody.kitt_context, tools: [...plan.tools.values()], candidate });
@@ -194,33 +94,10 @@ function compactContractRepairMessages(plan: AgentContractPlan, candidate: strin
 }
 
 
-export function reinforceAgentContractPlan(plan: AgentContractPlan): AgentContractPlan {
-  const constraints = actionConstraints(plan);
-  if (!constraints.length) return plan;
-  const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
-  const constraintMessage = {
-    role: 'developer',
-    content: ['[KITT ACTION CONSTRAINTS]', ...constraints, '[END KITT ACTION CONSTRAINTS]'].join('\n')
-  };
-  let lastActionableIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
-    const role = (message as Record<string, unknown>).role;
-    if (role === 'user' || role === 'tool') {
-      lastActionableIndex = index;
-      break;
-    }
-  }
-  const insertAt = lastActionableIndex >= 0 ? lastActionableIndex : messages.length;
-  messages.splice(insertAt, 0, constraintMessage);
-  return { ...plan, body: { ...plan.body, messages } };
-}
-
 function prepareContract(req: Request, body: JsonObject, lease: SessionExecutionLease, network: boolean): AgentContractPlan {
   const route = req.get(AGENT_ROUTE_HEADER);
-  return reinforceAgentContractPlan(prepareAgentContractRequest(body, { sessionId: lease.sessionId,
-    contextKey: lease.contextKey, forceBootstrap: network, ...(route ? { route } : {}) }));
+  return prepareAgentContractRequest(body, { sessionId: lease.sessionId,
+    contextKey: lease.contextKey, forceBootstrap: network, ...(route ? { route } : {}) });
 }
 
 export function buildAgentContractRepairBody(
@@ -234,7 +111,7 @@ export function buildAgentContractRepairBody(
     content: [
       '[KITT CONTRACT REPAIR]',
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct only the semantic contract violation. Return one contract action and no extra prose.',
+      'REPAIR_INSTRUCTION: Correct only the output-contract violation. Return one contract action and no extra prose.',
       'Do not repeat the invalid action from the previous response.',
       '[END KITT CONTRACT REPAIR]'
     ].join('\n')
@@ -270,7 +147,7 @@ export function contractExecutionOptions(
 ): ChatExecutionOptions {
   return {
     ...options,
-    // Contract prompts, action constraints and synthetic tool-result turns are
+    // Contract prompts and synthetic tool-result turns are
     // transport-internal. Session continuity must track only the API caller's
     // original history so equivalent round trips keep a stable user timeline.
     logicalHistoryBody: normalizeAgentContractLogicalHistory(plan.originalBody),
