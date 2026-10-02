@@ -923,7 +923,7 @@ function sentenceCount(text: string): number {
 
 function canonicalContractJson(text: string): string {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/^\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\`$/iu);
+  const fenced = trimmed.match(/^```json\s*([\s\S]*?)\s*```$/iu);
   return fenced ? fenced[1]!.trim() : trimmed;
 }
 
