@@ -147,7 +147,7 @@ export function contractExecutionOptions(
 ): ChatExecutionOptions {
   return {
     ...options,
-    // Contract prompts, action constraints and synthetic tool-result turns are
+    // Contract prompts and synthetic tool-result turns are
     // transport-internal. Session continuity must track only the API caller's
     // original history so equivalent round trips keep a stable user timeline.
     logicalHistoryBody: normalizeAgentContractLogicalHistory(plan.originalBody),
