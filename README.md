@@ -1,3 +1,9 @@
+## Reverse Proxy 4.9.3 — canonical Agent contract
+
+The Agent/WebChat boundary now accepts one semantic response shape only: the agent-contract v2 JSON object with explicit `action`, `tool`, `tool_input`, `content`, `reasoning_summary` and `loop` fields. A single fenced `json` block remains accepted as transport tolerance, but legacy `<kitt-tool>`, bare runtime-operation objects, `tool_name/arguments` aliases, malformed write-file repair, and plain-text final-response fallback are no longer reinterpreted as valid Agent actions.
+
+OpenAI transport remains structural: `tools/tool_choice`, `tool_calls`, `role=tool`, `kitt_context` and `kitt_meta` are the only supported Agent↔Proxy path. Invalid model output stays recoverable through the existing bounded retry/continue flow and preserves the browser session.
+
 ## Reverse Proxy 4.8.0 — typed host evidence and planning transport
 
 ## 4.9.1 — retain evidence in built-in UI repairs
