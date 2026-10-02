@@ -490,7 +490,7 @@ X-Kitt-Request-Id: unique request id
 
 `X-Kitt-Reasoning-Effort` is a deprecated compatibility header. If an older client still sends it, the proxy ignores it; it never changes the WebChat reasoning setting.
 
-Chat Completions streaming uses standard SSE and terminates with `[DONE]`. Native tool calls are reconstructed for the Agent CLI round trip. `parallel_tool_calls=false` remains the recommended K.I.T.T. path.
+Chat Completions streaming uses standard SSE and terminates with `[DONE]`. Native tool calls use the current `tools`/`tool_choice` contract; legacy Chat Completions `functions`/`function_call` fields are rejected. `parallel_tool_calls=false` remains the recommended K.I.T.T. path.
 
 ---
 

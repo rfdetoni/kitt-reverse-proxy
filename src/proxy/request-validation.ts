@@ -74,6 +74,9 @@ export function validateOpenAiChatRequest(value: unknown): JsonObject {
     fail('"model" deve ser string não vazia de até 256 caracteres.');
   }
   if (body.stream !== undefined && typeof body.stream !== 'boolean') fail('"stream" deve ser boolean.');
+  if (body.functions !== undefined || body.function_call !== undefined) {
+    fail('Legacy "functions"/"function_call" não é suportado; use "tools"/"tool_choice".');
+  }
   if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== 'boolean') {
     fail('"parallel_tool_calls" deve ser boolean.');
   }

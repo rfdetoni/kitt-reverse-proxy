@@ -3,7 +3,7 @@ import { ProviderRequestState } from '../runtime/request-state.js';
 import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { logger } from '../logger.js';
-import { adaptCompletionForLegacyFunctions, requestMayReturnToolCalls } from '../mapping/tool-calling.js';
+import { requestMayReturnToolCalls } from '../mapping/tool-calling.js';
 import {
   AGENT_CONTRACT_HEADER,
   AGENT_CONTRACT_SYSTEM_PROMPT,
@@ -48,13 +48,9 @@ Never claim that you cannot create or modify files merely because the upstream m
 const agentRequestCaches = new WeakMap<SessionManager, RequestIdempotencyCache<ChatExecutionResult>>();
 
 function hasCallableTools(body: JsonObject): boolean {
-  const tools = Array.isArray(body.tools)
-    ? body.tools
-    : Array.isArray(body.functions)
-      ? body.functions
-      : [];
-  if (!tools.length) return false;
-  return body.tool_choice !== 'none' && body.function_call !== 'none';
+  return Array.isArray(body.tools)
+    && body.tools.length > 0
+    && body.tool_choice !== 'none';
 }
 
 function messageContent(message: unknown): string {
@@ -513,7 +509,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
               });
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
           const completion = withEstimatedUsage(result.completion, validatedBody);
-          writer.finish(adaptCompletionForLegacyFunctions(completion, validatedBody), bufferTools ? [] : result.deltas);
+          writer.finish(completion, bufferTools ? [] : result.deltas);
           return;
         }
 
@@ -522,7 +518,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           : await manager.execute(sessionId, body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, validatedBody);
-        res.json(adaptCompletionForLegacyFunctions(completion, validatedBody));
+        res.json(completion);
       });
     } catch (error) {
       logger.event('warn', 'openai.chat.error', { error });

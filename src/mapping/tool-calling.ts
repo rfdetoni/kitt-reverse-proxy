@@ -129,20 +129,12 @@ function normalizeFunctionTool(value: unknown): CanonicalFunctionTool | undefine
 }
 
 export function normalizeFunctionTools(
-  tools: JsonValue | undefined,
-  legacyFunctions?: JsonValue | undefined
+  tools: JsonValue | undefined
 ): CanonicalFunctionTool[] {
   if (tools !== undefined && !Array.isArray(tools)) {
     throw new ToolProtocolError('"tools" deve ser um array.');
   }
-  if (legacyFunctions !== undefined && !Array.isArray(legacyFunctions)) {
-    throw new ToolProtocolError('"functions" deve ser um array.');
-  }
-  const source = Array.isArray(tools)
-    ? tools
-    : Array.isArray(legacyFunctions)
-      ? legacyFunctions
-      : [];
+  const source = Array.isArray(tools) ? tools : [];
   if (source.length > MAX_TOOLS) {
     throw new ToolProtocolError(`Máximo de ${MAX_TOOLS} functions por request.`);
   }
@@ -191,10 +183,9 @@ function forcedFunctionName(value: unknown): string | undefined {
 
 function normalizeToolChoice(
   value: JsonValue | undefined,
-  legacyFunctionCall: JsonValue | undefined,
   tools: CanonicalFunctionTool[]
 ): { choice: ToolChoice; tools: CanonicalFunctionTool[] } {
-  const source = value ?? legacyFunctionCall;
+  const source = value;
   if (source === undefined || source === 'auto') return { choice: { mode: 'auto' }, tools };
   if (source === 'none') return { choice: { mode: 'none' }, tools };
   if (source === 'required') {
@@ -225,23 +216,27 @@ function normalizeToolChoice(
     return { choice: { mode: 'function', name }, tools };
   }
 
-  throw new ToolProtocolError('tool_choice/function_call inválido.');
+  throw new ToolProtocolError('tool_choice inválido.');
 }
 
 export function buildToolProtocolPlan(
   body: JsonObject,
   systemPrompt?: string
 ): ToolProtocolPlan {
-  const tools = normalizeFunctionTools(body.tools, body.functions);
-  const normalizedChoice = normalizeToolChoice(body.tool_choice, body.function_call, tools);
-  const legacyMode = body.functions !== undefined && body.tools === undefined;
+  if (body.functions !== undefined || body.function_call !== undefined) {
+    throw new ToolProtocolError(
+      'Legacy functions/function_call não é suportado; use tools/tool_choice.'
+    );
+  }
+  const tools = normalizeFunctionTools(body.tools);
+  const normalizedChoice = normalizeToolChoice(body.tool_choice, tools);
   if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== 'boolean') {
     throw new ToolProtocolError('"parallel_tool_calls" deve ser boolean.');
   }
   return {
     tools: normalizedChoice.tools,
     choice: normalizedChoice.choice,
-    parallel: legacyMode ? false : body.parallel_tool_calls !== false,
+    parallel: body.parallel_tool_calls !== false,
     ...(systemPrompt?.trim() ? { systemPrompt: systemPrompt.trim() } : {})
   };
 }
@@ -641,19 +636,3 @@ export function completionFromToolCalls(
   };
 }
 
-export function adaptCompletionForLegacyFunctions(
-  completion: OpenAiCompletion,
-  requestBody: JsonObject
-): OpenAiCompletion {
-  if (requestBody.functions === undefined || requestBody.tools !== undefined) return completion;
-  const calls = completion.choices[0]?.message.tool_calls;
-  if (!calls?.length) return completion;
-  const first = calls[0]!;
-  completion.choices[0]!.message.function_call = {
-    name: first.function.name,
-    arguments: first.function.arguments
-  };
-  delete completion.choices[0]!.message.tool_calls;
-  completion.choices[0]!.finish_reason = 'function_call';
-  return completion;
-}

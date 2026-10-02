@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractToolCalls, formatToolsInstruction, injectToolsIntoPrompt } from '../src/mapping/tool-calling.js';
+import { buildToolProtocolPlan, extractToolCalls, formatToolsInstruction, injectToolsIntoPrompt, ToolProtocolError } from '../src/mapping/tool-calling.js';
+import { validateOpenAiChatRequest } from '../src/proxy/request-validation.js';
 
 test('formatToolsInstruction formats tool definitions', () => {
   const tools = [{ type: 'function', function: { name: 'get_weather', description: 'Get weather' } }];
@@ -151,4 +152,14 @@ test('mixed invalid tool batches fail atomically and overlong names are rejected
   assert.match(formatApiDirective(plan), /PRINT.*visible assistant reply/);
   const plain = '{"arguments":{"summary":"ordinary JSON content"}}';
   assert.deepEqual(extractToolCalls(plain, plan), { content: plain });
+});
+
+test('legacy Chat Completions functions contract is rejected', () => {
+  const legacy = {
+    messages: [{ role: 'user', content: 'hello' }],
+    functions: [{ name: 'legacy_tool', parameters: { type: 'object' } }],
+    function_call: 'auto'
+  };
+  assert.throws(() => validateOpenAiChatRequest(legacy as any), /tools.*tool_choice/i);
+  assert.throws(() => buildToolProtocolPlan(legacy as any), ToolProtocolError);
 });
