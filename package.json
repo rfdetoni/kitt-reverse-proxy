@@ -36,7 +36,7 @@
     "benchmark:runtime": "npm run build && node scripts/benchmark-runtime.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.2.0",
     "cors": "2.8.6",
     "express": "5.2.1",
     "playwright": "1.63.0"
@@ -44,8 +44,8 @@
   "devDependencies": {
     "@types/cors": "2.8.19",
     "@types/express": "5.0.6",
-    "@types/node": "24.13.5",
-    "tsx": "4.23.13",
+    "@types/node": "24.19.0",
+    "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
   "files": [
