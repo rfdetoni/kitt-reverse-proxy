@@ -62,6 +62,7 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   const message = error instanceof Error ? error.message : 'Erro interno do proxy.';
 
   if (error instanceof Error && error.name === 'StructuredOutputFailedError') return { status: 502, code: 'structured_output_failed', message };
+  if (error instanceof Error && error.name === 'RepairContextTooLargeError') return { status: 413, code: 'repair_context_too_large', message, recoverable: true, recoveryAction: 'continue' };
   if (error instanceof InvalidRequestError) return { status: error.status, code: error.code, message };
   if (error instanceof StreamMismatchError) return { status: 502, code: 'stream_mismatch', message };
   if (error instanceof RequestDeadlineError) return { status: 504, code: 'request_deadline_exceeded', message };

@@ -76,3 +76,18 @@ test('OpenAI, Responses and Anthropic refuse success after a divergent stream', 
   const replay = { ...completion, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, kitt_replay: true } };
   assert.equal(withEstimatedUsage(replay, { messages: ['hello'] }).usage?.total_tokens, 0);
 });
+
+test('internal UI repairs retain task/context/tools and candidate as bounded evidence', async () => {
+  const { buildUiRepairEvidence } = await import('../src/runtime/ui-executor.js');
+  const prompt = buildUiRepairEvidence('Return valid JSON.', { messages: [{ role: 'user', content: 'original task' }], kitt_context: { epoch: 'test' }, tools: [{ name: 'read_file' }] }, 'invalid candidate');
+  assert.match(prompt, /original task/); assert.match(prompt, /read_file/); assert.match(prompt, /invalid candidate/); assert.match(prompt, /untrusted evidence/);
+  assert.throws(() => buildUiRepairEvidence('Repair.', {}, 'x'.repeat(256 * 1024)), /exceeds 256 KiB/);
+});
+
+test('successful replay values are evicted under a byte budget while pending work stays protected', async () => {
+  const cache = new RequestIdempotencyCache<string>(60_000, 512, 16);
+  let calls = 0;
+  const factory = async () => { calls++; return 'x'.repeat(32); };
+  await cache.execute('s', 'a', {}, factory); await cache.execute('s', 'a', {}, factory);
+  assert.equal(calls, 2); // Successful values exceeding the configured cache budget are not retained.
+});

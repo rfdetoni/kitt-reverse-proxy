@@ -5,6 +5,7 @@ const DEFAULT_TTL_MS = 5 * 60_000;
 const DEFAULT_MAX_ENTRIES = 512;
 
 interface Entry<T> {
+  bytes: number;
   fingerprint: string;
   promise: Promise<T>;
   expiresAt: number;
@@ -24,11 +25,13 @@ function fingerprint(payload: unknown): string {
 }
 
 export class RequestIdempotencyCache<T> {
+  private retainedBytes = 0;
   private readonly entries = new Map<string, Entry<T>>();
 
   constructor(
     private readonly ttlMs = DEFAULT_TTL_MS,
-    private readonly maxEntries = DEFAULT_MAX_ENTRIES
+    private readonly maxEntries = DEFAULT_MAX_ENTRIES,
+    private readonly maxBytes = 64 * 1024 * 1024
   ) {}
 
   execute(
@@ -52,27 +55,43 @@ export class RequestIdempotencyCache<T> {
 
     if (this.entries.size >= this.maxEntries) {
       const oldest = [...this.entries].find(([, entry]) => !entry.pending && !entry.uncertain)?.[0];
-      if (oldest) this.entries.delete(oldest);
+      if (oldest) this.remove(oldest);
       else return Promise.reject(new QueueFullError());
     }
 
-    const entry: Entry<T> = { fingerprint: digest, promise: Promise.resolve().then(factory),
+    const entry: Entry<T> = { bytes: 0, fingerprint: digest, promise: Promise.resolve().then(factory),
       pending: true, uncertain: false, expiresAt: Number.POSITIVE_INFINITY };
     this.entries.set(key, entry);
     entry.promise = entry.promise.then((result) => {
-      entry.pending = false; entry.expiresAt = Date.now() + this.ttlMs; return result;
+      entry.pending = false; entry.expiresAt = Date.now() + this.ttlMs;
+      try { entry.bytes = Buffer.byteLength(JSON.stringify(result) ?? '', 'utf8'); }
+      catch { this.remove(key); return result; }
+      this.retainedBytes += entry.bytes;
+      // Completed values may be evicted; pending/uncertain requests stay protected.
+      for (const [candidateKey, candidate] of this.entries) {
+        if (this.retainedBytes <= this.maxBytes) break;
+        if (!candidate.pending && !candidate.uncertain) this.remove(candidateKey);
+      }
+      return result;
     }, (error: unknown) => {
       entry.pending = false;
       if (options.submitted?.()) entry.uncertain = true;
-      else if (this.entries.get(key) === entry) this.entries.delete(key);
+      else if (this.entries.get(key) === entry) this.remove(key);
       throw error;
     });
     return entry.promise;
   }
 
+  private remove(key: string): void {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.retainedBytes = Math.max(0, this.retainedBytes - entry.bytes);
+    this.entries.delete(key);
+  }
+
   private prune(now = Date.now()): void {
     for (const [key, entry] of this.entries) {
-      if (!entry.pending && !entry.uncertain && entry.expiresAt <= now) this.entries.delete(key);
+      if (!entry.pending && !entry.uncertain && entry.expiresAt <= now) this.remove(key);
     }
   }
 }

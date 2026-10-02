@@ -1,5 +1,9 @@
 ## Reverse Proxy 4.8.0 — typed host evidence and planning transport
 
+## 4.9.1 — retain evidence in built-in UI repairs
+
+Tool/JSON repairs preserve the original task, typed context and candidate under the same bounded lifecycle.
+
 ## 4.9.0 — bounded gateway lifecycle
 
 [Lifecycle, API behavior and operational limits](docs/GATEWAY_LIFECYCLE_4.9.0.md): bounded repairs, exact streaming, generation-aware context, cumulative usage and process-scoped idempotency.
