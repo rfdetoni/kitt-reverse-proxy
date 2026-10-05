@@ -527,14 +527,37 @@ export class SessionManager {
   private async ensureCapacity(): Promise<void> {
     const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-    if (!atCountLimit && !this.resourcePressure()) return;
+    const underResourcePressure = this.resourcePressure();
+    if (!atCountLimit && !underResourcePressure) return;
 
     const candidate = this.oldestRecyclableSession();
-    if (!candidate) {
-      // Protected sessions must not be evicted, nor may new work amplify pressure.
-      throw new SessionLimitExceededError();
+    if (candidate) {
+      await this.removeSession(candidate);
+      return;
     }
-    await this.removeSession(candidate);
+
+    // A headed Chromium baseline can legitimately exceed the RSS budget before
+    // the first named session exists. Admit exactly one named session so the
+    // proxy remains usable; subsequent pressure still fails closed while that
+    // session is busy/protected and recycles it once idle.
+    if (
+      !atCountLimit
+      && underResourcePressure
+      && this.sessions.size === 1
+      && this.sessions.has('default')
+      && this.creating.size === 0
+    ) {
+      const capacity = this.capacity();
+      logger.event('warn', 'session.capacity.baseline_pressure_admission', {
+        resident_rss_bytes: capacity.resident_rss_bytes,
+        max_resident_rss_bytes: capacity.max_resident_rss_bytes,
+        browser_pages: capacity.browser_pages,
+        max_browser_pages: capacity.max_browser_pages
+      });
+      return;
+    }
+
+    throw new SessionLimitExceededError();
   }
 
   private oldestRecyclableSession(): ManagedSession | undefined {
