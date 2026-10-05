@@ -72,7 +72,7 @@ function sanitizeField(value: unknown, key: string, depth: number, full = false)
   if (shouldHideContent(key) && contentPolicy !== 'full') {
     return contentPolicy === 'none' ? '[OMITTED]' : contentSummary(value);
   }
-  if (!full && depth >= RESOURCE_LIMITS.structuredLogDepth) return '[MAX_DEPTH]';
+  if (depth >= RESOURCE_LIMITS.structuredLogDepth) return '[MAX_DEPTH]';
   if (typeof value === 'string') return sanitizeLogMessage(value);
   if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) return value;
   if (value instanceof Error) return { name: value.name, message: sanitizeLogMessage(value.message) };
