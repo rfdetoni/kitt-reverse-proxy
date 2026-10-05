@@ -1,3 +1,9 @@
+## Reverse Proxy 4.9.6 — bounded full-content logging
+
+Debug logging with `--log-content full` now respects the existing structured-log depth bound, preventing cyclic runtime objects such as request lifecycle/timer state from causing `Maximum call stack size exceeded`. Full prompt/response content remains visible inside the bounded structure.
+
+This release pairs with Agent CLI **0.83.15** and does not change the Agent/Protocol wire contract.
+
 ## Reverse Proxy 4.9.5 — baseline browser pressure admission
 
 Headed browser startup no longer makes the first named Agent session unusable when the Chromium baseline already exceeds the configured RSS threshold. The proxy admits exactly one initial named session in that baseline-only case, while preserving strict session-count limits, protected-session behavior and LRU recycling of idle named sessions.
