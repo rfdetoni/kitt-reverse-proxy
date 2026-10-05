@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { CdpStreamTap } from '../src/runtime/read/tap-cdp.js';
 import { TapStreamAdapter } from '../src/runtime/read/tap-adapter.js';
+import { selectContractResponseText } from '../src/runtime/read/contract-text.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
 
@@ -79,4 +80,18 @@ test('snapshot extraction is learned separately and rejects non-monotonic replac
   active.end();
   assert.equal(active.accumulatedText(), '');
   assert.equal(active.verification('{"content":"changed"}'), undefined);
+});
+
+test('mode ambiguity cannot turn cumulative snapshots into fabricated source when DOM is damaged', () => {
+  const base = {endpointOrigin:'https://chatgpt.com',endpointPath:'/backend-api/conversation',method:'POST',contentType:'text/event-stream',framing:'sse' as const,textPath:'$.text'};
+  const expected = '{"content":"aa"}';
+  for (const textMode of ['delta','snapshot'] as const) {
+    const adapter = new TapStreamAdapter({...base,textMode}, true);
+    adapter.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+    for (const text of ['{"content":"a',expected]) adapter.push(Buffer.from('data: ' + JSON.stringify({text}) + '\n\n'));
+    adapter.end();
+    const read = () => selectContractResponseText('BROKEN DOM', adapter.accumulatedText(), true, adapter.accumulatedAlternativeText());
+    if (textMode === 'delta') assert.throws(read, /Delta and snapshot extraction/);
+    else assert.equal(read(), expected);
+  }
 });

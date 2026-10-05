@@ -1,3 +1,9 @@
+## Reverse Proxy 4.9.9 — stream mode ambiguity guard
+
+Active CDP profiles retain an alternative delta/snapshot interpretation for each turn. When the DOM is damaged, conflicting complete interpretations are rejected before syntax recovery can turn concatenated snapshots into fabricated source. Repeated real deltas and complete snapshots remain intact.
+
+See [4.9.9 mode ambiguity behavior and validation](docs/RELEASE_4.9.9.md) and the recovery pipeline below. Agent/Protocol wire contracts and consumer dependencies remain unchanged.
+
 ## Reverse Proxy 4.9.8 — lossless contract recovery and raw browser responses
 
 Agent v2, tool calls and structured JSON share bounded syntax recovery. The parser preserves file formatting and rejects ambiguous guesses, duplicate keys, multiple payloads and truncated data. Same-session repairs preserve known actions and unaffected arguments, stop when no progress is made and stay under the existing cumulative attempt/deadline budget. Ajv validates caller schemas before dispatch without modifying values.

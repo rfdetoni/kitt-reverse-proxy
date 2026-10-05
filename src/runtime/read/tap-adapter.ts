@@ -64,6 +64,7 @@ export class TapStreamAdapter {
   private learnedText = '';
   private learnedSamples = 0;
   private learnedInvalid = false;
+  private readonly alternative: TapTextState = { text: '', score: 1, samples: 0 };
 
   constructor(private readonly profile?: TapProfile, private readonly contractMode = false) {}
 
@@ -153,6 +154,10 @@ export class TapStreamAdapter {
     return best?.text ?? '';
   }
 
+  accumulatedAlternativeText(): string {
+    return this.profile && !this.alternative.invalid ? this.alternative.text : '';
+  }
+
   private consumeFrames(flush: boolean): string[] {
     if (!this.matched) return [];
     if (this.matched.framing === 'sse') return this.consumeSseFrames(flush);
@@ -224,6 +229,7 @@ export class TapStreamAdapter {
           invalid: this.learnedInvalid
         };
         const delta = applyTapPiece(state, raw, this.profile.textMode ?? 'delta');
+        applyTapPiece(this.alternative, raw, this.profile.textMode === 'snapshot' ? 'delta' : 'snapshot');
         this.learnedText = state.text;
         this.learnedSamples = state.samples;
         this.learnedInvalid = state.invalid === true;
