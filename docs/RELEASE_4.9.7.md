@@ -9,7 +9,7 @@ Fix repeated `agent_contract_invalid` failures seen with `gemini-web` when the m
 - Keep agent-contract v2 strict and fail-closed for prose or ambiguous mixed output.
 - Accept only deterministic transport wrappers: bare JSON, one fenced JSON/plain code block containing only the object, or a standalone `JSON` label followed by the object.
 - Prefer bare JSON in the system contract and remove the contradictory requirement that every textual file write be fenced.
-- Keep repair prompts bounded to route, available tool schemas and the invalid candidate; do not replay the original task or typed workspace context.
+- Keep repair prompts bounded to the original user task, route, available tool schemas and the invalid candidate; do not replay typed workspace/orchestrator context.
 - In repair turns, instruct the model to preserve the candidate action and change only the reported contract/serialization violation.
 - Add focused regression coverage for the observed WebChat wrapper and compact-repair behavior.
 
