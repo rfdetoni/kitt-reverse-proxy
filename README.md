@@ -1,3 +1,9 @@
+## Reverse Proxy 4.9.5 — baseline browser pressure admission
+
+Headed browser startup no longer makes the first named Agent session unusable when the Chromium baseline already exceeds the configured RSS threshold. The proxy admits exactly one initial named session in that baseline-only case, while preserving strict session-count limits, protected-session behavior and LRU recycling of idle named sessions.
+
+This release pairs with Agent CLI **0.83.15** and does not change the Agent/Protocol wire contract.
+
 ## Reverse Proxy 4.9.4 — transport-only Agent boundary
 
 The Agent/WebChat boundary remains the canonical agent-contract v2, but the Reverse Proxy no longer acts as an execution-policy authority. It transports route, tools, typed context and correlation metadata; validates the canonical response shape and caller-supplied tool schema; converts `use_tool` into native OpenAI `tool_calls`; and preserves bounded same-session repair for invalid model output.

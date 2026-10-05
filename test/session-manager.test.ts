@@ -287,7 +287,12 @@ test('capacity reports resource-aware eviction budgets', async () => {
 });
 
 
-test('resource pressure rejects admission when protected sessions cannot be recycled', async () => {
+test('resource pressure admits the first named session but protects an active one', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
+
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
     provider: 'chatgpt',
@@ -297,14 +302,33 @@ test('resource pressure rejects admission when protected sessions cannot be recy
       maxResidentRssBytes: 1,
       maxBrowserPages: 100
     },
-    factory: async (id) => ({ executor: executor(id) })
+    factory: async (id) => {
+      const named = executor(id);
+      const executeNamed = named.execute.bind(named);
+      named.execute = async (body: JsonObject) => {
+        started();
+        await gate;
+        return await executeNamed(body);
+      };
+      return { executor: named };
+    }
+  });
+
+  const first = manager.execute('resourcebound', {
+    messages: [{ role: 'user', content: 'x' }]
   });
   try {
-    await assert.rejects(manager.execute('resourcebound', {
-      messages: [{ role: 'user', content: 'x' }]
+    await running;
+    assert.deepEqual(
+      manager.list().map((session) => session.id),
+      ['default', 'resourcebound']
+    );
+    await assert.rejects(manager.execute('other', {
+      messages: [{ role: 'user', content: 'y' }]
     }), SessionLimitExceededError);
-    assert.deepEqual(manager.list().map((session) => session.id), ['default']);
   } finally {
+    release();
+    await first;
     await manager.close();
   }
 });
