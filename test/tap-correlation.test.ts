@@ -91,7 +91,10 @@ test('mode ambiguity cannot turn cumulative snapshots into fabricated source whe
     for (const text of ['{"content":"a',expected]) adapter.push(Buffer.from('data: ' + JSON.stringify({text}) + '\n\n'));
     adapter.end();
     const read = () => selectContractResponseText('BROKEN DOM', adapter.accumulatedText(), true, adapter.accumulatedAlternativeText());
-    if (textMode === 'delta') assert.throws(read, /Delta and snapshot extraction/);
+    if (textMode === 'delta') {
+      assert.throws(read, /Delta and snapshot extraction/);
+      assert.throws(() => selectContractResponseText(adapter.accumulatedText(), adapter.accumulatedText(), true, adapter.accumulatedAlternativeText()), /Delta and snapshot extraction/);
+    }
     else assert.equal(read(), expected);
   }
 });
