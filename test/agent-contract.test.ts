@@ -358,7 +358,7 @@ test('accepts deterministic WebChat JSON wrappers without extracting JSON from p
   );
 });
 
-test('contract repair stays bounded to route, tool schema and invalid candidate', () => {
+test('contract repair retains the user task without replaying typed context', () => {
   const request = body('agent-loop', {
     files: ['README.md'],
     marker: 'CONTEXT_MUST_NOT_BE_REPLAYED'
@@ -377,7 +377,7 @@ test('contract repair stays bounded to route, tool schema and invalid candidate'
   assert.match(serialized, /agent-loop/);
   assert.match(serialized, /kitt_runtime/);
   assert.match(serialized, /invalid candidate/);
-  assert.doesNotMatch(serialized, /ORIGINAL_TASK_MUST_NOT_BE_REPLAYED/);
+  assert.match(serialized, /ORIGINAL_TASK_MUST_NOT_BE_REPLAYED/);
   assert.doesNotMatch(serialized, /CONTEXT_MUST_NOT_BE_REPLAYED/);
 });
 
