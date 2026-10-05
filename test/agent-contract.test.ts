@@ -9,6 +9,7 @@ import {
   commitAgentContractContext,
   transformAgentContractCompletion
 } from '../src/runtime/agent-contract.js';
+import { buildAgentContractRepairBody } from '../src/proxy/openai-router.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../src/types.js';
 
 function completion(content: string): OpenAiCompletion {
@@ -329,6 +330,55 @@ test('rejects oversized reasoning while wrapped JSON normalization is covered se
     })), plan),
     AgentContractValidationError
   );
+});
+
+test('accepts deterministic WebChat JSON wrappers without extracting JSON from prose', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'webchat-wrapper-tolerance' });
+  const canonical = JSON.stringify({
+    action: 'use_tool',
+    tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.read', arguments: { path: 'README.md' } },
+    content: null,
+    reasoning_summary: 'Vou ler o arquivo.',
+    loop: null
+  });
+
+  for (const candidate of [
+    `JSON\n${canonical}`,
+    `\`\`\`json\n${canonical}\n\`\`\``,
+    `\`\`\`\n${canonical}\n\`\`\``
+  ]) {
+    const result = transformAgentContractCompletion(completion(candidate), plan);
+    assert.equal(result.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
+  }
+
+  assert.throws(
+    () => transformAgentContractCompletion(completion(`Here is the JSON:\n${canonical}`), plan),
+    AgentContractValidationError
+  );
+});
+
+test('contract repair stays bounded to route, tool schema and invalid candidate', () => {
+  const request = body('agent-loop', {
+    files: ['README.md'],
+    marker: 'CONTEXT_MUST_NOT_BE_REPLAYED'
+  });
+  request.messages = [{ role: 'user', content: 'ORIGINAL_TASK_MUST_NOT_BE_REPLAYED' }];
+  const plan = prepareAgentContractRequest(request, { sessionId: 'compact-contract-repair' });
+  const candidate = 'JSON\\n{invalid candidate}';
+
+  const repaired = buildAgentContractRepairBody(
+    plan,
+    new AgentContractValidationError('The model response is not a pure JSON object.'),
+    candidate
+  );
+  const serialized = JSON.stringify(repaired.messages);
+
+  assert.match(serialized, /agent-loop/);
+  assert.match(serialized, /kitt_runtime/);
+  assert.match(serialized, /invalid candidate/);
+  assert.doesNotMatch(serialized, /ORIGINAL_TASK_MUST_NOT_BE_REPLAYED/);
+  assert.doesNotMatch(serialized, /CONTEXT_MUST_NOT_BE_REPLAYED/);
 });
 
 test('accepts only the canonical contract shape after provider extraction', () => {
