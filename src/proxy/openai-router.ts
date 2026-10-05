@@ -85,8 +85,13 @@ function compactContractRepairMessages(plan: AgentContractPlan, candidate: strin
   const messages: JsonObject[] = [
     { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT }
   ];
+  const originalMessages = Array.isArray(plan.originalBody.messages) ? plan.originalBody.messages : [];
+  const task = [...originalMessages].reverse().find(
+    (item) => item && typeof item === 'object' && !Array.isArray(item) && item.role === 'user'
+  );
   const data = JSON.stringify({
     route: plan.route,
+    task,
     tools: [...plan.tools.values()].map((tool) => ({
       name: tool.name,
       ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {})
