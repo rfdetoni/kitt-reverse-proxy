@@ -33,8 +33,13 @@ test('tool_call fenced block is normalized and parsed', () => {
   assert.equal(parsed.tool_calls?.[0]?.function.name, 'read_file');
 });
 
-test('duplicated nested tool_call marker recovers innermost valid Gemini call', () => {
+test('conflicting nested tool wrappers cannot replace a known argument', () => {
   const response = '<tool_call>{"name":"read_file","arguments":{"path":"broken","<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</tool_call>';
+  assert.throws(() => parseUiToolResponse(response, readFilePlan(), [], 'gemini'), /changes known data/);
+});
+
+test('duplicated nested tool markers recover only when known data agrees', () => {
+  const response = '<tool_call>{"name":"read_file","arguments":{"path":"README.md","<tool_call>{"name":"read_file","arguments":{"path":"README.md"}}</tool_call>';
   const parsed = parseUiToolResponse(response, readFilePlan(), [], 'gemini');
   assert.equal(parsed.tool_calls?.length, 1);
   assert.deepEqual(JSON.parse(parsed.tool_calls![0]!.function.arguments), { path: 'README.md' });

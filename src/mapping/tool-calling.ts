@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { parseContractJson } from '../util/contract-json.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 
@@ -474,7 +475,7 @@ export function assertToolChoiceSatisfied(
   }
 }
 
-/** Delimit browser envelopes; malformed outer wrappers use latest complete inner wrapper. */
+/** Delimit complete browser envelopes without replacing known outer data. */
 export function toolCallEnvelopes(text: string): { whole: string; body: string }[] {
   if (Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) throw new ToolProtocolError('Tool response exceeds 2 MiB.', 'model');
   const blocks: { whole: string; body: string }[] = [];
@@ -506,8 +507,21 @@ export function toolCallEnvelopes(text: string): { whole: string; body: string }
     let nested = -1;
     if (!complete) nested = rawBody.toLowerCase().lastIndexOf('<tool_call>');
     const body = nested >= 0 ? rawBody.slice(nested + '<tool_call>'.length) : rawBody;
-    const whole = nested >= 0 ? outer.slice(outer.toLowerCase().lastIndexOf('<tool_call>')) : outer;
-    blocks.push({ whole, body });
+    if (nested >= 0) {
+      const members: Array<[string, unknown]> = [];
+      try { parseContractJson(rawBody, (_key, value, path) => members.push([path, value])); }
+      catch { /* Complete observed members still anchor a malformed wrapper. */ }
+      const recovered = parseContractJson(body).value;
+      for (const [path, before] of members) {
+        let after: unknown = recovered;
+        for (const token of path.slice(2).split('/')) {
+          const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+          after = after && typeof after === 'object' && Object.hasOwn(after, key) ? (after as Record<string, unknown>)[key] : undefined;
+        }
+        if (!isDeepStrictEqual(before, after)) throw new ToolProtocolError(`Nested tool wrapper changes known data at ${path}.`, 'model');
+      }
+    }
+    blocks.push({ whole: outer, body });
     cursor = end + '</tool_call>'.length;
   }
   return blocks;
