@@ -103,3 +103,64 @@ test('contract repair keeps the same session lease and original task context', a
     });
   }
 });
+
+async function executeRecovery(outputs: string[], maxAttempts = 3): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
+  let attempts = 0;
+  const lease: SessionExecutionLease = {
+    sessionId: 'recovery-regression', contextKey: `recovery-${Math.random()}`, generation: 1,
+    async execute(body, options) {
+      options?.lifecycle?.beforeSubmit(JSON.stringify(body));
+      const content = outputs[Math.min(attempts++, outputs.length - 1)]!;
+      options?.lifecycle?.received(content);
+      return result(content);
+    }
+  };
+  const manager = { transport:'ui', modelId:'chatgpt-web', normalizeSessionId:() => lease.sessionId,
+    transaction: async (_id: string, _options: ChatExecutionOptions, operation: (lease: SessionExecutionLease) => Promise<ChatExecutionResult>) => operation(lease)
+  } as unknown as SessionManager;
+  const app = express(); app.use(express.json()); app.use(createOpenAiRouter(manager));
+  const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const address = server.address(); assert.ok(address && typeof address === 'object');
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method:'POST', headers:{'content-type':'application/json','x-kitt-agent-contract':'v2'},
+      body:JSON.stringify({messages:[{role:'user',content:'Create x.py'}], kitt_meta:{max_upstream_attempts:maxAttempts},
+        tools:[{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}}]})
+    });
+    return {status:response.status,body:await response.json() as Record<string, unknown>,attempts};
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+}
+const writeContract = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'x.py',content:'one\ntwo\n'},content:null,reasoning_summary:'',loop:null});
+const falseFinal = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'File created.',reasoning_summary:'',loop:null});
+
+test('local contract syntax repair avoids an upstream retry and preserves file formatting', async () => {
+  const recovered = await executeRecovery([writeContract.replace('one\\ntwo\\n','one\ntwo\n')]);
+  assert.equal(recovered.status, 200); assert.equal(recovered.attempts, 1);
+  const choices = recovered.body.choices as Array<{message:{tool_calls:Array<{function:{arguments:string}}>}}>;
+  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {path:'x.py',content:'one\ntwo\n'});
+});
+
+test('a drifting repair cannot replace a pending write with a successful final response', async () => {
+  const broken = '{"action":"use_tool","tool":"write_file","tool_input":';
+  const failed = await executeRecovery([broken, falseFinal, falseFinal]);
+  assert.equal(failed.status, 409); assert.equal(failed.attempts, 3);
+  assert.equal((failed.body.error as {recoverable:boolean}).recoverable, true);
+  const recovered = await executeRecovery([broken, falseFinal, writeContract]);
+  assert.equal(recovered.status, 200);
+  assert.match(JSON.stringify(recovered.body), /tool_calls/);
+});
+
+test('stalled repairs stop early and respect the same upstream budget', async () => {
+  const stalled = await executeRecovery(['broken']);
+  assert.equal(stalled.status, 409); assert.equal(stalled.attempts, 2);
+  const exhausted = await executeRecovery(['broken'], 1);
+  assert.equal(exhausted.status, 409); assert.equal(exhausted.attempts, 1);
+  assert.equal((exhausted.body.error as {code:string}).code, 'upstream_budget_exhausted');
+});
+
+test('a faithful repair can reveal a second invalid argument within the same bounded recovery', async () => {
+  const invalid = writeContract.replace('"path":"x.py"', '"path":1').replace('"content":"one\\ntwo\\n"', '"content":2');
+  const partiallyRepaired = invalid.replace('"path":1', '"path":"x.py"');
+  const recovered = await executeRecovery([invalid, partiallyRepaired, writeContract]);
+  assert.equal(recovered.status, 200); assert.equal(recovered.attempts, 3);
+});

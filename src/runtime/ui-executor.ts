@@ -173,9 +173,10 @@ export class UiChatExecutor implements ChatExecutor {
     baseline: readonly UiTextSnapshot[],
     sentPrompt: string,
     onDelta?: ChatExecutionOptions['onDelta'],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    preferRawContract = false
   ): Promise<HybridUiResponseResult> {
-    return this.responseReader.read(baseline, sentPrompt, onDelta, signal);
+    return this.responseReader.read(baseline, sentPrompt, onDelta, signal, preferRawContract);
   }
 
   async reset(signal?: AbortSignal): Promise<void> {
@@ -439,7 +440,8 @@ export class UiChatExecutor implements ChatExecutor {
       baseline,
       prompt,
       bufferResponse ? undefined : options?.onDelta,
-      options?.signal
+      options?.signal,
+      options?.preferRawContract === true || bufferResponse
     );
     throwIfAborted(options?.signal);
     options?.lifecycle?.received(result.text);
@@ -504,8 +506,10 @@ export class UiChatExecutor implements ChatExecutor {
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
-        textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal)).text;
+        const previousCandidate = textToParse;
+        textToParse = (await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal, true)).text;
         options?.lifecycle?.received(textToParse);
+        if (textToParse === previousCandidate) throw new ToolParseFailedError('Tool contract repair made no progress.');
         const retryArtifactsAfter = await extractArtifactContents(this.session.page).catch(() => []);
         const retryKnown: Set<string> = this.artifactFingerprints ?? new Set<string>();
         const freshArtifacts = retryArtifactsAfter.filter(
@@ -513,7 +517,7 @@ export class UiChatExecutor implements ChatExecutor {
         );
         for (const artifact of retryArtifactsAfter) retryKnown.add(artifactFingerprint(artifact));
         this.artifactFingerprints = retryKnown;
-        if (freshArtifacts.length) artifacts = [...artifacts, ...freshArtifacts];
+        artifacts = freshArtifacts;
       }
     }
 
@@ -524,7 +528,7 @@ export class UiChatExecutor implements ChatExecutor {
         const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
-        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal);
+        const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal, true);
         options?.lifecycle?.received(retryResult.text);
         checked = validateStructuredOutput(retryResult.text, structured);
       }
@@ -584,9 +588,6 @@ export class UiChatExecutor implements ChatExecutor {
       }
     };
 
-    if (incoming.length > 1) {
-    } else {
-        }
     return execution;
   }
 

@@ -1,3 +1,5 @@
+import { assertSupportedJsonSchema } from '../util/json-schema.js';
+import { structuredOutputPlan } from '../runtime/structured-output.js';
 import { InvalidRequestError } from '../core/errors.js';
 import { isJsonObject } from '../util/json.js';
 import type { JsonObject, JsonValue } from '../types.js';
@@ -61,6 +63,9 @@ function validateTools(value: JsonValue | undefined): void {
     if (tool.function.parameters !== undefined && !isJsonObject(tool.function.parameters)) {
       fail(`tools[${index}].function.parameters deve ser objeto JSON Schema.`);
     }
+    if (tool.function.parameters !== undefined) {
+      try { assertSupportedJsonSchema(tool.function.parameters); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+    }
   }
 }
 
@@ -89,6 +94,7 @@ export function validateOpenAiChatRequest(value: unknown): JsonObject {
   if (body.response_format !== undefined && !isJsonObject(body.response_format)) {
     fail('"response_format" deve ser objeto.');
   }
+  try { structuredOutputPlan(body); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   return body;
 }
 
@@ -104,5 +110,6 @@ export function validateResponsesRequest(value: unknown): JsonObject {
   optionalNumber(body, 'temperature', 0, 2);
   optionalNumber(body, 'top_p', 0, 1);
   optionalPositiveInteger(body, 'max_output_tokens');
+  try { structuredOutputPlan(body); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   return body;
 }

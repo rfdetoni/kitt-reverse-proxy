@@ -163,3 +163,9 @@ test('legacy Chat Completions functions contract is rejected', () => {
   assert.throws(() => validateOpenAiChatRequest(legacy as any), /tools.*tool_choice/i);
   assert.throws(() => buildToolProtocolPlan(legacy as any), ToolProtocolError);
 });
+
+test('unsupported tool and structured schemas fail at the request boundary', () => {
+  const messages = [{role:'user',content:'hello'}];
+  assert.throws(() => validateOpenAiChatRequest({messages,tools:[{type:'function',function:{name:'tool',parameters:{type:'object',unsupportedConstraint:true}}}]}), /unsupported JSON Schema/);
+  assert.throws(() => validateOpenAiChatRequest({messages,response_format:{type:'json_schema',json_schema:{schema:{$ref:'https://external.invalid/schema'}}}}), /unsupported JSON Schema/);
+});

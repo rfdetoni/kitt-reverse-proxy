@@ -111,3 +111,21 @@ test('artifacts never synthesize local writes and disabled tools remain text', (
   const text = '<tool_call>{"name":"write_file","arguments":{}}</tool_call>';
   assert.deepEqual(parseUiToolResponse(text, disabled), { content: text });
 });
+
+test('file hydration requires a matching artifact and preserves explicit empty content', () => {
+  const plan = buildToolProtocolPlan({tools:[{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}}]});
+  assert.throws(() => parseUiToolResponse('<tool_call>{"name":"write_file","arguments":{"path":"app.py"}}</tool_call>', plan, [{filename:'README.md',code:'# wrong\n'}]), ToolParseFailedError);
+  const empty = parseUiToolResponse('<tool_call>{"name":"write_file","arguments":{"path":"app.py","content":""}}</tool_call>', plan, [{filename:'app.py',code:'wrong'}]);
+  assert.equal(JSON.parse(empty.tool_calls![0]!.function.arguments).content, '');
+  const exact = '  print("hello")\n';
+  const hydrated = parseUiToolResponse('<tool_call>{"name":"write_file","arguments":{"path":"app.py"}}</tool_call>', plan, [{filename:'app.py',code:exact}]);
+  assert.equal(JSON.parse(hydrated.tool_calls![0]!.function.arguments).content, exact);
+});
+
+test('separate tool envelopes preserve all calls and still enforce parallel_tool_calls', () => {
+  const text = '<tool_call>{"name":"read_file","arguments":{"path":"one.txt"}}</tool_call>\n'
+    + '<tool_call>{"name":"read_file","arguments":{"path":"two.txt"}}</tool_call>';
+  const plan = readFilePlan();
+  assert.deepEqual(parseUiToolResponse(text, plan).tool_calls?.map(call => JSON.parse(call.function.arguments).path), ['one.txt','two.txt']);
+  assert.throws(() => parseUiToolResponse(text, {...plan, parallel:false}), /parallel_tool_calls=false/);
+});

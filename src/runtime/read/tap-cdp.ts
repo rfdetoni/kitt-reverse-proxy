@@ -22,6 +22,7 @@ interface Candidate {
   score: number;
   responseContentType?: string;
   finished: boolean;
+  streamReady: boolean;
   failed: boolean;
 }
 
@@ -63,7 +64,7 @@ function normalize(value: string): string {
 
 function promptNeedle(prompt: string): string {
   const value = normalize(prompt);
-  return value.slice(Math.max(0, value.length - 160));
+  return value;
 }
 
 function jsonContainsNeedle(value: JsonValue, needle: string, depth = 0): boolean {
@@ -228,6 +229,7 @@ export class CdpStreamTap {
       method,
       score,
       finished: false,
+      streamReady: false,
       failed: false
     });
   };
@@ -280,7 +282,7 @@ export class CdpStreamTap {
     const requestId = typeof event?.requestId === 'string' ? event.requestId : '';
     const candidate = turn.candidates.get(requestId);
     if (candidate) candidate.finished = true;
-    if (requestId === turn.matchedRequestId) this.finish(turn);
+    if (requestId === turn.matchedRequestId && candidate?.streamReady) this.finish(turn);
   };
 
   private readonly onFailed = (raw: unknown): void => {
@@ -319,6 +321,7 @@ export class CdpStreamTap {
       }));
       const buffered = typeof response?.bufferedData === 'string' ? response.bufferedData : '';
       if (buffered) this.emitChunk(turn, Buffer.from(buffered, 'base64'));
+      candidate.streamReady = true;
       if (candidate.failed) this.fail(turn, 'stream_aborted');
       else if (candidate.finished) this.finish(turn);
     } catch {

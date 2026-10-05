@@ -1,3 +1,4 @@
+import { sameContractText } from './contract-text.js';
 import { decodeTextBody } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { getPathValues } from '../../util/path.js';
@@ -50,7 +51,7 @@ function stripXssi(line: string): string {
 }
 
 export class TapStreamAdapter {
-  private readonly decoder = new TextDecoder('utf-8');
+  private readonly decoder = new TextDecoder('utf-8', { fatal: true });
   private readonly candidates = new Map<string, TapTextState>();
   private matched?: MatchedResponse;
   private frameBuffer = '';
@@ -59,7 +60,7 @@ export class TapStreamAdapter {
   private learnedText = '';
   private learnedSamples = 0;
 
-  constructor(private readonly profile?: TapProfile) {}
+  constructor(private readonly profile?: TapProfile, private readonly contractMode = false) {}
 
   matchedResponse(url: string, method: string, contentType: string): void {
     this.matched = {
@@ -104,13 +105,15 @@ export class TapStreamAdapter {
     const expected = normalizeTapText(finalDomText);
     if (!expected) return undefined;
 
+    const matchesDom = (text: string): boolean => normalizeTapText(text) === expected
+      || (this.contractMode && sameContractText(text, finalDomText));
     if (this.profile) {
-      if (this.learnedSamples === 0 || normalizeTapText(this.learnedText) !== expected) return undefined;
+      if (this.learnedSamples === 0 || !matchesDom(this.learnedText)) return undefined;
       return { profile: { ...this.profile }, text: this.learnedText };
     }
 
     const matches = [...this.candidates.entries()]
-      .filter(([, state]) => state.samples > 0 && normalizeTapText(state.text) === expected)
+      .filter(([, state]) => state.samples > 0 && matchesDom(state.text))
       .sort((left, right) => {
         if (right[1].score !== left[1].score) return right[1].score - left[1].score;
         return right[1].samples - left[1].samples;

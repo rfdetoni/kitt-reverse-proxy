@@ -1,3 +1,4 @@
+import { ContractJsonError, parseContractJson } from '../util/contract-json.js';
 import { CONTEXT_ENVELOPE_SCHEMA } from '../contracts/context-schema.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { logger } from '../logger.js';
@@ -118,7 +119,7 @@ export class AgentContractError extends Error {
 }
 
 export class AgentContractValidationError extends AgentContractError {
-  constructor(message: string) {
+  constructor(message: string, public readonly kind: 'syntax' | 'shape' | 'schema' | 'ambiguous' | 'limit' = 'shape', public readonly paths: string[] = []) {
     super(502, 'agent_contract_invalid', message);
     this.name = 'AgentContractValidationError';
   }
@@ -633,25 +634,12 @@ function sentenceCount(text: string): number {
   return normalized.split(/(?<=[.!?])\s+/u).filter((part) => part.trim()).length;
 }
 
-function canonicalContractJson(text: string): string {
-  const trimmed = text.trim();
-
-  const fenced = trimmed.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/iu);
-  if (fenced) return fenced[1]!.trim();
-
-  // Some WebChat renderers surface a standalone language label before the
-  // payload instead of preserving a code-fence wrapper. Accept only that exact
-  // transport artifact; never extract JSON from surrounding prose.
-  const labeled = trimmed.match(/^json[ \t]*\r?\n([\s\S]+)$/iu);
-  return labeled ? labeled[1]!.trim() : trimmed;
-}
-
 function parseStrictContract(text: string): AgentContractResponse {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(canonicalContractJson(text));
-  } catch {
-    throw new AgentContractValidationError(NON_JSON_CONTRACT_MESSAGE);
+    parsed = parseContractJson(text).value;
+  } catch (error) {
+    throw new AgentContractValidationError(`${NON_JSON_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : ''}`, error instanceof ContractJsonError ? error.kind : 'syntax');
   }
   if (!isRecord(parsed)) {
     throw new AgentContractValidationError('The model response must be a JSON object.');
@@ -662,38 +650,38 @@ function parseStrictContract(text: string): AgentContractResponse {
   const keys = Object.keys(value);
   const missing = [...expected].filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
   if (missing.length) {
-    throw new AgentContractValidationError(`Missing required field(s): ${missing.join(', ')}.`);
+    throw new AgentContractValidationError(`Missing required field(s): ${missing.join(', ')}.`, 'shape', missing.map(key => `$/` + key));
   }
   if (keys.some((key) => !expected.has(key))) {
-    throw new AgentContractValidationError('The response contains fields outside the contract.');
+    throw new AgentContractValidationError('The response contains fields outside the contract.', 'shape', keys.filter(key => !expected.has(key)).map(key => '$/' + key));
   }
 
   const action = value.action;
   if (!CONTRACT_ACTIONS.has(String(action))) {
-    throw new AgentContractValidationError('Invalid action.');
+    throw new AgentContractValidationError('Invalid action.', 'shape', ['$/action']);
   }
   if (value.tool !== null && typeof value.tool !== 'string') {
-    throw new AgentContractValidationError('tool must be a string or null.');
+    throw new AgentContractValidationError('tool must be a string or null.', 'shape', ['$/tool']);
   }
   if (value.tool_input !== null && !isRecord(value.tool_input)) {
-    throw new AgentContractValidationError('tool_input must be an object or null.');
+    throw new AgentContractValidationError('tool_input must be an object or null.', 'shape', ['$/tool_input']);
   }
   if (value.content !== null && typeof value.content !== 'string') {
-    throw new AgentContractValidationError('content must be a string or null.');
+    throw new AgentContractValidationError('content must be a string or null.', 'shape', ['$/content']);
   }
   if (typeof value.reasoning_summary !== 'string') {
-    throw new AgentContractValidationError('reasoning_summary must be a string.');
+    throw new AgentContractValidationError('reasoning_summary must be a string.', 'shape', ['$/reasoning_summary']);
   }
   if (value.reasoning_summary.length > MAX_REASONING_SUMMARY_CHARS) {
-    throw new AgentContractValidationError(`reasoning_summary exceeds ${MAX_REASONING_SUMMARY_CHARS} characters.`);
+    throw new AgentContractValidationError(`reasoning_summary exceeds ${MAX_REASONING_SUMMARY_CHARS} characters.`, 'shape', ['$/reasoning_summary']);
   }
   if (sentenceCount(value.reasoning_summary) > 2) {
-    throw new AgentContractValidationError('reasoning_summary must contain at most 2 sentences.');
+    throw new AgentContractValidationError('reasoning_summary must contain at most 2 sentences.', 'shape', ['$/reasoning_summary']);
   }
 
   if (value.loop !== null) {
     if (!isRecord(value.loop)) {
-      throw new AgentContractValidationError('loop must be an object or null.');
+      throw new AgentContractValidationError('loop must be an object or null.', 'shape', ['$/loop']);
     }
     const loopKeys = Object.keys(value.loop);
     const allowedLoopKeys = new Set(['objective', 'completion_criteria', 'status', 'validation_summary']);
@@ -701,14 +689,14 @@ function parseStrictContract(text: string): AgentContractResponse {
       (key) => !Object.prototype.hasOwnProperty.call(value.loop as Record<string, unknown>, key)
     );
     if (missingLoop.length || loopKeys.some((key) => !allowedLoopKeys.has(key))) {
-      throw new AgentContractValidationError('loop must contain exactly objective, completion_criteria, status and validation_summary.');
+      throw new AgentContractValidationError('loop must contain exactly objective, completion_criteria, status and validation_summary.', 'shape', ['$/loop']);
     }
     const objective = value.loop.objective;
     const criteria = value.loop.completion_criteria;
     const status = value.loop.status;
     const validationSummary = value.loop.validation_summary;
     if (typeof objective !== 'string' || !objective.trim() || objective.length > 500) {
-      throw new AgentContractValidationError('loop.objective must be a non-empty string up to 500 characters.');
+      throw new AgentContractValidationError('loop.objective must be a non-empty string up to 500 characters.', 'shape', ['$/loop/objective']);
     }
     if (
       !Array.isArray(criteria)
@@ -716,13 +704,13 @@ function parseStrictContract(text: string): AgentContractResponse {
       || criteria.length > 8
       || criteria.some((item) => typeof item !== 'string' || !item.trim() || item.length > 300)
     ) {
-      throw new AgentContractValidationError('loop.completion_criteria must contain 1 to 8 non-empty strings up to 300 characters each.');
+      throw new AgentContractValidationError('loop.completion_criteria must contain 1 to 8 non-empty strings up to 300 characters each.', 'shape', ['$/loop/completion_criteria']);
     }
     if (!['active', 'checkpoint', 'complete'].includes(String(status))) {
-      throw new AgentContractValidationError('loop.status must be active, checkpoint, or complete.');
+      throw new AgentContractValidationError('loop.status must be active, checkpoint, or complete.', 'shape', ['$/loop/status']);
     }
     if (typeof validationSummary !== 'string' || validationSummary.length > 600) {
-      throw new AgentContractValidationError('loop.validation_summary must be a string up to 600 characters.');
+      throw new AgentContractValidationError('loop.validation_summary must be a string up to 600 characters.', 'shape', ['$/loop/validation_summary']);
     }
   }
 
@@ -732,26 +720,26 @@ function parseStrictContract(text: string): AgentContractResponse {
 function validateContractResponse(response: AgentContractResponse, plan: AgentContractPlan): void {
   if (response.action === 'use_tool') {
     if (!response.tool || response.tool_input === null) {
-      throw new AgentContractValidationError('use_tool requires tool and tool_input.');
+      throw new AgentContractValidationError('use_tool requires tool and tool_input.', 'shape', [...(!response.tool ? ['$/tool'] : []), ...(response.tool_input === null ? ['$/tool_input'] : [])]);
     }
     const tool = plan.tools.get(response.tool);
-    if (!tool) throw new AgentContractValidationError(`Tool unavailable for this turn: ${response.tool}.`);
+    if (!tool) throw new AgentContractValidationError(`Tool unavailable for this turn: ${response.tool}.`, 'schema', ['$/tool', '$/tool_input']);
     if (tool.parameters !== undefined) {
       const validation = validateJsonSchema(response.tool_input, tool.parameters);
       if (!validation.valid) {
         const detail = validation.issues.slice(0, 6).map((issue) => `${issue.path}: ${issue.message}`).join('; ');
-        throw new AgentContractValidationError(`Invalid tool_input for ${response.tool}${detail ? `: ${detail}` : ''}.`);
+        throw new AgentContractValidationError(`Invalid tool_input for ${response.tool}${detail ? `: ${detail}` : ''}.`, 'schema', validation.issues.map(issue => '$/tool_input' + issue.path.slice(1)));
       }
     }
-    if (response.content !== null) throw new AgentContractValidationError('use_tool requires content=null.');
+    if (response.content !== null) throw new AgentContractValidationError('use_tool requires content=null.', 'shape', ['$/content']);
     return;
   }
 
   if (response.tool !== null || response.tool_input !== null) {
-    throw new AgentContractValidationError(`${response.action} requires tool=null and tool_input=null.`);
+    throw new AgentContractValidationError(`${response.action} requires tool=null and tool_input=null.`, 'shape', ['$/tool', '$/tool_input']);
   }
   if (response.action === 'final_response' && response.content === null) {
-    throw new AgentContractValidationError('final_response requires content to be a string.');
+    throw new AgentContractValidationError('final_response requires content to be a string.', 'shape', ['$/content']);
   }
 }
 
@@ -802,4 +790,46 @@ export function buildAgentContractRetryBody(plan: AgentContractPlan): JsonObject
   const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
   messages.push({ role: 'user', content: AGENT_CONTRACT_RETRY_PROMPT });
   return { ...plan.body, messages };
+}
+
+/** Preserve known candidate data; syntax repair is never a new decision turn. */
+export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
+  const anchor = new Map<string, unknown>();
+  const inconsistent = new Set<string>();
+  try {
+    parseContractJson(candidate, (_key, value, path) => {
+      if (anchor.has(path) && JSON.stringify(anchor.get(path)) !== JSON.stringify(value)) inconsistent.add(path);
+      else anchor.set(path, value);
+    });
+  } catch { /* Only complete, unambiguous members observed before corruption count. */ }
+  for (const path of anchor.keys()) {
+    if ([...inconsistent].some(parent => path === parent || path.startsWith(parent + '/'))) anchor.delete(path);
+  }
+  const next = parseStrictContract(repaired);
+  if (!isRecord(next)) return;
+  const allowed = error.paths;
+  const compare = (before: unknown, after: unknown, path: string): void => {
+    if (allowed.some(p => path === p || path.startsWith(p + '/'))) return;
+    if (Array.isArray(before) && Array.isArray(after)) {
+      for (let index = 0; index < Math.max(before.length, after.length); index++) compare(before[index], after[index], path + '/' + index);
+      return;
+    }
+    if (isRecord(before) && isRecord(after)) {
+      for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        compare(before[key], after[key], path + '/' + key.replace(/~/g, '~0').replace(/\//g, '~1'));
+      }
+      return;
+    }
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      throw new AgentContractValidationError(`Repair changed unaffected candidate data at ${path}.`, 'shape');
+    }
+  };
+  for (const [path, before] of anchor) {
+    let after: unknown = next;
+    for (const token of path.slice(2).split('/')) {
+      const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+      after = after && typeof after === 'object' && Object.hasOwn(after, key) ? (after as Record<string, unknown>)[key] : undefined;
+    }
+    compare(before, after, path);
+  }
 }

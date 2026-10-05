@@ -226,6 +226,8 @@ export interface UpstreamResult {
 }
 
 export interface ChatExecutionOptions {
+  /** Internal buffered contract reads may recover renderer damage from a trusted raw stream. */
+  preferRawContract?: boolean;
   lifecycle?: import('./runtime/request-state.js').ProviderRequestState;
   onDelta?: (delta: string) => void | Promise<void>;
   reasoningEffort?: number;

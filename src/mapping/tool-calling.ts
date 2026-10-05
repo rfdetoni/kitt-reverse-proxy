@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { parseContractJson } from '../util/contract-json.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 
 const MAX_TOOLS = 64;
@@ -475,20 +476,35 @@ export function assertToolChoiceSatisfied(
 
 /** Delimit browser envelopes; malformed outer wrappers use latest complete inner wrapper. */
 export function toolCallEnvelopes(text: string): { whole: string; body: string }[] {
+  if (Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) throw new ToolProtocolError('Tool response exceeds 2 MiB.', 'model');
   const blocks: { whole: string; body: string }[] = [];
   const opening = /<tool_call>/ig;
+  const lower = text.toLowerCase();
   let cursor = 0;
+  let scans = 0;
+  let scannedChars = 0;
   while (true) {
     opening.lastIndex = cursor;
     const startMatch = opening.exec(text);
     if (!startMatch) break;
     const start = startMatch.index;
-    const end = text.toLowerCase().lastIndexOf('</tool_call>');
+    const bodyStart = start + '<tool_call>'.length;
+    const firstEnd = lower.indexOf('</tool_call>', bodyStart);
+    let end = firstEnd;
     if (end < start) break;
+    // Prefer the first complete payload, while ignoring closing markup inside
+    // source strings. A lastIndexOf close silently dropped parallel calls.
+    let complete = false;
+    for (let closing = firstEnd; closing >= 0; closing = lower.indexOf('</tool_call>', closing + '</tool_call>'.length)) {
+      scannedChars += closing - bodyStart;
+      if (++scans > 256 || scannedChars > 8 * 1024 * 1024) throw new ToolProtocolError('Tool envelope scan budget exceeded.', 'model');
+      try { parseContractJson(text.slice(bodyStart, closing)); end = closing; complete = true; break; }
+      catch { /* Keep scanning past possible literal markup. */ }
+    }
     const outer = text.slice(start, end + '</tool_call>'.length);
-    const rawBody = text.slice(start + '<tool_call>'.length, end);
+    const rawBody = text.slice(bodyStart, end);
     let nested = -1;
-    try { JSON.parse(rawBody.trim()); } catch { nested = rawBody.toLowerCase().lastIndexOf('<tool_call>'); }
+    if (!complete) nested = rawBody.toLowerCase().lastIndexOf('<tool_call>');
     const body = nested >= 0 ? rawBody.slice(nested + '<tool_call>'.length) : rawBody;
     const whole = nested >= 0 ? outer.slice(outer.toLowerCase().lastIndexOf('<tool_call>')) : outer;
     blocks.push({ whole, body });
@@ -635,4 +651,3 @@ export function completionFromToolCalls(
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
   };
 }
-

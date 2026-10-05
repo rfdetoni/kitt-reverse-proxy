@@ -1,3 +1,5 @@
+import { selectContractResponseText } from './contract-text.js';
+export { selectContractResponseText } from './contract-text.js';
 import type { AppConfig, ChatExecutionOptions, JsonObject, LiveBrowserSession } from '../../types.js';
 import type { ProviderPreset } from '../../providers/catalog.js';
 import {
@@ -63,7 +65,8 @@ export class HybridUiResponseReader {
     baseline: readonly UiTextSnapshot[],
     sentPrompt: string,
     onDelta?: ChatExecutionOptions['onDelta'],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    preferRawContract = false
   ): Promise<HybridUiResponseResult> {
     const turn = this.pending;
     this.pending = undefined;
@@ -90,8 +93,9 @@ export class HybridUiResponseReader {
       };
     }
 
+    const trustedBeforeRead = Boolean(this.tap.health().trusted);
     const startedAt = Date.now();
-    const adapter = new TapStreamAdapter(turn.profile);
+    const adapter = new TapStreamAdapter(turn.profile, preferRawContract);
     const reconciler = new ResponseReconciler(
       this.config.readMode ?? 'auto',
       turn.mode,
@@ -179,22 +183,31 @@ export class HybridUiResponseReader {
       }
     }
 
+    let canonicalText: string;
+    try {
+      canonicalText = selectContractResponseText(dom.text, adapter.accumulatedText(),
+        preferRawContract && trustedBeforeRead && Boolean(turn.profile) && turn.mode === 'active' && matched && adapterEnded && !tapFailure);
+    } catch (error) {
+      await failTap('verify_mismatch');
+      throw error;
+    }
+    const rawSelected = canonicalText !== dom.text;
     let verified = false;
     if (matched && !tapFailure) {
       const candidate = adapter.verification(dom.text);
       if (candidate) {
         this.tap.recordVerified(candidate.profile);
         verified = true;
-      } else if (adapter.accumulatedText()) {
+      } else if (adapter.accumulatedText() && !rawSelected) {
         await failTap(turn.profile ? 'verify_mismatch' : 'profile_mismatch');
-      } else {
+      } else if (!rawSelected) {
         await failTap('profile_mismatch');
       }
     }
 
     const health = this.tap.health();
     const result = await reconciler.finalize(
-      dom.text,
+      canonicalText,
       verified,
       Boolean(health.trusted)
     );
@@ -206,6 +219,7 @@ export class HybridUiResponseReader {
 
     return {
       ...dom,
+      text: canonicalText,
       deltas: onDelta ? [] : result.deltas,
       firstDeltaMs: result.firstDeltaMs ?? dom.firstDeltaMs,
       readDiagnostics

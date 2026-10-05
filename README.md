@@ -1,3 +1,11 @@
+## Reverse Proxy 4.9.8 — lossless contract recovery and raw browser responses
+
+Agent v2, tool calls and structured JSON share bounded syntax recovery. The parser preserves file formatting and rejects ambiguous guesses, duplicate keys, multiple payloads and truncated data. Same-session repairs preserve known actions and unaffected arguments, stop when no progress is made and stay under the existing cumulative attempt/deadline budget. Ajv validates caller schemas before dispatch without modifying values.
+
+Buffered contracts can use the original CDP network response when the full submitted prompt matches and a completed stream has an already trusted extraction profile. HTML/Markdown damage no longer forces a model retry in that case. A CDP completion race that could lose buffered bytes is fixed. Artifact hydration requires a matching current-response file and preserves explicit empty content.
+
+See [4.9.8 recovery behavior, limits and validation](docs/RELEASE_4.9.8.md). The historical release entries below describe earlier behavior; current Agent v2 remains the authoritative wire contract.
+
 ## Reverse Proxy 4.9.7 — WebChat Agent contract recovery
 
 Agent-contract v2 now tolerates deterministic WebChat JSON wrappers without extracting JSON from prose, and repair turns keep only the original user task, invalid candidate and structural route/tool data instead of replaying typed workspace/orchestrator context. This prevents repeated `agent_contract_invalid` loops observed with Gemini Web while preserving fail-closed contract validation.
