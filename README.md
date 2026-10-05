@@ -1,3 +1,9 @@
+## Reverse Proxy 4.9.7 — WebChat Agent contract recovery
+
+Agent-contract v2 now tolerates deterministic WebChat JSON wrappers without extracting JSON from prose, and repair turns keep only the original user task, invalid candidate and structural route/tool data instead of replaying typed workspace/orchestrator context. This prevents repeated `agent_contract_invalid` loops observed with Gemini Web while preserving fail-closed contract validation.
+
+This release pairs with Agent CLI **0.83.15** and KITT Protocol **0.9.0** and does not change the wire contract.
+
 ## Reverse Proxy 4.9.6 — bounded full-content logging
 
 Debug logging with `--log-content full` now respects the existing structured-log depth bound, preventing cyclic runtime objects such as request lifecycle/timer state from causing `Maximum call stack size exceeded`. Full prompt/response content remains visible inside the bounded structure.
