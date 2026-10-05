@@ -21,7 +21,7 @@ const MAX_BRANCHES = 256;
 const MAX_DEPTH = 64;
 const STRING_ESCAPES: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
-export function parseContractJson(text: string, onMember?: (key: string, value: unknown, path: string) => void): { value: unknown; text: string; repaired: boolean } {
+export function parseContractJson(text: string, onMember?: (key: string, value: unknown, path: string, stablePrefix: boolean) => void): { value: unknown; text: string; repaired: boolean } {
   const source = unwrapContractJson(text);
   if (Buffer.byteLength(source, 'utf8') > MAX_BYTES) throw new ContractJsonError('limit', 'JSON payload exceeds 2 MiB');
   let work = 0;
@@ -143,7 +143,7 @@ export function parseContractJson(text: string, onMember?: (key: string, value: 
         if (object && source[colon] !== ':' && !startsValue(colon)) continue;
         const childPath = path + '/' + (object ? name.replace(/~/g, '~0').replace(/\//g, '~1') : String((current as unknown[]).length));
         for (const child of value(object ? colon + (source[colon] === ':' ? 1 : 0) : start, depth, childPath)) {
-          if (object) onMember?.(name, child.value, childPath);
+          if (object) onMember?.(name, child.value, childPath, branches === 0);
           const next = object ? { ...current, [name]: child.value } : [...current as unknown[], child.value];
           const end = skip(child.end);
           if (source[end] === close) { yield { value: next, end: end + 1 }; continue; }

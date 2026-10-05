@@ -796,14 +796,16 @@ export function buildAgentContractRetryBody(plan: AgentContractPlan): JsonObject
 export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
   const anchor = new Map<string, unknown>();
   const inconsistent = new Set<string>();
+  const stablePrefix = new Set<string>();
   try {
-    parseContractJson(candidate, (_key, value, path) => {
+    parseContractJson(candidate, (_key, value, path, stable) => {
+      if (stable) stablePrefix.add(path);
       if (anchor.has(path) && JSON.stringify(anchor.get(path)) !== JSON.stringify(value)) inconsistent.add(path);
       else anchor.set(path, value);
     });
   } catch { /* Only complete, unambiguous members observed before corruption count. */ }
   for (const path of anchor.keys()) {
-    if ([...inconsistent].some(parent => path === parent || path.startsWith(parent + '/'))) anchor.delete(path);
+    if (inconsistent.has(path) || (!stablePrefix.has(path) && [...inconsistent].some(parent => path.startsWith(parent + '/')))) anchor.delete(path);
   }
   const next = parseStrictContract(repaired);
   if (!isRecord(next)) return;

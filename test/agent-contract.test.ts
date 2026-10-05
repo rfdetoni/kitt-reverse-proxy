@@ -739,3 +739,12 @@ test('a truncated tool input still anchors complete nested arguments during mode
   assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, repaired, error));
   assert.throws(() => assertAgentRepairContinuity(candidate, repaired.replace('safe.txt','other.txt'), error), /unaffected candidate data/);
 });
+
+test('a known path before ambiguous content remains anchored when its parent has competing parses', async () => {
+  const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
+  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"safe.py","content":"print("hello")","mode":"append"},"content":null,"reasoning_summary":"","loop":null}';
+  const repaired = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'safe.py',content:'print("hello")',mode:'append'},content:null,reasoning_summary:'',loop:null});
+  const error = new AgentContractValidationError('Ambiguous content', 'ambiguous');
+  assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, repaired, error));
+  assert.throws(() => assertAgentRepairContinuity(candidate, repaired.replace('safe.py','other.py'), error), /unaffected candidate data/);
+});
