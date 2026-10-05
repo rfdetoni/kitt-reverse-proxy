@@ -5,6 +5,7 @@ export interface TapTextState {
   text: string;
   score: number;
   samples: number;
+  invalid?: boolean;
 }
 
 const PREFERRED_KEY_SCORE: Readonly<Record<string, number>> = Object.freeze({
@@ -82,24 +83,19 @@ export function tapTextValues(value: JsonValue): string[] {
   return [];
 }
 
-export function applyTapPiece(state: TapTextState, raw: string): string {
-  if (!raw) return '';
-  if (!state.text) {
-    state.text = raw;
-    state.samples += 1;
-    return raw;
-  }
-  if (raw === state.text || state.text.endsWith(raw) || state.text.startsWith(raw)) {
-    state.samples += 1;
-    return '';
-  }
-  if (raw.startsWith(state.text)) {
+export function applyTapPiece(state: TapTextState, raw: string, mode: 'delta' | 'snapshot' = 'delta'): string {
+  if (!raw || state.invalid) return '';
+  state.samples += 1;
+  if (mode === 'snapshot') {
+    if (!raw.startsWith(state.text)) {
+      state.invalid = true;
+      return '';
+    }
     const delta = raw.slice(state.text.length);
     state.text = raw;
-    state.samples += 1;
     return delta;
   }
+  // Repeated deltas are source data, never evidence of duplicate delivery.
   state.text += raw;
-  state.samples += 1;
   return raw;
 }

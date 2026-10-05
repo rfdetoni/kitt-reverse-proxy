@@ -53,3 +53,30 @@ test('tap profiles can learn JSON presentation differences without accepting cha
   assert.ok(adapter.verification('JSON\n{"content":"<div>ação</div>"}'));
   assert.equal(adapter.verification('JSON\n{"content":"ação"}'), undefined);
 });
+
+test('delta extraction preserves repeated source characters and lines', () => {
+  const text = JSON.stringify({content:'aaaa\n\nline\nline\n'});
+  const adapter = new TapStreamAdapter(undefined, true);
+  adapter.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  for (const delta of text) adapter.push(Buffer.from('data: ' + JSON.stringify({delta}) + '\n\n'));
+  adapter.end();
+  const verified = adapter.verification(text);
+  assert.equal(verified?.profile.textMode, 'delta');
+  assert.equal(verified?.text, text);
+});
+
+test('snapshot extraction is learned separately and rejects non-monotonic replacements', () => {
+  const text = '{"content":"aa"}';
+  const adapter = new TapStreamAdapter(undefined, true);
+  adapter.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  for (const snapshot of ['{"content":"a',text,text]) adapter.push(Buffer.from('data: ' + JSON.stringify({text:snapshot}) + '\n\n'));
+  adapter.end();
+  const verified = adapter.verification(text);
+  assert.equal(verified?.profile.textMode, 'snapshot');
+  const active = new TapStreamAdapter(verified!.profile, true);
+  active.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  for (const snapshot of [text,'{"content":"changed"}']) active.push(Buffer.from('data: ' + JSON.stringify({text:snapshot}) + '\n\n'));
+  active.end();
+  assert.equal(active.accumulatedText(), '');
+  assert.equal(active.verification('{"content":"changed"}'), undefined);
+});

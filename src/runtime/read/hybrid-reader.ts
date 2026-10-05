@@ -186,7 +186,7 @@ export class HybridUiResponseReader {
     let canonicalText: string;
     try {
       canonicalText = selectContractResponseText(dom.text, adapter.accumulatedText(),
-        preferRawContract && trustedBeforeRead && Boolean(turn.profile) && turn.mode === 'active' && matched && adapterEnded && !tapFailure);
+        preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode) && turn.mode === 'active' && matched && adapterEnded && !tapFailure);
     } catch (error) {
       await failTap('verify_mismatch');
       throw error;

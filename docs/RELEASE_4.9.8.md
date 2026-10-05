@@ -25,6 +25,8 @@ The CDP tap also waits for buffered response bytes before publishing completion 
 
 Tool envelope extraction preserves every separate call instead of selecting the last closing tag and losing earlier calls. Literal tool markup inside JSON source strings remains data, and the existing parallel-call limits still apply. Invalid UTF-8 is rejected instead of silently inserting replacement characters. Repair anchors include complete nested arguments observed before a truncated field; a faithful repair may expose additional schema violations without permitting unrelated data changes.
 
+Tap profiles learn an explicit delta or cumulative-snapshot mode by comparison with completed DOM responses. Repeated delta tokens are appended verbatim; they are not heuristically deduplicated. Snapshot replacements that do not extend the previous prefix invalidate raw selection. Profiles without a verified extraction mode cannot supply raw contract text.
+
 ## Compatibility and validation
 
 No HTTP headers, Agent v2 fields, ContextEnvelope schema, tool-result wire shape or recoverable error contract changes. Agent CLI 0.83.15 and Protocol 0.9.0 remain compatible. Memory, Toolbox, Assistant and AI Workers need no code or dependency bump for this transport fix. The root release snapshot must promote the new Proxy revision.
