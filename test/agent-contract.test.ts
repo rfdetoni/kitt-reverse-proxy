@@ -722,3 +722,20 @@ test('rejects unknown and mismatched request metadata', () => {
     /session_id does not match/
   );
 });
+
+test('schema repair preserves valid sibling arguments while correcting only the reported path', async () => {
+  const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
+  const candidate = JSON.stringify({action:'use_tool',tool:'read_file',tool_input:{path:'safe.txt',limit:'bad'},content:null,reasoning_summary:'',loop:null});
+  const error = new AgentContractValidationError('Invalid limit', 'schema', ['$/tool_input/limit']);
+  assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, candidate.replace('"bad"','2'), error));
+  assert.throws(() => assertAgentRepairContinuity(candidate, candidate.replace('"bad"','2').replace('safe.txt','other.txt'), error), /unaffected candidate data/);
+});
+
+test('a truncated tool input still anchors complete nested arguments during model repair', async () => {
+  const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
+  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"safe.txt","content":"cut';
+  const repaired = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'safe.txt',content:'cut'},content:null,reasoning_summary:'',loop:null});
+  const error = new AgentContractValidationError('Incomplete input', 'syntax');
+  assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, repaired, error));
+  assert.throws(() => assertAgentRepairContinuity(candidate, repaired.replace('safe.txt','other.txt'), error), /unaffected candidate data/);
+});

@@ -1,5 +1,6 @@
+import { parseContractJson } from '../util/contract-json.js';
 import type { JsonObject, JsonValue } from '../types.js';
-import { validateJsonSchema } from '../util/json-schema.js';
+import { assertSupportedJsonSchema, validateJsonSchema } from '../util/json-schema.js';
 
 const MAX_SCHEMA_BYTES = 64 * 1024;
 
@@ -44,6 +45,7 @@ export function structuredOutputPlan(body: JsonObject): StructuredOutputPlan | u
   if (schema === undefined) {
     throw new Error('response_format.type=json_schema exige json_schema.schema.');
   }
+  assertSupportedJsonSchema(schema);
   return {
     type: 'json_schema',
     schema,
@@ -55,64 +57,11 @@ export function hasStructuredOutputRequest(body: JsonObject): boolean {
   return structuredOutputPlan(body) !== undefined;
 }
 
-function objectFromParsed(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
-function parsePure(text: string): Record<string, unknown> | undefined {
-  try {
-    return objectFromParsed(JSON.parse(text.trim()));
-  } catch {
-    return undefined;
-  }
-}
-
-function parseCodeBlock(text: string): Record<string, unknown> | undefined {
-  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
-    const parsed = parsePure(match[1] || '');
-    if (parsed) return parsed;
-  }
-  return undefined;
-}
-
-function firstBalancedObject(text: string): string | undefined {
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    if (start < 0) {
-      if (char === '{') {
-        start = index;
-        depth = 1;
-      }
-      continue;
-    }
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === '{') depth += 1;
-    if (char === '}') depth -= 1;
-    if (depth === 0) return text.slice(start, index + 1);
-  }
-  return undefined;
-}
-
 export function validateStructuredOutput(text: string, plan: StructuredOutputPlan): StructuredValidation {
-  const parsed = parsePure(text) ?? parseCodeBlock(text) ?? (() => {
-    const candidate = firstBalancedObject(text);
-    return candidate ? parsePure(candidate) : undefined;
-  })();
-
-  if (!parsed) return { ok: false, text, error: 'response is not a valid JSON object' };
+  let parsed: unknown;
+  try { parsed = parseContractJson(text).value; }
+  catch (error) { return { ok: false, text, error: error instanceof Error ? error.message : String(error) }; }
+  if (plan.type === 'json_object' && !isRecord(parsed)) return { ok: false, text, error: 'response is not a JSON object' };
 
   if (plan.schema !== undefined) {
     const validation = validateJsonSchema(parsed, plan.schema);

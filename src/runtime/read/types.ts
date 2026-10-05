@@ -26,6 +26,7 @@ export interface TapProfile {
   contentType: string;
   framing: TapFraming;
   textPath: string;
+  textMode?: 'delta' | 'snapshot';
 }
 
 export interface TapHealthSnapshot extends JsonObject {

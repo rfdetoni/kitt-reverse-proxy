@@ -1,3 +1,4 @@
+import { sameContractText } from './contract-text.js';
 import { decodeTextBody } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { getPathValues } from '../../util/path.js';
@@ -19,6 +20,10 @@ interface MatchedResponse {
   method: string;
   contentType: string;
   framing: TapFraming;
+}
+interface TextCandidate extends TapTextState {
+  path: string;
+  textMode: 'delta' | 'snapshot';
 }
 
 function mime(contentType: string): string {
@@ -50,16 +55,17 @@ function stripXssi(line: string): string {
 }
 
 export class TapStreamAdapter {
-  private readonly decoder = new TextDecoder('utf-8');
-  private readonly candidates = new Map<string, TapTextState>();
+  private readonly decoder = new TextDecoder('utf-8', { fatal: true });
+  private readonly candidates = new Map<string, TextCandidate>();
   private matched?: MatchedResponse;
   private frameBuffer = '';
   private rawText = '';
   private parsedEvents = 0;
   private learnedText = '';
   private learnedSamples = 0;
+  private learnedInvalid = false;
 
-  constructor(private readonly profile?: TapProfile) {}
+  constructor(private readonly profile?: TapProfile, private readonly contractMode = false) {}
 
   matchedResponse(url: string, method: string, contentType: string): void {
     this.matched = {
@@ -104,13 +110,15 @@ export class TapStreamAdapter {
     const expected = normalizeTapText(finalDomText);
     if (!expected) return undefined;
 
+    const matchesDom = (text: string): boolean => normalizeTapText(text) === expected
+      || (this.contractMode && sameContractText(text, finalDomText));
     if (this.profile) {
-      if (this.learnedSamples === 0 || normalizeTapText(this.learnedText) !== expected) return undefined;
-      return { profile: { ...this.profile }, text: this.learnedText };
+      if (this.learnedInvalid || this.learnedSamples === 0 || !matchesDom(this.learnedText)) return undefined;
+      return { profile: { ...this.profile, textMode: this.profile.textMode ?? 'delta' }, text: this.learnedText };
     }
 
     const matches = [...this.candidates.entries()]
-      .filter(([, state]) => state.samples > 0 && normalizeTapText(state.text) === expected)
+      .filter(([, state]) => !state.invalid && state.samples > 0 && matchesDom(state.text))
       .sort((left, right) => {
         if (right[1].score !== left[1].score) return right[1].score - left[1].score;
         return right[1].samples - left[1].samples;
@@ -126,16 +134,18 @@ export class TapStreamAdapter {
         method: this.matched.method.toUpperCase(),
         contentType: this.matched.contentType,
         framing: this.matched.framing,
-        textPath: best[0]
+        textPath: best[1].path,
+        textMode: best[1].textMode
       },
       text: best[1].text
     };
   }
 
   accumulatedText(): string {
-    if (this.profile) return this.learnedText;
+    if (this.profile) return this.learnedInvalid ? '' : this.learnedText;
     let best: TapTextState | undefined;
     for (const state of this.candidates.values()) {
+      if (state.invalid) continue;
       if (!best || state.score > best.score || (state.score === best.score && state.text.length > best.text.length)) {
         best = state;
       }
@@ -210,11 +220,13 @@ export class TapStreamAdapter {
         const state: TapTextState = {
           text: this.learnedText,
           score: 1,
-          samples: this.learnedSamples
+          samples: this.learnedSamples,
+          invalid: this.learnedInvalid
         };
-        const delta = applyTapPiece(state, raw);
+        const delta = applyTapPiece(state, raw, this.profile.textMode ?? 'delta');
         this.learnedText = state.text;
         this.learnedSamples = state.samples;
+        this.learnedInvalid = state.invalid === true;
         if (delta) deltas.push(delta);
       }
       return deltas;
@@ -223,13 +235,14 @@ export class TapStreamAdapter {
     for (const [path, values] of collectTapStringLeaves(value)) {
       const combined = values.join('');
       if (!combined) continue;
-      const state = this.candidates.get(path) ?? {
-        text: '',
-        score: path === '$' ? 5 : tapPathScore(path),
-        samples: 0
-      };
-      applyTapPiece(state, combined);
-      this.candidates.set(path, state);
+      for (const textMode of ['delta', 'snapshot'] as const) {
+        const key = textMode + ':' + path;
+        const state = this.candidates.get(key) ?? {
+          path, textMode, text: '', score: path === '$' ? 5 : tapPathScore(path), samples: 0
+        };
+        applyTapPiece(state, combined, textMode);
+        this.candidates.set(key, state);
+      }
     }
     return [];
   }

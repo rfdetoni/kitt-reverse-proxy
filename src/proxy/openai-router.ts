@@ -17,6 +17,7 @@ import {
   normalizeAgentContractLogicalHistory,
   recordAgentContractValidation,
   transformAgentContractCompletion,
+  assertAgentRepairContinuity,
   type AgentContractPlan
 } from '../runtime/agent-contract.js';
 import { RequestIdConflictError, RequestIdempotencyCache } from '../runtime/request-idempotency.js';
@@ -120,6 +121,8 @@ export function buildAgentContractRepairBody(
     role: 'user',
     content: [
       '[KITT CONTRACT REPAIR]',
+      `ERROR_KIND: ${validationError.kind}`,
+      `AFFECTED_PATHS: ${JSON.stringify(validationError.paths)}`,
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'REPAIR_INSTRUCTION: Correct only the reported output-contract violation. Return one contract action and no extra prose.',
       'Use the candidate as the source of intended action. Preserve it when valid; change only fields implicated by the validation error.',
@@ -139,7 +142,9 @@ export function buildAgentContractSerializationRepairBody(
   messages.push({
     role: 'user',
     content: [
-      '[KITT CONTRACT SERIALIZATION REPAIR]',
+      '[KITT CONTRACT REPAIR]\n[KITT CONTRACT SERIALIZATION REPAIR]',
+      `ERROR_KIND: ${validationError.kind}`,
+      `AFFECTED_PATHS: ${JSON.stringify(validationError.paths)}`,
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the candidate action and data, but emit exactly one syntactically valid contract payload matching the output contract.',
       'Do not restart, re-plan, summarize, or answer the original task. Repair serialization only.',
@@ -159,6 +164,7 @@ export function contractExecutionOptions(
 ): ChatExecutionOptions {
   return {
     ...options,
+    preferRawContract: true,
     // Contract prompts and synthetic tool-result turns are
     // transport-internal. Session continuity must track only the API caller's
     // original history so equivalent round trips keep a stable user timeline.
@@ -198,7 +204,7 @@ function recordContractAttempt(
     route: plan.route,
     attempt,
     outcome: validationError ? 'invalid' : 'valid',
-    ...(validationError ? { validation_reason: validationError.message } : {}),
+    ...(validationError ? { validation_reason: validationError.message, validation_kind: validationError.kind, affected_paths: validationError.paths } : {}),
     ...contractResponseDigest(result)
   });
   logger.trace('agent.contract.attempt.raw', {
@@ -249,7 +255,10 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  const repairBody = buildAgentContractRepairBody(plan, firstValidationError, first.completion.choices[0]?.message.content ?? '');
+  if (firstValidationError.kind === 'limit') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  const buildFirstRepair = firstValidationError.kind === 'syntax' || firstValidationError.kind === 'ambiguous'
+    ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
+  const repairBody = buildFirstRepair(plan, firstValidationError, first.completion.choices[0]?.message.content ?? '');
   logger.trace('agent.contract.request.raw', {
     contract_session_id: plan.sessionId,
     route: plan.route,
@@ -262,7 +271,10 @@ async function executeAgentContract(
     contractRepairExecutionOptions(plan, options)
   );
   let repairValidationError: AgentContractValidationError | undefined;
+  let repairKeptContinuity = false;
   try {
+    assertAgentRepairContinuity(first.completion.choices[0]?.message.content ?? '', retry.completion.choices[0]?.message.content ?? '', firstValidationError);
+    repairKeptContinuity = true;
     const transformed = transform(retry);
     recordAgentContractValidation(plan.contextKey, true);
     recordContractAttempt(plan, 'repair', retry);
@@ -277,11 +289,20 @@ async function executeAgentContract(
     repairValidationError = error;
   }
 
-  const serializationRepairBody = buildAgentContractSerializationRepairBody(
-    plan,
-    repairValidationError,
-    retry.completion.choices[0]?.message.content ?? ''
-  );
+  const repairCandidate = first.completion.choices[0]?.message.content ?? '';
+  if (retry.completion.choices[0]?.message.content === repairCandidate || repairValidationError.kind === 'limit') {
+    throw new AgentContractError(409, 'agent_contract_invalid', 'Contract repair made no progress within the recovery budget.', true, 'continue');
+  }
+  // Always anchor to the original decision; a drifting repair is not evidence.
+  // A faithful first repair may reveal another violation in unchanged data.
+  const recoveryError = repairKeptContinuity ? new AgentContractValidationError(
+    `${firstValidationError.message} Subsequent validation: ${repairValidationError.message}`,
+    repairValidationError.kind,
+    [...new Set([...firstValidationError.paths, ...repairValidationError.paths])]
+  ) : firstValidationError;
+  const buildRepair = recoveryError.kind === 'schema' || recoveryError.kind === 'shape'
+    ? buildAgentContractRepairBody : buildAgentContractSerializationRepairBody;
+  const serializationRepairBody = buildRepair(plan, recoveryError, repairCandidate);
   logger.trace('agent.contract.request.raw', {
     contract_session_id: plan.sessionId,
     route: plan.route,
@@ -294,6 +315,7 @@ async function executeAgentContract(
     contractRepairExecutionOptions(plan, options)
   );
   try {
+    assertAgentRepairContinuity(repairCandidate, serializationRetry.completion.choices[0]?.message.content ?? '', recoveryError);
     const transformed = transform(serializationRetry);
     recordAgentContractValidation(plan.contextKey, true);
     recordContractAttempt(plan, 'serialization-repair', serializationRetry);

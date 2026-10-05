@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { parseContractJson } from '../util/contract-json.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 
 const MAX_TOOLS = 64;
@@ -473,25 +475,53 @@ export function assertToolChoiceSatisfied(
   }
 }
 
-/** Delimit browser envelopes; malformed outer wrappers use latest complete inner wrapper. */
+/** Delimit complete browser envelopes without replacing known outer data. */
 export function toolCallEnvelopes(text: string): { whole: string; body: string }[] {
+  if (Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) throw new ToolProtocolError('Tool response exceeds 2 MiB.', 'model');
   const blocks: { whole: string; body: string }[] = [];
   const opening = /<tool_call>/ig;
+  const lower = text.toLowerCase();
   let cursor = 0;
+  let scans = 0;
+  let scannedChars = 0;
   while (true) {
     opening.lastIndex = cursor;
     const startMatch = opening.exec(text);
     if (!startMatch) break;
     const start = startMatch.index;
-    const end = text.toLowerCase().lastIndexOf('</tool_call>');
+    const bodyStart = start + '<tool_call>'.length;
+    const firstEnd = lower.indexOf('</tool_call>', bodyStart);
+    let end = firstEnd;
     if (end < start) break;
+    // Prefer the first complete payload, while ignoring closing markup inside
+    // source strings. A lastIndexOf close silently dropped parallel calls.
+    let complete = false;
+    for (let closing = firstEnd; closing >= 0; closing = lower.indexOf('</tool_call>', closing + '</tool_call>'.length)) {
+      scannedChars += closing - bodyStart;
+      if (++scans > 256 || scannedChars > 8 * 1024 * 1024) throw new ToolProtocolError('Tool envelope scan budget exceeded.', 'model');
+      try { parseContractJson(text.slice(bodyStart, closing)); end = closing; complete = true; break; }
+      catch { /* Keep scanning past possible literal markup. */ }
+    }
     const outer = text.slice(start, end + '</tool_call>'.length);
-    const rawBody = text.slice(start + '<tool_call>'.length, end);
+    const rawBody = text.slice(bodyStart, end);
     let nested = -1;
-    try { JSON.parse(rawBody.trim()); } catch { nested = rawBody.toLowerCase().lastIndexOf('<tool_call>'); }
+    if (!complete) nested = rawBody.toLowerCase().lastIndexOf('<tool_call>');
     const body = nested >= 0 ? rawBody.slice(nested + '<tool_call>'.length) : rawBody;
-    const whole = nested >= 0 ? outer.slice(outer.toLowerCase().lastIndexOf('<tool_call>')) : outer;
-    blocks.push({ whole, body });
+    if (nested >= 0) {
+      const members: Array<[string, unknown]> = [];
+      try { parseContractJson(rawBody, (_key, value, path) => members.push([path, value])); }
+      catch { /* Complete observed members still anchor a malformed wrapper. */ }
+      const recovered = parseContractJson(body).value;
+      for (const [path, before] of members) {
+        let after: unknown = recovered;
+        for (const token of path.slice(2).split('/')) {
+          const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+          after = after && typeof after === 'object' && Object.hasOwn(after, key) ? (after as Record<string, unknown>)[key] : undefined;
+        }
+        if (!isDeepStrictEqual(before, after)) throw new ToolProtocolError(`Nested tool wrapper changes known data at ${path}.`, 'model');
+      }
+    }
+    blocks.push({ whole: outer, body });
     cursor = end + '</tool_call>'.length;
   }
   return blocks;
@@ -635,4 +665,3 @@ export function completionFromToolCalls(
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
   };
 }
-

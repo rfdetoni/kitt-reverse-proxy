@@ -16,6 +16,7 @@ function sameProfile(left: TapProfile | undefined, right: TapProfile): boolean {
     && left.contentType === right.contentType
     && left.framing === right.framing
     && left.textPath === right.textPath
+    && left.textMode === right.textMode
   );
 }
 

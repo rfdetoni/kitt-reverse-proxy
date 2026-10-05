@@ -1,3 +1,4 @@
+import { parseContractJson } from '../util/contract-json.js';
 import {
   assertToolChoiceSatisfied,
   extractToolCalls,
@@ -40,10 +41,10 @@ function selectArtifact(path: string, artifacts: readonly UiArtifactLike[]): UiA
     if (!artifact.filename) return false;
     const candidate = normalizeArtifactPath(artifact.filename);
     const candidateBase = candidate.split('/').at(-1) ?? candidate;
-    return candidate === target || candidate.endsWith(`/${target}`) || candidateBase === targetBase;
+    return candidate === target || (!candidate.includes('/') && candidateBase === targetBase);
   });
   if (matches.length === 1) return matches[0];
-  return usable.length === 1 ? usable[0] : undefined;
+  return undefined;
 }
 
 function hydrateArtifactBackedWrites(calls: readonly OpenAiToolCall[], artifacts: readonly UiArtifactLike[]): void {
@@ -64,7 +65,7 @@ function hydrateArtifactBackedWrites(calls: readonly OpenAiToolCall[], artifacts
       writeArgs = parsed.arguments;
     }
     if (!writeArgs || typeof writeArgs.path !== 'string') continue;
-    if (typeof writeArgs.content === 'string' && writeArgs.content.length > 0) continue;
+    if (Object.hasOwn(writeArgs, 'content')) continue;
 
     const artifact = selectArtifact(writeArgs.path, artifacts);
     if (!artifact) continue;
@@ -102,157 +103,18 @@ function maskOrdinaryCodeFences(text: string): string {
   );
 }
 
-function isEscapedQuote(input: string, index: number): boolean {
-  let slashes = 0;
-  for (let cursor = index - 1; cursor >= 0 && input[cursor] === '\\'; cursor -= 1) slashes += 1;
-  return slashes % 2 === 1;
-}
-
-function escapeRawContentQuotes(input: string): string | undefined {
-  const match = /"content"\s*:\s*"/g.exec(input);
-  if (!match) return undefined;
-  const contentStart = match.index + match[0].length;
-  const candidates: number[] = [];
-  for (let index = contentStart; index < input.length; index += 1) {
-    if (input[index] === '"' && !isEscapedQuote(input, index)) candidates.push(index);
-  }
-
-  for (const closing of candidates.slice(-128).reverse()) {
-    let body = '';
-    for (let index = contentStart; index < closing; index += 1) {
-      const current = input[index]!;
-      if (current === '"' && !isEscapedQuote(input, index)) body += '\\"';
-      else if (current === '\n') body += '\\n';
-      else if (current === '\r') body += '\\r';
-      else if (current === '\t') body += '\\t';
-      else body += current;
-    }
-    const candidate = `${input.slice(0, contentStart)}${body}${input.slice(closing)}`;
-    try {
-      JSON.parse(candidate);
-      return candidate;
-    } catch {
-      // Try the next possible closing delimiter.
-    }
-  }
-  return undefined;
-}
-
-function repairJsonStringEscapes(input: string): string {
-  let output = '';
-  let inString = false;
-
-  for (let index = 0; index < input.length; index += 1) {
-    const current = input[index]!;
-    if (!inString) {
-      output += current;
-      if (current === '"') inString = true;
-      continue;
-    }
-
-    if (current === '"') {
-      const next = input.slice(index + 1).match(/\S/u)?.[0];
-      if (next !== undefined && !':,}]'.includes(next)) {
-        output += '\\"';
-        continue;
-      }
-      output += current;
-      inString = false;
-      continue;
-    }
-
-    if (current === '\\') {
-      const next = input[index + 1];
-      if (next === undefined) {
-        output += '\\\\';
-        continue;
-      }
-      if ('"\\/bfnrt'.includes(next)) {
-        output += current + next;
-        index += 1;
-        continue;
-      }
-      if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(input.slice(index + 2, index + 6))) {
-        output += input.slice(index, index + 6);
-        index += 5;
-        continue;
-      }
-      output += '\\\\';
-      continue;
-    }
-
-    const code = current.charCodeAt(0);
-    if (code < 0x20) {
-      if (current === '\n') output += '\\n';
-      else if (current === '\r') output += '\\r';
-      else if (current === '\t') output += '\\t';
-      else output += `\\u${code.toString(16).padStart(4, '0')}`;
-      continue;
-    }
-
-    output += current;
-  }
-
-  return output;
-}
-
 function normalizeToolEnvelopeBody(input: string): string {
   const trimmed = input.trim();
-  try { JSON.parse(trimmed); return trimmed; } catch { /* Repair only invalid transport JSON. */ }
-  const candidates = [trimmed];
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  const quoteLike = (value: string | undefined): value is string => value === "'" || value === '`';
-
-  if (quoteLike(first) && trimmed.length > 1) candidates.push(trimmed.slice(1).trimStart());
-  if (quoteLike(last) && trimmed.length > 1) candidates.push(trimmed.slice(0, -1).trimEnd());
-  if (quoteLike(first) && first === last && trimmed.length > 2) {
-    candidates.push(trimmed.slice(1, -1).trim());
-  }
-
-  for (const candidate of [...new Set(candidates)]) {
-    const contentRepaired = escapeRawContentQuotes(candidate);
-    if (contentRepaired) return contentRepaired;
-
-    const repaired = repairJsonStringEscapes(candidate);
-    try {
-      JSON.parse(repaired);
-      return repaired;
-    } catch {
-      // Only discard provider presentation quotes when the resulting payload
-      // is independently valid JSON. Structural corruption still fails closed.
-    }
-  }
-
-  const queue = [trimmed];
-  const seen = new Set(queue);
-  for (let attempts = 0; queue.length && attempts < 128; attempts += 1) {
-    const candidate = queue.shift()!;
-    const repaired = repairJsonStringEscapes(candidate);
-    try {
-      JSON.parse(repaired);
-      return repaired;
-    } catch {
-      for (let index = 0; index < candidate.length; index += 1) {
-        if (candidate[index] !== '"' || candidate[index - 1] === '\\') continue;
-        const next = candidate.slice(index + 1).match(/\S/u)?.[0];
-        if (next === undefined || !':,}]'.includes(next)) continue;
-        const variant = `${candidate.slice(0, index)}\\"${candidate.slice(index + 1)}`;
-        if (!seen.has(variant)) {
-          seen.add(variant);
-          queue.push(variant);
-        }
-      }
-    }
-  }
-
-  return repairJsonStringEscapes(trimmed);
+  // Presentation quotes must surround a complete object, never internal data.
+  const wrapped = trimmed.match(/^(['`])([\s\S]+)\1$/u);
+  const trailing = trimmed.match(/^(\{[\s\S]*\})['`]$/u);
+  return parseContractJson(wrapped?.[2] ?? trailing?.[1] ?? trimmed).text;
 }
 
 function normalizeProviderPatterns(text: string): string {
   const canonical = toolCallEnvelopes(maskOrdinaryCodeFences(text));
   if (canonical.length) {
-    try { canonical.forEach(block => JSON.parse(block.body)); return text; } catch { /* Repair invalid JSON below. */ }
+    try { if (canonical.every(block => !parseContractJson(block.body).repaired)) return text; } catch { /* Repair invalid JSON below. */ }
   }
 
   let normalized = text.replace(
@@ -264,12 +126,7 @@ function normalizeProviderPatterns(text: string): string {
     /<tool_call\s+name=["']([A-Za-z0-9_.:-]{1,64})["']\s*>([\s\S]*?)<\/tool_call>/gi,
     (_whole, rawName: string, rawBody: string) => {
       const body = rawBody.trim();
-      let args: unknown = {};
-      try {
-        args = body ? JSON.parse(normalizeToolEnvelopeBody(body)) : {};
-      } catch {
-        args = { value: body };
-      }
+      const args: unknown = body ? JSON.parse(normalizeToolEnvelopeBody(body)) : {};
       const record = isRecord(args) && Object.prototype.hasOwnProperty.call(args, 'arguments')
         ? args
         : { arguments: args };
@@ -296,7 +153,9 @@ export function parseUiToolResponse(
   provider = 'unknown'
 ): ParsedModelOutput {
   if (!plan.tools.length || plan.choice.mode === 'none') return { content: text };
-  const normalized = normalizeProviderPatterns(text);
+  let normalized: string;
+  try { normalized = normalizeProviderPatterns(text); }
+  catch (error) { throw new ToolParseFailedError(error instanceof Error ? error.message : String(error)); }
   const protocolVisibleText = maskOrdinaryCodeFences(normalized);
   const explicitEnvelopes = toolCallEnvelopes(protocolVisibleText);
   let parsed: ParsedModelOutput = { content: text };

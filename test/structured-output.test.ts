@@ -32,3 +32,10 @@ test('json_schema rejects schema mismatch', () => {
   assert.ok(plan);
   assert.equal(validateStructuredOutput('{"count":"bad"}', plan!).ok, false);
 });
+
+test('structured output rejects multiple payloads and honors array-root schemas', () => {
+  const objectPlan = structuredOutputPlan({response_format:{type:'json_object'}})!;
+  assert.equal(validateStructuredOutput('{"ok":true}\n{"ok":false}', objectPlan).ok, false);
+  const arrayPlan = structuredOutputPlan({response_format:{type:'json_schema',json_schema:{schema:{type:'array',items:{type:'integer'}}}}})!;
+  assert.deepEqual(validateStructuredOutput('[1,2,]', arrayPlan), {ok:true,text:'[1,2]'});
+});

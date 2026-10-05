@@ -240,8 +240,8 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
 
         for (const pre of codeContainers) {
           const codeEl = pre.querySelector('code') || pre;
-          const text = (codeEl.textContent || '').trim().slice(0, 256 * 1024);
-          if (!text || seen.has(text)) continue;
+          const text = (codeEl.textContent || '');
+          if (!text.trim() || seen.has(text) || text.length > 256 * 1024) continue;
           if (results.length >= 16 || totalChars + text.length > 1024 * 1024) break;
 
           // Locate title, filename or language indicator in pre parent/header
@@ -279,8 +279,8 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
               const [meta, rawData] = href.split(',', 2);
               if (!rawData || rawData.length > 384 * 1024) continue;
               const isBase64 = meta?.includes(';base64');
-              const decoded = (isBase64 ? atob(rawData) : decodeURIComponent(rawData)).trim().slice(0, 256 * 1024);
-              if (decoded && !seen.has(decoded) && results.length < 16 && totalChars + decoded.length <= 1024 * 1024) {
+              const decoded = (isBase64 ? new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(rawData), char => char.charCodeAt(0))) : decodeURIComponent(rawData));
+              if (decoded.trim() && decoded.length <= 256 * 1024 && !seen.has(decoded) && results.length < 16 && totalChars + decoded.length <= 1024 * 1024) {
                 seen.add(decoded);
                 totalChars += decoded.length;
                 results.push({ filename, code: decoded });
@@ -293,29 +293,6 @@ export async function extractArtifactContents(page: Page): Promise<ExtractedArti
       });
 
       for (const item of artifacts) {
-        if (!seenAll.has(item.code)) {
-          seenAll.add(item.code);
-          allResults.push(item);
-        }
-      }
-    } catch {}
-  }
-
-  // If Canvas or editor is open in main page without <pre>, inspect editor / ace / monaco / codemirror text
-  if (allResults.length === 0) {
-    try {
-      const editorTexts = await page.evaluate(() => {
-        const out: Array<{ filename?: string | undefined; code: string }> = [];
-        const editors = Array.from(document.querySelectorAll('.cm-content, [class*="monaco-editor" i], [class*="editor-content" i]'));
-        for (const ed of editors) {
-          const text = (ed.textContent || '').trim().slice(0, 256 * 1024);
-          if (text && text.length > 20) {
-            out.push({ code: text });
-          }
-        }
-        return out;
-      });
-      for (const item of editorTexts) {
         if (!seenAll.has(item.code)) {
           seenAll.add(item.code);
           allResults.push(item);
