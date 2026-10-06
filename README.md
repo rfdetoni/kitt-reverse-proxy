@@ -1,3 +1,9 @@
+## Release 4.9.10 — execution boundary hardening
+
+Preserve completed raw CDP contracts when the DOM monitor times out. Recovery requires full-prompt correlation, a previously trusted active profile, explicit stream end and strict valid JSON. Competing delta/snapshot payloads still fail. Cancellation, sign-in/manual intervention and other monitor errors remain errors. Authenticated live WebChat is not covered by local fixtures.
+
+See [release notes](docs/RELEASE_4.9.10.md).
+
 ## Reverse Proxy 4.9.9 — stream mode ambiguity guard
 
 Active CDP profiles retain an alternative delta/snapshot interpretation for each turn. When the DOM is damaged, conflicting complete interpretations are rejected before syntax recovery can turn concatenated snapshots into fabricated source. Repeated real deltas and complete snapshots remain intact.

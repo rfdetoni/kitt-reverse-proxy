@@ -48,3 +48,10 @@ export function selectContractResponseText(dom: string, raw: string, eligible: b
 export function sameContractText(left: string, right: string): boolean {
   try { return isDeepStrictEqual(transportPayload(left), transportPayload(right)); } catch { return false; }
 }
+
+/** A DOM timeout cannot discard a trusted, complete, strictly valid transport payload. */
+export function completedRawContract(raw: string, alternative: string, eligible: boolean): string | undefined {
+  if (!eligible || !raw) return undefined;
+  try { transportPayload(raw, true); } catch { return undefined; }
+  return selectContractResponseText('', raw, true, alternative);
+}
