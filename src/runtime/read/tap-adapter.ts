@@ -1,5 +1,5 @@
 import { sameContractText } from './contract-text.js';
-import { decodeTextBody } from '../../discovery/decoder.js';
+import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { getPathValues } from '../../util/path.js';
 import {
@@ -83,7 +83,8 @@ export class TapStreamAdapter {
     if (!decoded) return [];
     this.rawText += decoded;
     this.frameBuffer += decoded;
-    this.frameBuffer = this.frameBuffer.replace(/\r\n/g, '\n');
+    // Keep a trailing CR until the next chunk resolves whether it is CRLF.
+    this.frameBuffer = this.frameBuffer.replace(/\r\n|\r(?!$)/g, '\n');
     return this.consumeFrames(false);
   }
 
@@ -92,8 +93,8 @@ export class TapStreamAdapter {
     if (tail) {
       this.rawText += tail;
       this.frameBuffer += tail;
-      this.frameBuffer = this.frameBuffer.replace(/\r\n/g, '\n');
     }
+    this.frameBuffer = this.frameBuffer.replace(/\r\n?/g, '\n');
     const deltas = this.consumeFrames(true);
 
     if (this.parsedEvents === 0 && this.rawText.trim() && this.matched) {
@@ -197,13 +198,8 @@ export class TapStreamAdapter {
   }
 
   private consumeSseBlock(block: string): string[] {
-    const data = block
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n')
-      .trim();
-    if (!data || data === '[DONE]') return [];
+    const data = sseEventData(block);
+    if (data === undefined || data === '[DONE]') return [];
     this.parsedEvents += 1;
     return this.consumeValue(parseJson(data) ?? data);
   }
