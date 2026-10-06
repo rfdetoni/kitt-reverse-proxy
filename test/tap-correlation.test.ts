@@ -4,8 +4,153 @@ import { EventEmitter } from 'node:events';
 import { CdpStreamTap } from '../src/runtime/read/tap-cdp.js';
 import { TapStreamAdapter } from '../src/runtime/read/tap-adapter.js';
 import { selectContractResponseText } from '../src/runtime/read/contract-text.js';
+import { decodeTextBody } from '../src/discovery/decoder.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
+
+function fakeCdp(send: (method: string) => Promise<unknown> = async () => ({})) {
+  const cdp = new EventEmitter() as EventEmitter & {
+    send: (method: string) => Promise<unknown>;
+    detach: () => Promise<void>;
+    detached: number;
+  };
+  cdp.send = send;
+  cdp.detached = 0;
+  cdp.detach = async () => { cdp.detached += 1; };
+  return cdp;
+}
+
+function fixtureTap(create: () => Promise<ReturnType<typeof fakeCdp>>, overrides: Partial<AppConfig> = {}) {
+  const session = {context: {newCDPSession: create}, page: {}} as unknown as LiveBrowserSession;
+  const config = {targetUrl: 'https://chatgpt.com', allowedEndpointHosts: [], readMode: 'auto', tapVerifyTurns: 1, ...overrides} as unknown as AppConfig;
+  const tap = new CdpStreamTap(session, {id: 'chatgpt'} as ProviderPreset, config);
+  const profile = {endpointOrigin: 'https://chatgpt.com', endpointPath: '/backend-api/conversation', method: 'POST', contentType: 'text/event-stream', framing: 'sse' as const, textPath: '$.delta', textMode: 'delta' as const};
+  tap.recordVerified(profile);
+  return {tap, profile};
+}
+
+function request(cdp: ReturnType<typeof fakeCdp>, prompt: string, url = 'https://chatgpt.com/backend-api/conversation', redirect = false) {
+  cdp.emit('Network.requestWillBeSent', {requestId: 'current', type: 'fetch', ...(redirect ? {redirectResponse: {status: 307}} : {}), request: {url, method: 'POST', headers: {'content-type': 'application/json'}, postData: JSON.stringify({messages: [{content: prompt}]})}});
+}
+
+function response(cdp: ReturnType<typeof fakeCdp>, url = 'https://chatgpt.com/backend-api/conversation', status = 200) {
+  cdp.emit('Network.responseReceived', {requestId: 'current', response: {url, status, mimeType: 'text/event-stream', headers: {'content-type': 'text/event-stream'}}});
+}
+
+test('failed CDP attachment releases the session and listeners before retry', async () => {
+  const failed = fakeCdp(async () => { throw new Error('Network.enable failed'); });
+  const healthy = fakeCdp();
+  let creates = 0;
+  const {tap} = fixtureTap(async () => ++creates === 1 ? failed : healthy);
+  try {
+    await tap.initialize();
+    assert.equal(failed.detached, 1);
+    assert.deepEqual(failed.eventNames(), []);
+    assert.equal(tap.health().attached, false);
+    await tap.initialize();
+    assert.equal(creates, 2);
+    assert.equal(tap.health().attached, true);
+  } finally { await tap.detach(); }
+});
+
+test('concurrent initialization owns one CDP session and detach waits for attachment', async () => {
+  const sessions: Array<ReturnType<typeof fakeCdp>> = [];
+  const {tap} = fixtureTap(async () => { const cdp = fakeCdp(); sessions.push(cdp); return cdp; });
+  try {
+    await Promise.all([tap.initialize(), tap.initialize()]);
+    assert.equal(sessions.length, 1);
+    await tap.detach();
+    await Promise.all([tap.initialize(), tap.detach()]);
+    assert.equal(tap.health().attached, false);
+    for (const cdp of sessions) {
+      assert.equal(cdp.detached, 1);
+      assert.deepEqual(cdp.eventNames(), []);
+    }
+  } finally { await tap.detach(); }
+});
+
+test('live CDP chunks wait behind buffered bytes while stream activation is pending', async () => {
+  let release!: (value: unknown) => void;
+  const pending = new Promise(resolve => { release = resolve; });
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent' ? pending : {});
+  const {tap, profile} = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const turn = tap.arm('ORDERED CURRENT TASK');
+  try {
+    request(cdp, 'ORDERED CURRENT TASK'); response(cdp);
+    const first = 'data: ' + JSON.stringify({delta: '{"content":"'}) + '\n\n';
+    const second = 'data: ' + JSON.stringify({delta: 'ação"}'}) + '\n\n';
+    cdp.emit('Network.dataReceived', {requestId: 'current', data: Buffer.from(second).toString('base64')});
+    cdp.emit('Network.loadingFinished', {requestId: 'current'});
+    release({bufferedData: Buffer.from(first).toString('base64')});
+    const adapter = new TapStreamAdapter(profile);
+    for await (const event of turn.events()) {
+      if (event.type === 'matched') adapter.matchedResponse(event.url, event.method, event.contentType);
+      if (event.type === 'chunk') adapter.push(event.bytes);
+      if (event.type === 'end') adapter.end();
+      if (event.type === 'error') assert.fail(event.reason);
+    }
+    assert.equal(adapter.accumulatedText(), '{"content":"ação"}');
+  } finally { turn.cancel(); await tap.detach(); }
+});
+
+test('pending live bytes obey the turn budget and cannot leak into the next turn', async () => {
+  let release!: (value: unknown) => void;
+  const pending = new Promise(resolve => { release = resolve; });
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent' ? pending : {});
+  const {tap} = fixtureTap(async () => cdp, {tapMaxBytes: 1024});
+  await tap.initialize();
+  const turn = tap.arm('BYTE BUDGET TASK');
+  try {
+    request(cdp, 'BYTE BUDGET TASK'); response(cdp);
+    cdp.emit('Network.dataReceived', {requestId: 'current', data: Buffer.alloc(1025, 'x').toString('base64')});
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.ok(events.some(event => event.type === 'error' && event.reason === 'internal_error'));
+    assert.equal(events.some(event => event.type === 'chunk'), false);
+    const next = tap.arm('NEXT TASK');
+    release({bufferedData: Buffer.from('old response').toString('base64')});
+    await new Promise(resolve => setImmediate(resolve));
+    next.cancel();
+    const nextEvents = [];
+    for await (const event of next.events()) nextEvents.push(event);
+    assert.deepEqual(nextEvents, []);
+  } finally { release({}); turn.cancel(); await tap.detach(); }
+});
+
+test('a correlated request cannot promote redirected or HTTP error bodies into raw responses', async t => {
+  for (const mode of ['redirect', 'different-final-url', 'http-error']) {
+    await t.test(mode, async () => {
+      const cdp = fakeCdp(async method => method === 'Network.streamResourceContent' ? {bufferedData: Buffer.from('data: {"delta":"fabricated"}\n\n').toString('base64')} : {});
+      const {tap} = fixtureTap(async () => cdp);
+      await tap.initialize();
+      const turn = tap.arm('CURRENT TASK');
+      try {
+        request(cdp, 'CURRENT TASK');
+        if (mode === 'redirect') request(cdp, 'CURRENT TASK', 'https://untrusted.invalid/backend-api/conversation', true);
+        response(cdp, mode === 'http-error' ? undefined : 'https://untrusted.invalid/backend-api/conversation', mode === 'http-error' ? 429 : 200);
+        cdp.emit('Network.loadingFinished', {requestId: 'current'});
+        const events = [];
+        for await (const event of turn.events()) events.push(event);
+        assert.ok(events.some(event => event.type === 'error'));
+        assert.equal(events.some(event => event.type === 'chunk' || event.type === 'end'), false);
+      } finally { turn.cancel(); await tap.detach(); }
+    });
+  }
+});
+
+test('SSE retains source whitespace and handles CR, LF and fragmented CRLF boundaries', () => {
+  const pieces = ['    ', 'print("ação")  ', '\n', '    return 1  '];
+  for (const newline of ['\n', '\r', '\r\n']) {
+    const adapter = new TapStreamAdapter({endpointOrigin: 'https://chatgpt.com', endpointPath: '/stream', method: 'POST', contentType: 'text/event-stream', framing: 'sse', textPath: '$', textMode: 'delta'});
+    adapter.matchedResponse('https://chatgpt.com/stream', 'POST', 'text/event-stream');
+    const wire = pieces.map(piece => piece.split('\n').map(line => 'data: ' + line).join(newline) + newline + newline).join('');
+    assert.deepEqual(decodeTextBody(wire, 'text/event-stream'), {eventStream: pieces});
+    for (const byte of Buffer.from(wire)) adapter.push(Uint8Array.of(byte));
+    adapter.end();
+    assert.equal(adapter.accumulatedText(), pieces.join(''), JSON.stringify(newline));
+  }
+});
 
 test('CDP tap correlates the full submitted prompt and decodes raw text without HTML', async () => {
   const cdp = new EventEmitter() as EventEmitter & {send:(method:string) => Promise<unknown>; detach:() => Promise<void>};
@@ -23,7 +168,7 @@ test('CDP tap correlates the full submitted prompt and decodes raw text without 
   const turn = tap.arm('CURRENT UNIQUE TASK\n' + suffix);
   const emitRequest = (requestId:string, prompt:string): void => {
     cdp.emit('Network.requestWillBeSent',{requestId,type:'fetch',request:{url:'https://chatgpt.com/backend-api/conversation',method:'POST',headers:{'content-type':'application/json'},postData:JSON.stringify({messages:[{content:prompt}]})}});
-    cdp.emit('Network.responseReceived',{requestId,response:{mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
+    cdp.emit('Network.responseReceived',{requestId,response:{url:'https://chatgpt.com/backend-api/conversation',status:200,mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
   };
   emitRequest('stale','OLD DIFFERENT TASK\n' + suffix);
   emitRequest('current','CURRENT UNIQUE TASK\n' + suffix);

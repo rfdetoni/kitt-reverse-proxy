@@ -14,17 +14,25 @@ function stripXssi(text: string): string {
   return text.replace(/^\s*\)\]\}'\s*\r?\n?/, '').trim();
 }
 
+/** SSE removes one optional space after the colon, never source indentation. */
+export function sseEventData(block: string): string | undefined {
+  const values: string[] = [];
+  for (const line of block.split(/\r\n|\r|\n/)) {
+    const colon = line.indexOf(':');
+    const field = colon < 0 ? line : line.slice(0, colon);
+    if (field !== 'data') continue;
+    const value = colon < 0 ? '' : line.slice(colon + 1);
+    values.push(value.startsWith(' ') ? value.slice(1) : value);
+  }
+  return values.length ? values.join('\n') : undefined;
+}
+
 function parseSse(text: string): JsonValue {
   const events: JsonValue[] = [];
-  const blocks = text.split(/\r?\n\r?\n/);
+  const blocks = text.replace(/\r\n?/g, '\n').split('\n\n');
   for (const block of blocks) {
-    const dataLines = block
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim());
-    if (dataLines.length === 0) continue;
-    const data = dataLines.join('\n');
-    if (!data || data === '[DONE]') continue;
+    const data = sseEventData(block);
+    if (data === undefined || data === '[DONE]') continue;
     events.push(parseJson(data) ?? data);
   }
   return { eventStream: events };

@@ -31,6 +31,10 @@ jobs:
         run: npm test
       - name: Build production package
         run: npm run build
+      - name: Install Chromium for the real CDP boundary
+        run: npx playwright install --with-deps chromium
+      - name: Verify CDP source integrity in real Chromium
+        run: npm run test:browser
       - name: Validate multicore installer build
         run: node scripts/build-fast.mjs
       - name: Validate fast-build output

@@ -1,3 +1,9 @@
+## Release 4.9.11 — CDP lifecycle and source integrity
+
+Serialize CDP attachment, reconnection and detachment; release partially attached sessions on failure. Preserve buffered-before-live byte order while streaming activates, including the existing turn byte budget. Reject redirects, changed final response URLs and non-success HTTP bodies before raw extraction. Both SSE decoding paths preserve indentation and multiline data across CR, LF and split CRLF boundaries.
+
+CI now exercises real headless Chromium against a local SSE fixture, earns a profile from a matching DOM response and recovers later completed contracts with damaged HTML. This controlled browser test does not cover authenticated provider accounts. See [release notes and limits](docs/RELEASE_4.9.11.md).
+
 ## Release 4.9.10 — execution boundary hardening
 
 Preserve completed raw CDP contracts when the DOM monitor times out. Refresh the transitive lock to proxy-addr 2.0.8 for [GHSA-jqcg-44mw-7w3h](https://github.com/advisories/GHSA-jqcg-44mw-7w3h); retain the dependency audit gates. Recovery requires full-prompt correlation, a previously trusted active profile, explicit stream end and strict valid JSON. Competing delta/snapshot payloads still fail. Cancellation, sign-in/manual intervention and other monitor errors remain errors. Authenticated live WebChat is not covered by local fixtures.

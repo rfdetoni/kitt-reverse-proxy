@@ -24,6 +24,8 @@ interface Candidate {
   finished: boolean;
   streamReady: boolean;
   failed: boolean;
+  pendingChunks: Uint8Array[];
+  pendingBytes: number;
 }
 
 interface ActiveTurn {
@@ -101,6 +103,7 @@ function disabledTurn(): TapTurn {
 export class CdpStreamTap {
   private cdp: CDPSession | undefined;
   private current: ActiveTurn | undefined;
+  private lifecycle: Promise<void> = Promise.resolve();
   private readonly healthController: TapHealthController;
 
   constructor(
@@ -116,10 +119,21 @@ export class CdpStreamTap {
   }
 
   async initialize(): Promise<void> {
+    return this.queueLifecycle(() => this.attachSession());
+  }
+
+  private queueLifecycle(operation: () => Promise<void>): Promise<void> {
+    const pending = this.lifecycle.then(operation);
+    this.lifecycle = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async attachSession(): Promise<void> {
     if ((this.config.readMode ?? 'auto') === 'dom') return;
     if (this.cdp) return;
+    let cdp: CDPSession | undefined;
     try {
-      const cdp = await this.session.context.newCDPSession(this.session.page);
+      cdp = await this.session.context.newCDPSession(this.session.page);
       cdp.on('Network.requestWillBeSent', this.onRequest);
       cdp.on('Network.responseReceived', this.onResponse);
       cdp.on('Network.dataReceived', this.onData);
@@ -131,20 +145,33 @@ export class CdpStreamTap {
     } catch {
       this.healthController.setAttached(false);
       this.healthController.recordFailure('attach_failed');
+      if (cdp) await this.releaseSession(cdp);
     }
   }
 
   async reconnect(): Promise<void> {
-    await this.detach();
-    await this.initialize();
+    this.cancelCurrent();
+    return this.queueLifecycle(async () => {
+      await this.detachSession();
+      await this.attachSession();
+    });
   }
 
   async detach(): Promise<void> {
+    this.cancelCurrent();
+    return this.queueLifecycle(() => this.detachSession());
+  }
+
+  private async detachSession(): Promise<void> {
     if (this.current && !this.current.cancelled) this.cancelCurrent();
     const cdp = this.cdp;
     this.cdp = undefined;
     this.healthController.setAttached(false);
     if (!cdp) return;
+    await this.releaseSession(cdp);
+  }
+
+  private async releaseSession(cdp: CDPSession): Promise<void> {
     cdp.off('Network.requestWillBeSent', this.onRequest);
     cdp.off('Network.responseReceived', this.onResponse);
     cdp.off('Network.dataReceived', this.onData);
@@ -198,12 +225,17 @@ export class CdpStreamTap {
 
   private readonly onRequest = (raw: unknown): void => {
     const turn = this.current;
-    if (!turn || turn.cancelled || turn.matchedRequestId) return;
+    if (!turn || turn.cancelled) return;
     const event = record(raw);
     const request = record(event?.request);
     if (!event || !request) return;
 
     const requestId = typeof event.requestId === 'string' ? event.requestId : '';
+    if (event.redirectResponse && turn.candidates.has(requestId)) {
+      this.fail(turn, 'profile_mismatch');
+      return;
+    }
+    if (turn.matchedRequestId) return;
     const url = typeof request.url === 'string' ? request.url : '';
     const method = typeof request.method === 'string' ? request.method : '';
     const postData = typeof request.postData === 'string' ? request.postData : '';
@@ -230,7 +262,9 @@ export class CdpStreamTap {
       score,
       finished: false,
       streamReady: false,
-      failed: false
+      failed: false,
+      pendingChunks: [],
+      pendingBytes: 0
     });
   };
 
@@ -243,6 +277,17 @@ export class CdpStreamTap {
     if (!candidate) return;
 
     const response = record(event?.response);
+    if (typeof response?.status !== 'number' || !Number.isInteger(response.status) || response.status < 200 || response.status >= 300) {
+      this.fail(turn, 'stream_aborted');
+      return;
+    }
+    try {
+      const finalUrl = assertAllowedEndpoint(this.config.targetUrl, String(response.url ?? ''), this.config.allowedEndpointHosts);
+      if (finalUrl.href !== new URL(candidate.url).href) throw new Error('Response endpoint changed');
+    } catch {
+      this.fail(turn, 'profile_mismatch');
+      return;
+    }
     const contentType = mime(header(response?.headers, 'content-type') || String(response?.mimeType ?? ''));
     if (!contentTypeAllowed(contentType)) return;
     if (turn.profile && contentType !== mime(turn.profile.contentType)) {
@@ -272,7 +317,19 @@ export class CdpStreamTap {
     if (!turn || turn.cancelled || !turn.matchedRequestId) return;
     const event = record(raw);
     if (event?.requestId !== turn.matchedRequestId || typeof event.data !== 'string' || !event.data) return;
-    this.emitChunk(turn, Buffer.from(event.data, 'base64'));
+    const candidate = turn.candidates.get(turn.matchedRequestId);
+    if (!candidate) return;
+    const bytes = Buffer.from(event.data, 'base64');
+    if (!candidate.streamReady) {
+      candidate.pendingBytes += bytes.byteLength;
+      if (turn.bytes + candidate.pendingBytes > (this.config.tapMaxBytes ?? 8 * 1024 * 1024)) {
+        this.fail(turn, 'internal_error');
+        return;
+      }
+      candidate.pendingChunks.push(bytes);
+      return;
+    }
+    this.emitChunk(turn, bytes);
   };
 
   private readonly onFinished = (raw: unknown): void => {
@@ -319,8 +376,12 @@ export class CdpStreamTap {
       const response = record(await this.cdp.send('Network.streamResourceContent', {
         requestId: candidate.requestId
       }));
+      if (this.current !== turn || turn.cancelled) return;
       const buffered = typeof response?.bufferedData === 'string' ? response.bufferedData : '';
       if (buffered) this.emitChunk(turn, Buffer.from(buffered, 'base64'));
+      const pending = candidate.pendingChunks.splice(0);
+      candidate.pendingBytes = 0;
+      for (const bytes of pending) this.emitChunk(turn, bytes);
       candidate.streamReady = true;
       if (candidate.failed) this.fail(turn, 'stream_aborted');
       else if (candidate.finished) this.finish(turn);
@@ -376,6 +437,10 @@ export class CdpStreamTap {
   }
 
   private clearTurnTimers(turn: ActiveTurn): void {
+    for (const candidate of turn.candidates.values()) {
+      candidate.pendingChunks.length = 0;
+      candidate.pendingBytes = 0;
+    }
     this.clearTimer(turn.matchTimer);
     this.clearTimer(turn.firstByteTimer);
     this.clearTimer(turn.stallTimer);

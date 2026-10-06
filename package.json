@@ -1,6 +1,6 @@
 {
   "name": "kitt-reverse-proxy",
-  "version": "4.9.10",
+  "version": "4.9.11",
   "description": "Local OpenAI-compatible adapter for authorized web chat sessions with UI and network transports.",
   "type": "module",
   "license": "MIT",
@@ -28,6 +28,7 @@
     "start": "node ./dist/cli.js",
     "dev": "tsx ./src/cli.ts",
     "test": "npm run clean:test && tsc -p tsconfig.json && node --test dist-test/test/*.test.js",
+    "test:browser": "npm run build && node --test integration/cdp-browser.test.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "verify": "npm run check && npm test && npm run build",
     "prepack": "npm run build",
