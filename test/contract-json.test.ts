@@ -21,6 +21,22 @@ test('presentation and lexical repairs preserve values without inventing missing
   }
 });
 
+test('a plain object and its identical fenced renderer mirror represent one decision', () => {
+  const source = JSON.stringify({content: '  <div>ação</div>\n\nline\nline  '}, null, 2);
+  for (const label of ['', 'JSON\n']) {
+    for (const fence of ['```', '```json']) {
+      const parsed = parseContractJson(`${label}${source}\n\n${fence}\n${source}\n\n\`\`\``);
+      assert.deepEqual(parsed.value, JSON.parse(source));
+      assert.equal(parsed.repaired, false);
+    }
+  }
+  for (const suffix of ['{"content":"different"}', '{"content":']) {
+    assert.throws(() => parseContractJson(`${source}\n\n\`\`\`json\n${suffix}\n\`\`\``), ContractJsonError);
+  }
+  assert.throws(() => parseContractJson(`${source}\n${source}`), ContractJsonError);
+  assert.throws(() => parseContractJson(`Example:\n${source}\n\`\`\`json\n${source}\n\`\`\``), ContractJsonError);
+});
+
 test('quote repair rejects the interpretation that swallows a neighboring optional field', () => {
   assert.throws(() => parseContractJson('{"path":"x.py","content":"print("hello")","mode":"append"}'), /Multiple possible JSON interpretations/);
 });

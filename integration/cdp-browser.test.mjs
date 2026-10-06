@@ -6,6 +6,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
 import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
 import { abortableSleep } from '../dist/runtime/cancellation.js';
+import { UiChatExecutor } from '../dist/runtime/ui-executor.js';
+import { detectProvider } from '../dist/providers/catalog.js';
+import { collectVisibleSnapshots, extractArtifactContents } from '../dist/runtime/ui-dom.js';
+import { parseContractJson } from '../dist/util/contract-json.js';
+import { readFileSync } from 'node:fs';
 
 test('real Chromium hybrid reader preserves contracts and stops failed delivery', {timeout: 30_000}, async () => {
   const expected = JSON.stringify({action: 'final_response', tool: null, tool_input: null, content: '    <div>ação 😀</div>\n\nline\nline  ', reasoning_summary: '', loop: null});
@@ -95,4 +100,33 @@ test('real Chromium hybrid reader preserves contracts and stops failed delivery'
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('real Chromium DOM preserves the logged Gemini contract beside code artifacts', {timeout: 30_000}, async () => {
+  const candidate = readFileSync('test/fixtures/gemini-mirrored-contract.txt', 'utf8').trim();
+  const browser = await chromium.launch({headless:true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.setContent('<!doctype html><body></body>');
+    const provider = detectProvider('https://gemini.google.com/app');
+    const ui = new UiChatExecutor({context,page,persistent:false}, provider, {targetUrl:'https://gemini.google.com/app',allowedEndpointHosts:[],readMode:'dom',toolEnforcement:'off'});
+    Object.assign(ui, {
+      sendPrompt: async () => {
+        await page.setContent('<model-response><message-content id="answer" style="display:block;white-space:pre-wrap"></message-content></model-response><article><pre><code class="language-typescript">export const unrelated = 1;\n</code></pre></article>');
+        await page.locator('#answer').evaluate((element,text) => {element.textContent=text;}, candidate);
+      },
+      awaitResponse: async () => {
+        const snapshots = await collectVisibleSnapshots(page, provider.ui.responseSelectors);
+        const text = snapshots.find(snapshot => snapshot.selector === 'model-response message-content')?.text;
+        assert.equal(text, candidate);
+        return {text,deltas:[text],durationMs:0};
+      }
+    });
+    const result = await ui.execute({messages:[{role:'user',content:'Inspect the workspace.'}]}, {preferRawContract:true});
+    assert.equal((await extractArtifactContents(page)).length, 1);
+    const text = result.completion.choices[0].message.content;
+    assert.equal(text, candidate);
+    assert.deepEqual(parseContractJson(text).value.tool_input, {operation:'repo.list',arguments:{path:'.'}});
+  } finally { await browser.close(); }
 });

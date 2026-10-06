@@ -82,6 +82,27 @@ const baseConfig: AppConfig = {
   transport: 'ui'
 };
 
+test('UI code artifacts cannot decorate agent or structured contract responses', async () => {
+  const source = JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'Inspect workspace.',loop:null});
+  const code = 'export const unrelated = "ação";\n';
+  for (const mode of ['agent', 'structured', 'chat']) {
+    let shown = false;
+    const frame = {
+      isDetached: () => false,
+      evaluate: async (_fn: unknown, args?: unknown) => args ? [] : shown ? [{code,language:'typescript'}] : []
+    };
+    const ui = new UiChatExecutor({page:{frames:() => [frame],evaluate:async () => []},persistent:false} as unknown as LiveBrowserSession, detectProvider('https://gemini.google.com/app'), baseConfig);
+    Object.assign(ui, {
+      sendPrompt: async () => { shown = true; },
+      awaitResponse: async () => ({text:source,deltas:[source],durationMs:0})
+    });
+    const result = await ui.execute({messages:[{role:'user',content:'Inspect the workspace.'}], ...(mode === 'structured' ? {response_format:{type:'json_object'}} : {})}, mode === 'agent' ? {preferRawContract:true} : undefined);
+    const content = result.completion.choices[0]!.message.content;
+    if (mode === 'chat') assert.ok(content?.includes(code));
+    else assert.equal(content, source);
+  }
+});
+
 test('UI protocol retries premature final answers and completes an API tool round trip', async () => {
   const prompts: string[] = [];
   const answers = [
