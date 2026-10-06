@@ -191,6 +191,14 @@ export async function awaitUiResponse(
       }
     }
 
+    if (!streaming && lastText && !isThinkingIndicator(lastText)) {
+      if (stableSince === 0) stableSince = Date.now();
+      const settleMs = observedStreaming
+        ? Math.max(750, config.uiSettleMs)
+        : Math.max(1_250, config.uiSettleMs);
+      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
+    }
+
     if (Date.now() - lastActivityAt >= watchdog.inactivityMs) {
       logger.event('warn', 'ui.response.timeout', {
         provider_id: provider.id, wait_ms: Date.now() - startedAt, response_chars: lastText.length,
@@ -199,14 +207,6 @@ export async function awaitUiResponse(
       throw new UiTimeoutError(
         `Nenhum progresso do chat foi detectado em ${Math.round(watchdog.inactivityMs / 1000)}s.`
       );
-    }
-
-    if (!streaming && lastText && !isThinkingIndicator(lastText)) {
-      if (stableSince === 0) stableSince = Date.now();
-      const settleMs = observedStreaming
-        ? Math.max(750, config.uiSettleMs)
-        : Math.max(1_250, config.uiSettleMs);
-      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
     }
 
     await abortableSleep(streaming ? 120 : 200, signal);

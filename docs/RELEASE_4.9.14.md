@@ -8,7 +8,7 @@ The new Gemini logs run 4.9.13 and show eleven valid contracts: a requested plan
 
 Submission now requires a cleared, connected and readable editor, an active generation control, or a changed assistant response relative to the pre-submit baseline. It re-resolves the editor after DOM replacement and bounds editor reads. Unconfirmed submission raises the existing `ui_automation_error`; there is no automatic resend or browser reset. The Agent's existing terminal-error policy already handles this code. A visible generation control prevents overwriting a user draft with another prompt.
 
-The response monitor now uses the same provider-plus-semantic generation selectors as submission. Previously, a control such as `Stop output` could acknowledge sending while remaining invisible to the response watchdog, allowing a partial response to settle early. Inactivity and absolute budgets are unchanged. New diagnostic events record confirmation reason, elapsed time, draft/response lengths and streaming state without recording draft or answer contents.
+The response monitor now uses the same provider-plus-semantic generation selectors as submission. Previously, a control such as `Stop output` could acknowledge sending while remaining invisible to the response watchdog, allowing a partial response to settle early. A settled final response is checked before inactivity failure; the Chromium regression exposed that the minimum one-second budget could otherwise reject an already completed answer. Inactivity and absolute budgets are unchanged. New diagnostic events record confirmation reason, elapsed time, draft/response lengths and streaming state without recording draft or answer contents.
 
 ## Validation and limits
 
