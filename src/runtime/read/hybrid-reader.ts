@@ -1,4 +1,5 @@
-import { selectContractResponseText } from './contract-text.js';
+import { completedRawContract, selectContractResponseText } from './contract-text.js';
+import { UiTimeoutError } from '../ui-errors.js';
 export { selectContractResponseText } from './contract-text.js';
 import type { AppConfig, ChatExecutionOptions, JsonObject, LiveBrowserSession } from '../../types.js';
 import type { ProviderPreset } from '../../providers/catalog.js';
@@ -28,7 +29,8 @@ export class HybridUiResponseReader {
   constructor(
     private readonly session: LiveBrowserSession,
     private readonly provider: ProviderPreset,
-    private readonly config: AppConfig
+    private readonly config: AppConfig,
+    private readonly monitor: typeof awaitUiResponse = awaitUiResponse
   ) {
     this.tap = new CdpStreamTap(session, provider, config);
   }
@@ -72,7 +74,7 @@ export class HybridUiResponseReader {
     this.pending = undefined;
 
     if (!turn || turn.mode === 'disabled') {
-      const dom = await awaitUiResponse(
+      const dom = await this.monitor(
         this.session,
         this.provider,
         this.config,
@@ -158,7 +160,7 @@ export class HybridUiResponseReader {
 
     let dom: UiResponseResult;
     try {
-      dom = await awaitUiResponse(
+      dom = await this.monitor(
         this.session,
         this.provider,
         this.config,
@@ -170,7 +172,12 @@ export class HybridUiResponseReader {
     } catch (error) {
       turn.cancel();
       await tapTask.catch(() => undefined);
-      throw error;
+      const recovered = error instanceof UiTimeoutError && !signal?.aborted
+        ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(),
+          preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode) && turn.mode === 'active' && matched && adapterEnded && !tapFailure)
+        : undefined;
+      if (recovered === undefined) throw error;
+      dom = { text: '', deltas: [], firstDeltaMs: undefined, durationMs: Math.max(0, Date.now() - startedAt) };
     }
 
     turn.cancel();
