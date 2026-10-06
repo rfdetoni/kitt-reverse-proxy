@@ -26,6 +26,8 @@ export interface TapProfile {
   contentType: string;
   framing: TapFraming;
   textPath: string;
+  /** Relative paths to JSON strings enclosing textPath, in decoding order. */
+  jsonStringPaths?: string[];
   textMode?: 'delta' | 'snapshot';
 }
 

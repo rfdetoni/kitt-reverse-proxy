@@ -1,4 +1,5 @@
 import type { CDPSession } from 'playwright';
+import { RESOURCE_LIMITS, utf8Bytes } from '../../core/resource-limits.js';
 import { decodeRequestBody } from '../../discovery/body-codec.js';
 import { scoreRequestCandidate } from '../../discovery/scoring.js';
 import { assertAllowedEndpoint } from '../../security/url-policy.js';
@@ -28,12 +29,23 @@ interface Candidate {
   pendingBytes: number;
 }
 
+interface PendingBody {
+  url: string;
+  method: string;
+  contentType: string;
+  resourceType: string;
+  response?: unknown;
+  finished: boolean;
+  failed: boolean;
+}
+
 interface ActiveTurn {
   mode: TapTurnMode;
   profile?: TapProfile | undefined;
   needle: string;
   queue: AsyncEventQueue<TapEvent>;
   candidates: Map<string, Candidate>;
+  pendingBodies: Map<string, PendingBody>;
   matchedRequestId?: string;
   bytes: number;
   cancelled: boolean;
@@ -139,7 +151,7 @@ export class CdpStreamTap {
       cdp.on('Network.dataReceived', this.onData);
       cdp.on('Network.loadingFinished', this.onFinished);
       cdp.on('Network.loadingFailed', this.onFailed);
-      await cdp.send('Network.enable');
+      await cdp.send('Network.enable', { maxPostDataSize: RESOURCE_LIMITS.discoveryRequestBytes });
       this.cdp = cdp;
       this.healthController.setAttached(true);
     } catch {
@@ -193,6 +205,7 @@ export class CdpStreamTap {
       needle: promptNeedle(prompt),
       queue,
       candidates: new Map(),
+      pendingBodies: new Map(),
       bytes: 0,
       cancelled: false
     };
@@ -231,7 +244,7 @@ export class CdpStreamTap {
     if (!event || !request) return;
 
     const requestId = typeof event.requestId === 'string' ? event.requestId : '';
-    if (event.redirectResponse && turn.candidates.has(requestId)) {
+    if (event.redirectResponse && (turn.candidates.has(requestId) || turn.pendingBodies.has(requestId))) {
       this.fail(turn, 'profile_mismatch');
       return;
     }
@@ -239,7 +252,9 @@ export class CdpStreamTap {
     const url = typeof request.url === 'string' ? request.url : '';
     const method = typeof request.method === 'string' ? request.method : '';
     const postData = typeof request.postData === 'string' ? request.postData : '';
-    if (!requestId || !url || method.toUpperCase() !== 'POST' || !postData) return;
+    if (!requestId || !url || method.toUpperCase() !== 'POST') return;
+    if (turn.candidates.has(requestId) || turn.pendingBodies.has(requestId)) return;
+    if (turn.candidates.size + turn.pendingBodies.size >= RESOURCE_LIMITS.discoveryCandidates) return;
     if (turn.profile && !profileMatches(turn.profile, url, method)) return;
 
     try {
@@ -248,11 +263,45 @@ export class CdpStreamTap {
       return;
     }
 
-    const contentType = header(request.headers, 'content-type');
-    const decoded = decodeRequestBody(postData, contentType);
-    if (!decoded || !turn.needle || !jsonContainsNeedle(decoded.body, turn.needle)) return;
+    const pending: PendingBody = {
+      url, method,
+      contentType: header(request.headers, 'content-type'),
+      resourceType: typeof event.type === 'string' ? event.type.toLowerCase() : 'fetch',
+      finished: false, failed: false
+    };
+    if (postData) {
+      this.registerRequest(turn, requestId, pending, postData);
+    } else if (request.hasPostData === true && this.cdp) {
+      turn.pendingBodies.set(requestId, pending);
+      void this.retrieveBody(turn, this.cdp, requestId, pending);
+    }
+  };
 
-    const resourceType = typeof event.type === 'string' ? event.type.toLowerCase() : 'fetch';
+  private async retrieveBody(turn: ActiveTurn, cdp: CDPSession, requestId: string, pending: PendingBody): Promise<void> {
+    try {
+      const body = record(await cdp.send('Network.getRequestPostData', { requestId }));
+      if (this.current !== turn || turn.cancelled || this.cdp !== cdp || turn.matchedRequestId) return;
+      if (turn.pendingBodies.get(requestId) !== pending) return;
+      turn.pendingBodies.delete(requestId);
+      if (typeof body?.postData !== 'string') return;
+      this.registerRequest(turn, requestId, pending, body.postData);
+      if (!turn.candidates.has(requestId)) return;
+      if (pending.response) this.onResponse(pending.response);
+      if (pending.failed) this.onFailed({ requestId });
+      else if (pending.finished) this.onFinished({ requestId });
+    } catch {
+      // CDP may evict the body or detach. Keep the DOM authoritative.
+    } finally {
+      if (turn.pendingBodies.get(requestId) === pending) turn.pendingBodies.delete(requestId);
+    }
+  }
+
+  private registerRequest(turn: ActiveTurn, requestId: string, pending: PendingBody, postData: string): void {
+    if (utf8Bytes(postData) > RESOURCE_LIMITS.discoveryRequestBytes) return;
+    let decoded: ReturnType<typeof decodeRequestBody>;
+    try { decoded = decodeRequestBody(postData, pending.contentType); } catch { return; }
+    if (!decoded || !turn.needle || !jsonContainsNeedle(decoded.body, turn.needle)) return;
+    const { url, method, resourceType } = pending;
     const score = scoreRequestCandidate(url, decoded.body, resourceType, this.provider.id) + 50;
     if (score < 70) return;
     turn.candidates.set(requestId, {
@@ -266,13 +315,23 @@ export class CdpStreamTap {
       pendingChunks: [],
       pendingBytes: 0
     });
-  };
+  }
 
   private readonly onResponse = (raw: unknown): void => {
     const turn = this.current;
     if (!turn || turn.cancelled || turn.matchedRequestId) return;
     const event = record(raw);
     const requestId = typeof event?.requestId === 'string' ? event.requestId : '';
+    const waiting = turn.pendingBodies.get(requestId);
+    if (waiting) {
+      const response = record(event?.response);
+      // Retain only correlation metadata while the passive CDP body read resolves.
+      waiting.response = { requestId, response: {
+        status: response?.status, url: response?.url, mimeType: response?.mimeType,
+        headers: { 'content-type': header(response?.headers, 'content-type') }
+      } };
+      return;
+    }
     const candidate = turn.candidates.get(requestId);
     if (!candidate) return;
 
@@ -337,6 +396,8 @@ export class CdpStreamTap {
     if (!turn || turn.cancelled) return;
     const event = record(raw);
     const requestId = typeof event?.requestId === 'string' ? event.requestId : '';
+    const waiting = turn.pendingBodies.get(requestId);
+    if (waiting) waiting.finished = true;
     const candidate = turn.candidates.get(requestId);
     if (candidate) candidate.finished = true;
     if (requestId === turn.matchedRequestId && candidate?.streamReady) this.finish(turn);
@@ -347,6 +408,8 @@ export class CdpStreamTap {
     if (!turn || turn.cancelled) return;
     const event = record(raw);
     const requestId = typeof event?.requestId === 'string' ? event.requestId : '';
+    const waiting = turn.pendingBodies.get(requestId);
+    if (waiting) waiting.failed = true;
     const candidate = turn.candidates.get(requestId);
     if (candidate) candidate.failed = true;
     if (requestId === turn.matchedRequestId) this.fail(turn, 'stream_aborted');
@@ -437,6 +500,7 @@ export class CdpStreamTap {
   }
 
   private clearTurnTimers(turn: ActiveTurn): void {
+    turn.pendingBodies.clear();
     for (const candidate of turn.candidates.values()) {
       candidate.pendingChunks.length = 0;
       candidate.pendingBytes = 0;

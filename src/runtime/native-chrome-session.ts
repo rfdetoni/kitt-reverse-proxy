@@ -133,6 +133,24 @@ interface CdpTarget {
   url?: unknown;
 }
 
+export function manualAuthReturned(targetUrl: string, targets: CdpTarget[]): boolean {
+  const expected = new URL(targetUrl);
+  // A provider tab can stay open behind a human OAuth popup. Do not attach
+  // while authentication is still in progress in another page.
+  if (targets.some((item) => {
+    if (item.type !== 'page' || typeof item.url !== 'string') return false;
+    try { return ['accounts.google.com', 'auth.openai.com', 'auth0.openai.com'].includes(new URL(item.url).hostname); }
+    catch { return false; }
+  })) return false;
+  return targets.some((item) => {
+    if (item.type !== 'page' || typeof item.url !== 'string') return false;
+    try {
+      const url = new URL(item.url);
+      return url.origin === expected.origin && !/^\/(auth|login|signin)(?:\/|$)/i.test(url.pathname);
+    } catch { return false; }
+  });
+}
+
 async function cdpTargets(baseUrl: string): Promise<CdpTarget[]> {
   try {
     const response = await fetch(`${baseUrl}/json/list`, {
@@ -153,7 +171,6 @@ async function waitForCdp(
   waitForAuthReturn: boolean
 ): Promise<void> {
   const deadline = Date.now() + Math.max(5_000, config.manualInterventionTimeoutMs);
-  const expectedHost = targetHost(config.targetUrl);
   let stableSince = 0;
   let pollMs = CDP_POLL_INITIAL_MS;
   let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -171,14 +188,7 @@ async function waitForCdp(
     const targets = await cdpTargets(cdpUrl);
     if (!waitForAuthReturn && targets.length > 0) return;
 
-    const atTarget = targets.some((item) => {
-      if (item.type !== 'page' || typeof item.url !== 'string') return false;
-      try {
-        return new URL(item.url).hostname.toLowerCase() === expectedHost;
-      } catch {
-        return false;
-      }
-    });
+    const atTarget = manualAuthReturned(config.targetUrl, targets);
     if (atTarget) {
       stableSince ||= Date.now();
       if (Date.now() - stableSince >= AUTH_TARGET_STABLE_MS) return;
@@ -196,7 +206,7 @@ async function waitForCdp(
 
   throw new Error(
     waitForAuthReturn
-      ? 'Tempo esgotado aguardando o login manual voltar ao Gemini.'
+      ? `Tempo esgotado aguardando o login manual voltar a ${targetHost(config.targetUrl)}.`
       : 'Tempo esgotado aguardando o Chrome disponibilizar a interface CDP.'
   );
 }

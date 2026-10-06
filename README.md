@@ -1,3 +1,7 @@
+## Release 4.9.15 — Passive RPC capture and human ChatGPT login
+
+The passive tap now correlates POST bodies omitted by CDP, arms its request deadline immediately before browser submission, and learns individual reply paths inside positional arrays and encoded JSON strings. Trusted completed captures preserve the original contract if browser rendering damages it. ChatGPT now uses the human Chrome login bootstrap before automation attaches, including managed services. No request is replayed and no private provider endpoint is fixed. See [evidence and limits](docs/RELEASE_4.9.15.md).
+
 ## Release 4.9.14 — Confirm browser submission before waiting
 
 UI submission now requires a cleared readable composer, newly active generation control, or a changed assistant response. An ignored click/Enter or unreadable editor raises an actionable error after the existing five-second confirmation budget instead of silently starting the response watchdog. Active generation preserves the current draft. Submission and response monitoring use the same semantic streaming selectors, with metadata-only diagnostics. See [evidence and limits](docs/RELEASE_4.9.14.md).
@@ -382,9 +386,9 @@ All K.I.T.T.-generated system, developer, orchestration, repair, retry, tool-pro
 
 The agent-contract route guard also recognizes imperative workspace conversion/migration requests (for example, Gradle to Maven) as code-edit work even if an upstream caller initially labels the route as `chat`.
 
-### Gemini / Google Account login
+### ChatGPT, Gemini and Google Account login
 
-Google may reject sign-in when the browser is already controlled by automation. For Gemini, K.I.T.T. therefore uses a separate human-authentication bootstrap: when the stored Gemini profile is not authenticated, it opens the installed stable Google Chrome with the dedicated K.I.T.T. profile and a loopback-only remote-debugging port, but does **not** attach Playwright during the Google Account login. After the login flow returns to `gemini.google.com`, K.I.T.T. attaches through CDP and continues normal UI automation.
+Google may reject sign-in when the browser is already controlled by automation. For ChatGPT and Gemini, K.I.T.T. therefore uses a separate human-authentication bootstrap: when the stored provider profile is not authenticated, it opens the installed stable Google Chrome with the dedicated K.I.T.T. profile and a loopback-only remote-debugging port, but does **not** attach Playwright during the Google Account login. After the login flow returns to the provider origin, outside login routes and with no Google/OpenAI authentication popup still open, K.I.T.T. attaches through CDP and continues normal UI automation.
 
 This is not a stealth or CAPTCHA-bypass path. Authentication, account selection, MFA and security challenges remain user-controlled. Set `KITT_CHROME_BIN` only when stable Chrome is installed in a non-standard location.
 
@@ -504,12 +508,12 @@ UI providers still send every message through the authenticated browser UI exact
 - the existing DOM monitor is always the canonical reader and remains armed for the complete turn;
 - `--read-mode auto` attaches a passive Chromium CDP stream tap and observes candidate response bytes without modifying requests, responses, cookies or page JavaScript;
 - a newly learned tap remains in **shadow** mode until its decoded text matches the final DOM text for several consecutive turns (default: 3);
-- only a trusted tap may emit early streaming deltas; the final completion text still comes from the DOM;
+- only a trusted tap may emit early streaming deltas; completed, fully correlated trusted streams can also recover buffered Agent/JSON contracts damaged by DOM rendering;
 - any attach, match, first-byte, stall, decode, verification or stream failure demotes the tap and continues through the DOM without resending the prompt;
 - tap failures use an independent per-session circuit breaker, so a broken tap never marks the provider itself unavailable;
 - `--read-mode dom` is the global kill switch and does not attach CDP at all.
 
-The tap profile is learned in memory from origin/path/method/content-type/framing/text-path only. It does not persist request bodies, cookies, authorization headers or tokens. `/v1/kitt/status` and `/v1/capabilities` expose read-path health without response content.
+The tap profile is learned in memory from origin/path/method/content-type/framing/text-path/text-mode and any enclosing JSON-string paths only. It does not persist request bodies, cookies, authorization headers or tokens. `/v1/kitt/status` and `/v1/capabilities` expose read-path health without response content.
 
 Hybrid read controls:
 
@@ -722,7 +726,7 @@ kitt-reverse-proxy profiles list --json
 
 Profiles are dedicated Chromium user-data directories and must be treated as credential material. The registry stores metadata and paths only; passwords, cookies and tokens remain inside the browser profile. Existing provider directories such as `~/.kitt-reverse-proxy/gemini` are imported as legacy profiles without moving their browser data.
 
-A profile can be associated with multiple providers over time. Reverse Proxy 4.4 preserves the single-owner user-data invariant by introducing a profile-scoped BrowserHost: compatible managed services may share that one live Chrome owner through loopback CDP, while service processes never open the same profile independently. Gemini is intentionally excluded so its human Google-auth bootstrap remains unchanged.
+A profile can be associated with multiple providers over time. Reverse Proxy 4.4 preserves the single-owner user-data invariant by introducing a profile-scoped BrowserHost: compatible managed services may share that one live Chrome owner through loopback CDP, while service processes never open the same profile independently. Gemini and ChatGPT are excluded so managed services also use their human authentication bootstrap.
 
 ### Multiple services
 
@@ -786,7 +790,7 @@ Patch 4.4.1 hardens the multi-process lifecycle without changing the public mode
 Version 4.4 completes the performance roadmap without changing the OpenAI-compatible service endpoints:
 
 - Managed services may share one native Chrome BrowserHost only when they use the same named browser profile. Different credential/user-data directories are never combined.
-- Gemini remains on the dedicated human-authentication bootstrap path and is intentionally excluded from BrowserHost pooling.
+- Gemini and ChatGPT remain on the dedicated human-authentication bootstrap path and are excluded from BrowserHost pooling.
 - BrowserHost startup is opportunistic: if stable Chrome/CDP is unavailable, the first service falls back to the existing process-owned browser path.
 - Session eviction is resource-aware: idle LRU candidates may be reclaimed for max-session pressure, browser-page pressure, or configured process RSS pressure. Busy sessions and sessions awaiting client tool results remain protected.
 - The resident control plane keeps its ServiceManager and instance registry hot in memory; external file mutations are detected by mtime and atomic persistence remains authoritative.

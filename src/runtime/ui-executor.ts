@@ -160,9 +160,8 @@ export class UiChatExecutor implements ChatExecutor {
   }
 
   private async sendPrompt(prompt: string, signal?: AbortSignal): Promise<void> {
-    this.responseReader.arm(prompt);
     try {
-      await sendUiPrompt(this.session, this.provider, this.config, prompt, signal);
+      await sendUiPrompt(this.session, this.provider, this.config, prompt, signal, () => this.responseReader.arm(prompt));
     } catch (error) {
       this.responseReader.cancelPending();
       throw error;

@@ -191,6 +191,54 @@ test('tap rejects malformed UTF-8 instead of replacing source characters', () =>
   assert.throws(() => adapter.push(Uint8Array.from([0xc3, 0x28])), /encoded data/);
 });
 
+test('RPC positional JSON strings learn a source path without joining metadata or changing source', () => {
+  const expected = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'    <div>ação 😀</div>\n\nline\nline  ',reasoning_summary:'',loop:null});
+  const envelope = (text: string) => JSON.stringify([['transport', 'request-id', JSON.stringify([null, [['candidate-id', [text], 'metadata']]])]]);
+  const wire = (text: string) => ")]}'\n" + Buffer.byteLength(envelope(text)) + '\n' + envelope(text) + '\n';
+  const shadow = new TapStreamAdapter(undefined, true);
+  shadow.matchedResponse('https://gemini.google.com/rpc/stream', 'POST', 'application/json');
+  for (const byte of Buffer.from(wire(expected))) shadow.push(Uint8Array.of(byte));
+  shadow.end();
+  const verified = shadow.verification(expected);
+  assert.ok(verified, 'must discover the individual answer inside the encoded positional envelope');
+  const active = new TapStreamAdapter(verified.profile, true);
+  active.matchedResponse('https://gemini.google.com/rpc/stream', 'POST', 'application/json');
+  active.push(Buffer.from(wire(expected))); active.end();
+  assert.equal(active.accumulatedText(), expected);
+  assert.equal(active.verification(expected)?.text, expected);
+  assert.equal(active.verification(expected.replace('ação', 'alterado')), undefined);
+});
+
+test('CDP correlates an omitted form body even when response and finish precede body retrieval', async () => {
+  const prompt = 'CURRENT UNIQUE TASK\n' + 'literal source with "quotes" and \\slashes\n'.repeat(10);
+  const form = new URLSearchParams({'f.req':JSON.stringify([null,JSON.stringify([[prompt]])])}).toString();
+  const wire = 'data: ' + JSON.stringify({delta:'original answer'}) + '\n\n';
+  let release!: (value: unknown) => void;
+  let reads = 0;
+  const pending = new Promise(resolve => {release=resolve;});
+  const cdp = fakeCdp(async method => {
+    if (method === 'Network.getRequestPostData') {reads++; return pending;}
+    return method === 'Network.streamResourceContent' ? {bufferedData:Buffer.from(wire).toString('base64')} : {};
+  });
+  const {tap,profile} = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const turn = tap.arm(prompt);
+  try {
+    cdp.emit('Network.requestWillBeSent',{requestId:'current',type:'fetch',request:{url:'https://chatgpt.com/backend-api/conversation',method:'POST',hasPostData:true,headers:{'content-type':'application/x-www-form-urlencoded'}}});
+    response(cdp); cdp.emit('Network.loadingFinished',{requestId:'current'});
+    release({postData:form});
+    const adapter = new TapStreamAdapter(profile);
+    const matched = [];
+    for await (const event of turn.events()) {
+      if (event.type==='matched') {matched.push(event.requestId);adapter.matchedResponse(event.url,event.method,event.contentType);}
+      if (event.type==='chunk') adapter.push(event.bytes);
+      if (event.type==='end') adapter.end();
+      if (event.type==='error') assert.fail(event.reason);
+    }
+    assert.equal(reads,1); assert.deepEqual(matched,['current']); assert.equal(adapter.accumulatedText(),'original answer');
+  } finally {release({});turn.cancel();await tap.detach();}
+});
+
 test('tap profiles can learn JSON presentation differences without accepting changed content', () => {
   const adapter = new TapStreamAdapter(undefined, true);
   adapter.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
@@ -242,4 +290,54 @@ test('mode ambiguity cannot turn cumulative snapshots into fabricated source whe
     }
     else assert.equal(read(), expected);
   }
+});
+
+test('late CDP POST body retrieval cannot leak into a replacement turn', async () => {
+  let release!: (value: unknown) => void;
+  const pending = new Promise(resolve => { release = resolve; });
+  const cdp = fakeCdp(async method => method === 'Network.getRequestPostData' ? pending : {});
+  const {tap} = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const old = tap.arm('OLD REQUEST');
+  try {
+    cdp.emit('Network.requestWillBeSent', {requestId:'old',request:{url:'https://chatgpt.com/backend-api/conversation',method:'POST',hasPostData:true}});
+    const next = tap.arm('CURRENT REQUEST');
+    release({postData:JSON.stringify({content:'OLD REQUEST and CURRENT REQUEST'})});
+    await new Promise(resolve => setImmediate(resolve));
+    cdp.emit('Network.responseReceived', {requestId:'old',response:{url:'https://chatgpt.com/backend-api/conversation',status:200,mimeType:'text/event-stream'}});
+    next.cancel();
+    const events = [];
+    for await (const event of next.events()) events.push(event);
+    assert.deepEqual(events,[]);
+  } finally { release({}); old.cancel(); await tap.detach(); }
+});
+
+test('tap retains whole JSON source in named reply fields and rejects unbounded RPC extraction', () => {
+  const source = JSON.stringify({action:'final_response',content:'original source',tool:null,tool_input:null,reasoning_summary:'',loop:null});
+  const named = new TapStreamAdapter(undefined,true);
+  named.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  named.push(Buffer.from('data: '+JSON.stringify({delta:source})+'\n\n'));
+  named.end();
+  assert.equal(named.verification(source)?.profile.textPath,'$.delta');
+  assert.equal(named.verification(source)?.profile.jsonStringPaths,undefined);
+  const excessive = new TapStreamAdapter();
+  excessive.matchedResponse('https://gemini.google.com/rpc/stream','POST','application/json');
+  assert.throws(() => excessive.push(Buffer.from(JSON.stringify(Array(129).fill('metadata'))+'\n')),/limit/);
+  const encoded = new TapStreamAdapter({endpointOrigin:'https://gemini.google.com',endpointPath:'/rpc/stream',method:'POST',contentType:'application/json',framing:'framed',jsonStringPaths:['$[0]'],textPath:'$[1]',textMode:'delta'});
+  encoded.matchedResponse('https://gemini.google.com/rpc/stream','POST','application/json');
+  assert.throws(() => encoded.push(Buffer.from(JSON.stringify(['invalid JSON'])+'\n')),/changed/);
+});
+
+test('named reply parts retain their ordered source while opaque tuples keep separate candidates', () => {
+  const adapter = new TapStreamAdapter();
+  adapter.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  adapter.push(Buffer.from('data: '+JSON.stringify({parts:['original ','source']})+'\n\n'));
+  adapter.end();
+  const learned = adapter.verification('original source');
+  assert.equal(learned?.profile.textPath,'$.parts[*]');
+  const active = new TapStreamAdapter(learned!.profile);
+  active.matchedResponse('https://chatgpt.com/backend-api/conversation','POST','text/event-stream');
+  active.push(Buffer.from('data: '+JSON.stringify({parts:['next ','source']})+'\n\n'));
+  active.end();
+  assert.equal(active.accumulatedText(),'next source');
 });

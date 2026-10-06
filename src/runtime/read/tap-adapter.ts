@@ -1,12 +1,13 @@
 import { sameContractText } from './contract-text.js';
 import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
-import { getPathValues } from '../../util/path.js';
+import { copyProfile } from './tap-health.js';
+import { RESOURCE_LIMITS } from '../../core/resource-limits.js';
 import {
   applyTapPiece,
   collectTapStringLeaves,
   tapPathScore,
-  tapTextValues,
+  tapProfileValues,
   type TapTextState
 } from './tap-extract.js';
 import type {
@@ -23,6 +24,7 @@ interface MatchedResponse {
 }
 interface TextCandidate extends TapTextState {
   path: string;
+  jsonStringPaths: string[];
   textMode: 'delta' | 'snapshot';
 }
 
@@ -116,7 +118,7 @@ export class TapStreamAdapter {
       || (this.contractMode && sameContractText(text, finalDomText));
     if (this.profile) {
       if (this.learnedInvalid || this.learnedSamples === 0 || !matchesDom(this.learnedText)) return undefined;
-      return { profile: { ...this.profile, textMode: this.profile.textMode ?? 'delta' }, text: this.learnedText };
+      return { profile: { ...copyProfile(this.profile), textMode: this.profile.textMode ?? 'delta' }, text: this.learnedText };
     }
 
     const matches = [...this.candidates.entries()]
@@ -137,6 +139,7 @@ export class TapStreamAdapter {
         contentType: this.matched.contentType,
         framing: this.matched.framing,
         textPath: best[1].path,
+        ...(best[1].jsonStringPaths.length ? { jsonStringPaths: [...best[1].jsonStringPaths] } : {}),
         textMode: best[1].textMode
       },
       text: best[1].text
@@ -216,7 +219,7 @@ export class TapStreamAdapter {
   private consumeValue(value: JsonValue): string[] {
     if (this.profile) {
       const deltas: string[] = [];
-      const values = getPathValues(value, this.profile.textPath).flatMap(tapTextValues);
+      const values = tapProfileValues(value, this.profile.textPath, this.profile.jsonStringPaths);
       for (const raw of values) {
         const state: TapTextState = {
           text: this.learnedText,
@@ -234,13 +237,14 @@ export class TapStreamAdapter {
       return deltas;
     }
 
-    for (const [path, values] of collectTapStringLeaves(value)) {
+    for (const [candidateKey, {path, jsonStringPaths, values}] of collectTapStringLeaves(value)) {
       const combined = values.join('');
       if (!combined) continue;
       for (const textMode of ['delta', 'snapshot'] as const) {
-        const key = textMode + ':' + path;
+        const key = textMode + ':' + candidateKey;
+        if (this.candidates.size >= 2 * RESOURCE_LIMITS.discoveryCandidates && !this.candidates.has(key)) throw new Error('Tap candidate limit exceeded');
         const state = this.candidates.get(key) ?? {
-          path, textMode, text: '', score: path === '$' ? 5 : tapPathScore(path), samples: 0
+          path, jsonStringPaths, textMode, text: '', score: path === '$' ? 5 : tapPathScore(path), samples: 0
         };
         applyTapPiece(state, combined, textMode);
         this.candidates.set(key, state);

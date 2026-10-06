@@ -7,6 +7,10 @@ import type {
   UiReadMode
 } from './types.js';
 
+export function copyProfile(profile: TapProfile): TapProfile {
+  return { ...profile, ...(profile.jsonStringPaths ? { jsonStringPaths: [...profile.jsonStringPaths] } : {}) };
+}
+
 function sameProfile(left: TapProfile | undefined, right: TapProfile): boolean {
   return Boolean(
     left
@@ -16,6 +20,7 @@ function sameProfile(left: TapProfile | undefined, right: TapProfile): boolean {
     && left.contentType === right.contentType
     && left.framing === right.framing
     && left.textPath === right.textPath
+    && JSON.stringify(left.jsonStringPaths ?? []) === JSON.stringify(right.jsonStringPaths ?? [])
     && left.textMode === right.textMode
   );
 }
@@ -41,7 +46,7 @@ export class TapHealthController {
   }
 
   currentProfile(): TapProfile | undefined {
-    return this.profile ? { ...this.profile } : undefined;
+    return this.profile ? copyProfile(this.profile) : undefined;
   }
 
   turnMode(readMode: UiReadMode, now = Date.now()): { mode: TapTurnMode; reason?: TapFailureReason } {
@@ -63,7 +68,7 @@ export class TapHealthController {
     if (sameProfile(this.profile, candidate)) {
       this.verifiedTurns += 1;
     } else {
-      this.profile = { ...candidate };
+      this.profile = copyProfile(candidate);
       this.verifiedTurns = 1;
     }
     this.consecutiveFailures = 0;

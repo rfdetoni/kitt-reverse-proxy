@@ -1,5 +1,6 @@
 import type { JsonValue } from '../../types.js';
-import { appendJsonPath } from '../../util/path.js';
+import { RESOURCE_LIMITS, utf8Bytes } from '../../core/resource-limits.js';
+import { appendJsonPath, getPathValues } from '../../util/path.js';
 
 export interface TapTextState {
   text: string;
@@ -26,7 +27,7 @@ const STRUCTURAL_KEYS = new Set([
 
 function terminalKey(path: string): string {
   const dot = path.lastIndexOf('.');
-  if (dot >= 0) return path.slice(dot + 1).replace(/\[\*\]$/g, '').toLowerCase();
+  if (dot >= 0) return path.slice(dot + 1).replace(/(?:\[(?:\*|\d+)\])+$/g, '').toLowerCase();
   const bracket = /\["([^"]+)"\](?:\[\*\])?$/.exec(path);
   return (bracket?.[1] || '').toLowerCase();
 }
@@ -46,41 +47,87 @@ export function tapPathScore(path: string): number {
   return score;
 }
 
-export function collectTapStringLeaves(
-  value: JsonValue,
-  path = '$',
-  depth = 0,
-  output = new Map<string, string[]>()
-): Map<string, string[]> {
-  if (depth > 12 || value == null) return output;
-  if (typeof value === 'string') {
-    const score = tapPathScore(path);
-    if (score > 0 || path === '$') {
-      const values = output.get(path) ?? [];
-      values.push(value);
-      output.set(path, values);
+interface ExtractionBudget {
+  nodes: number;
+  decodedBytes: number;
+}
+
+export interface TapStringLeaf {
+  path: string;
+  jsonStringPaths: string[];
+  values: string[];
+}
+
+function visit(budget: ExtractionBudget, depth: number): void {
+  if (++budget.nodes > 8192 || depth > 12) throw new Error('Tap extraction limit exceeded');
+}
+
+function decodeJsonString(raw: string, budget: ExtractionBudget): JsonValue | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return undefined;
+  const bytes = utf8Bytes(raw);
+  if (bytes > RESOURCE_LIMITS.gatewayJsonBytes) throw new Error('Tap encoded JSON limit exceeded');
+  budget.decodedBytes += bytes;
+  if (budget.decodedBytes > RESOURCE_LIMITS.upstreamResponseBytes) throw new Error('Tap decoding limit exceeded');
+  try { return JSON.parse(raw) as JsonValue; } catch { return undefined; }
+}
+
+export function collectTapStringLeaves(value: JsonValue): Map<string, TapStringLeaf> {
+  const output = new Map<string, TapStringLeaf>();
+  const budget: ExtractionBudget = { nodes: 0, decodedBytes: 0 };
+  const collect = (child: JsonValue, path: string, depth: number, jsonStringPaths: string[]): void => {
+    visit(budget, depth);
+    if (typeof child === 'string') {
+      const score = tapPathScore(path);
+      if (score >= 0) {
+        const key = JSON.stringify([...jsonStringPaths, path]);
+        if (output.size >= RESOURCE_LIMITS.discoveryCandidates && !output.has(key)) throw new Error('Tap candidate limit exceeded');
+        const existing = output.get(key);
+        if (existing) existing.values.push(child);
+        else output.set(key, { path, jsonStringPaths, values: [child] });
+        // Named answer fields contain source text, even when that text is JSON.
+        // Decode opaque transport strings only, preserving their original candidate.
+        if (score === 0) {
+          const decoded = decodeJsonString(child, budget);
+          if (decoded !== undefined) collect(decoded, '$', depth + 1, [...jsonStringPaths, path]);
+        }
+      }
+    } else if (Array.isArray(child)) {
+      const namedReply = tapPathScore(path) > 0;
+      child.forEach((item, index) => collect(item, namedReply ? path + '[*]' : appendJsonPath(path, index), depth + 1, jsonStringPaths));
+    } else if (child && typeof child === 'object') {
+      for (const [key, item] of Object.entries(child)) collect(item, appendJsonPath(path, key), depth + 1, jsonStringPaths);
     }
-    return output;
-  }
-  if (Array.isArray(value)) {
-    for (const child of value.slice(0, 128)) {
-      collectTapStringLeaves(child, path + '[*]', depth + 1, output);
-    }
-    return output;
-  }
-  if (typeof value === 'object') {
-    for (const [key, child] of Object.entries(value)) {
-      collectTapStringLeaves(child, appendJsonPath(path, key), depth + 1, output);
-    }
-  }
+  };
+  collect(value, '$', 0, []);
   return output;
 }
 
 export function tapTextValues(value: JsonValue): string[] {
-  if (typeof value === 'string') return [value];
-  if (Array.isArray(value)) return value.flatMap(tapTextValues);
-  if (value && typeof value === 'object') return Object.values(value).flatMap(tapTextValues);
-  return [];
+  const budget: ExtractionBudget = { nodes: 0, decodedBytes: 0 };
+  const output: string[] = [];
+  const collect = (child: JsonValue, depth: number): void => {
+    visit(budget, depth);
+    if (typeof child === 'string') output.push(child);
+    else if (Array.isArray(child)) child.forEach(item => collect(item, depth + 1));
+    else if (child && typeof child === 'object') Object.values(child).forEach(item => collect(item, depth + 1));
+  };
+  collect(value, 0);
+  return output;
+}
+
+export function tapProfileValues(value: JsonValue, path: string, jsonStringPaths: string[] = []): string[] {
+  if (jsonStringPaths.length > 12) throw new Error('Tap decoding depth exceeded');
+  const budget: ExtractionBudget = { nodes: 0, decodedBytes: 0 };
+  let decoded = value;
+  for (const jsonPath of jsonStringPaths) {
+    const values = getPathValues(decoded, jsonPath);
+    if (values.length !== 1 || typeof values[0] !== 'string') throw new Error('Tap encoded path changed');
+    const next = decodeJsonString(values[0], budget);
+    if (next === undefined) throw new Error('Tap encoded JSON changed');
+    decoded = next;
+  }
+  return getPathValues(decoded, path).flatMap(tapTextValues);
 }
 
 export function applyTapPiece(state: TapTextState, raw: string, mode: 'delta' | 'snapshot' = 'delta'): string {

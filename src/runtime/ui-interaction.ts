@@ -262,7 +262,8 @@ export async function sendUiPrompt(
   provider: ProviderPreset,
   config: AppConfig,
   prompt: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  beforeSubmit?: () => void
 ): Promise<void> {
   throwIfAborted(signal);
   if (!prompt.trim()) throw new UiAutomationError('Não há conteúdo novo para enviar ao chat web.');
@@ -303,6 +304,7 @@ export async function sendUiPrompt(
     throwIfAborted(signal);
     const send = await firstVisibleLocator(session.page, sendSelectors);
     if (send && await send.isEnabled().catch(() => false)) {
+      beforeSubmit?.();
       await send.click({ timeout: 2_000 });
       submitted = true;
       break;
@@ -313,6 +315,7 @@ export async function sendUiPrompt(
   if (!submitted) {
     throwIfAborted(signal);
     await input.focus().catch(() => undefined);
+    beforeSubmit?.();
     await input.press('Enter', { timeout: 2_000 });
   }
 

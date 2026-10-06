@@ -261,3 +261,29 @@ test('auto mode falls back to visible when authenticated headless is unusable', 
   assert.deepEqual(closed, ['f1', 'f2', 'f3']);
   assert.equal(result.session.headed, true);
 });
+
+test('ChatGPT login uses human system Chrome and managed services cannot pre-attach a pooled browser', async () => {
+  const { detectProvider } = await import('../src/providers/catalog.js');
+  const { browserHostPoolEnabled } = await import('../src/control-plane/service-manager.js');
+  const chatgpt = detectProvider('https://chatgpt.com/');
+  const launches: unknown[] = [];
+  const deps: UiBrowserLifecycleDeps = {
+    async open(config, launch) { launches.push(launch); return session('human',config.headed,[]); },
+    async navigate() {}, async ready() { return true; },
+    async initialize() { return executor(); }, async pause() {}
+  };
+  await createManagedUiRuntime(baseConfig('headed'),chatgpt,deps);
+  assert.deepEqual(launches,[{mode:'system-chrome-auth',launchUrl:'https://chatgpt.com/auth/login'}]);
+  assert.equal(browserHostPoolEnabled('chatgpt'),false);
+});
+
+test('manual auth waits through login routes and OAuth popups before attaching', async () => {
+  const { manualAuthReturned } = await import('../src/runtime/native-chrome-session.js');
+  const page = (url: string) => ({type:'page',url});
+  assert.equal(manualAuthReturned('https://chatgpt.com/',[page('https://chatgpt.com/auth/login')]),false);
+  assert.equal(manualAuthReturned('https://chatgpt.com/',[page('https://chatgpt.com/'),page('https://accounts.google.com/signin')]),false);
+  assert.equal(manualAuthReturned('https://chatgpt.com/',[page('https://chatgpt.com/'),page('https://auth.openai.com/log-in')]),false);
+  assert.equal(manualAuthReturned('https://chatgpt.com/',[page('https://chatgpt.com/')]),true);
+  assert.equal(manualAuthReturned('https://gemini.google.com/app',[page('https://gemini.google.com/app')]),true);
+  assert.equal(manualAuthReturned('https://chatgpt.com/',[page('http://chatgpt.com/')]),false);
+});

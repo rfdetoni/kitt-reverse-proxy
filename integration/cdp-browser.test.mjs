@@ -182,3 +182,91 @@ test('real Chromium requires submission acceptance and monitors semantic generat
     assert.ok(result.durationMs >= 2_000, 'must not finish at the partial answer or time out during generation');
   } finally { await browser.close(); }
 });
+
+
+test('real Chromium RPC tap learns positional source, retrieves omitted POST data and survives slow composition', {timeout: 30_000}, async () => {
+  const expected = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'    <div>ação 😀</div>\n\nline\nline  ',reasoning_summary:'',loop:null});
+  let posts = 0;
+  const server = createServer(async (request, response) => {
+    if (request.method === 'GET') {
+      response.writeHead(200, {'content-type':'text/html; charset=utf-8'});
+      response.end(`<!doctype html><rich-textarea><div class="ql-editor" contenteditable="true"></div></rich-textarea>
+        <button aria-label="Send message" id="send">Send</button><button aria-label="Stop output" id="stop" style="display:none">Stop</button>
+        <script>
+        document.querySelector('#send').onclick = async () => {
+          const editor = document.querySelector('.ql-editor');
+          const prompt = editor.innerText;
+          editor.innerText = '';
+          document.querySelector('#stop').style.display = 'block';
+          const node = document.createElement('model-response');
+          node.innerHTML = '<message-content style="display:block;white-space:pre-wrap"></message-content>';
+          document.body.append(node);
+          const response = await fetch('/rpc/stream', {method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},
+            body:new URLSearchParams({'f.req':JSON.stringify([null,JSON.stringify([[prompt]])])}).toString()});
+          await response.text();
+          node.firstChild.textContent = document.querySelectorAll('model-response').length === 1 ? ${JSON.stringify(expected)} : 'renderer-damaged-contract';
+          document.querySelector('#stop').style.display = 'none';
+        };
+        </script>`);
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+    assert.ok(form.get('f.req').includes('UNIQUE RPC TASK'));
+    posts++;
+    const envelope = JSON.stringify([['transport','request-id',JSON.stringify([null,[['candidate-id',[expected],'metadata']]])]]);
+    const wire = Buffer.from(")]}'\n" + Buffer.byteLength(envelope) + '\n' + envelope + '\n');
+    response.writeHead(200, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+    response.flushHeaders();
+    await delay(100);
+    const split = wire.findIndex(byte => byte >= 0x80) + 1;
+    response.write(wire.subarray(0, split));
+    await delay(100);
+    response.end(wire.subarray(split));
+  });
+  server.listen(0,'127.0.0.1');
+  await once(server,'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  let browser;
+  let locatorPrototype;
+  let originalFill;
+  try {
+    browser = await chromium.launch({headless:true});
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(origin);
+    let bodyReads = 0;
+    const wrappedContext = {newCDPSession: async target => {
+      const cdp = await context.newCDPSession(target);
+      const send = cdp.send.bind(cdp);
+      cdp.send = (method, params) => {
+        if (method === 'Network.getRequestPostData') bodyReads++;
+        // Force Chromium to omit the notification body; the fallback still uses real CDP.
+        return send(method, method === 'Network.enable' ? {...params,maxPostDataSize:1} : params);
+      };
+      return cdp;
+    }};
+    const provider = detectProvider('https://gemini.google.com/app');
+    const ui = new UiChatExecutor({context:wrappedContext,page,persistent:false},provider,
+      {targetUrl:origin,allowedEndpointHosts:[],readMode:'auto',tapVerifyTurns:1,tapMatchTimeoutMs:250,tapFirstByteMs:5000,tapStallMs:5000,
+        manualInterventionTimeoutMs:1000,uiResponseTimeoutMs:5000,uiSettleMs:100,headed:false,toolEnforcement:'off'});
+    await ui.initialize();
+    locatorPrototype = Object.getPrototypeOf(page.locator('.ql-editor'));
+    originalFill = locatorPrototype.fill;
+    locatorPrototype.fill = async function(...args) { await delay(500); return originalFill.apply(this,args); };
+    for (let turn = 1; turn <= 2; turn++) {
+      const result = await ui.execute({messages:[{role:'user',content:`UNIQUE RPC TASK ${turn}: preserve the source contract.`}]},{preferRawContract:true});
+      assert.equal(result.completion.choices[0].message.content,expected);
+      assert.equal(ui.describe().read.tap.trusted,true);
+      if (turn === 2) assert.equal(await page.locator('model-response message-content').last().innerText(),'renderer-damaged-contract');
+    }
+    assert.equal(posts,2);
+    assert.equal(bodyReads,2);
+  } finally {
+    if (originalFill) locatorPrototype.fill = originalFill;
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});

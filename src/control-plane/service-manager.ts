@@ -124,7 +124,8 @@ export function browserHostPoolEnabled(
   provider: string,
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
-  if (provider === 'gemini') return false;
+  // Both can authenticate through Google; pooling attaches before human login.
+  if (provider === 'gemini' || provider === 'chatgpt') return false;
   const raw = (env.PROXY_BROWSER_HOST_POOL || 'true').trim().toLowerCase();
   return !['0', 'false', 'off', 'no'].includes(raw);
 }

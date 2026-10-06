@@ -55,6 +55,8 @@ export const CHATGPT_PLUGIN = defineProviderPlugin({
       '[data-is-streaming="true"]'
     ],
     newChatUrl: 'https://chatgpt.com/',
+    manualAuthBrowser: 'system-chrome',
+    manualAuthUrl: 'https://chatgpt.com/auth/login',
     uploadSelector: 'input[type="file"][accept*="image"], input[type="file"]',
     supportsImageUpload: true
   }
