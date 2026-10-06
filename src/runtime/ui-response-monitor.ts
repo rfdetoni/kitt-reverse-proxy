@@ -12,6 +12,8 @@ import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { browserGate, waitForUiReady } from './ui-interaction.js';
 import { ManualInterventionRequiredError, UiTimeoutError } from './ui-errors.js';
 import { deltaFromCumulative } from './ui-history.js';
+import { selectorCandidates } from './semantic-locator.js';
+import { logger } from '../logger.js';
 
 export interface UiResponseResult {
   text: string;
@@ -123,6 +125,7 @@ export async function awaitUiResponse(
   const startedAt = Date.now();
   const watchdog = uiResponseWatchdogBudget(config.uiResponseTimeoutMs);
   const absoluteDeadline = startedAt + watchdog.absoluteMs;
+  const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
   let lastActivityAt = startedAt;
   const deltas: string[] = [];
   let firstDeltaMs: number | undefined;
@@ -151,7 +154,7 @@ export async function awaitUiResponse(
     }
 
     if (now >= nextStreamingCheckAt) {
-      streaming = await anyVisible(session.page, provider.ui.streamingSelectors);
+      streaming = await anyVisible(session.page, streamingSelectors);
       observedStreaming ||= streaming;
       if (streaming) lastActivityAt = now;
       nextStreamingCheckAt = now + (streaming ? 350 : 600);
@@ -189,6 +192,10 @@ export async function awaitUiResponse(
     }
 
     if (Date.now() - lastActivityAt >= watchdog.inactivityMs) {
+      logger.event('warn', 'ui.response.timeout', {
+        provider_id: provider.id, wait_ms: Date.now() - startedAt, response_chars: lastText.length,
+        first_delta_ms: firstDeltaMs ?? null, observed_streaming: observedStreaming, streaming
+      });
       throw new UiTimeoutError(
         `Nenhum progresso do chat foi detectado em ${Math.round(watchdog.inactivityMs / 1000)}s.`
       );

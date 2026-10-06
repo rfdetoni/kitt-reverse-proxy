@@ -1,3 +1,7 @@
+## Release 4.9.14 — Confirm browser submission before waiting
+
+UI submission now requires a cleared readable composer, newly active generation control, or a changed assistant response. An ignored click/Enter or unreadable editor raises an actionable error after the existing five-second confirmation budget instead of silently starting the response watchdog. Active generation preserves the current draft. Submission and response monitoring use the same semantic streaming selectors, with metadata-only diagnostics. See [evidence and limits](docs/RELEASE_4.9.14.md).
+
 ## Release 4.9.13 — Gemini contract presentation recovery
 
 A complete plain JSON object followed by its exact fenced copy is one renderer presentation and can be decoded locally. Differing copies, additional prose, multiple bare objects and duplicate keys remain rejected. Source fields are unchanged; the complete input stays within the 2 MiB recovery bound.
