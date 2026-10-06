@@ -23,3 +23,5 @@ Two new regression cases failed before correction: positional encoded RPC source
 The supplied Gemini logs report no matching capture, but contain no live browser request/response bodies. The generic local RPC fixture does not authenticate with Google or establish that every current Gemini response layout is supported. The new Agent logs separately identify endpoint trust missing for a manually selected managed service on port 3001; that fix belongs to Agent CLI.
 
 Lifecycle regressions reproduce ChatGPT selecting the automated browser before correction and assert human launch policy, pool exclusion, login-route/popup gating and exact-origin return. They do not authenticate a live account, so provider-side acceptance is not guaranteed by the fixture.
+
+CI and Docker checks also run on fix/** branches, retaining their existing test/audit gates and main/PR triggers. This permits validation before main promotion when PR creation is unavailable in the connector.
