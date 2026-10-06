@@ -65,6 +65,19 @@ test('live response rewrites fail explicitly; buffered rewrites yield only canon
   await live.domDelta('draft'); await assert.rejects(live.finalize('canonical', false, false), StreamMismatchError);
 });
 
+test('tap fallback waits for a lagging DOM without replaying delivered bytes', async () => {
+  const delivered: string[] = [];
+  const live = new ResponseReconciler('auto', 'active', delta => { delivered.push(delta); });
+  await live.tapDelta('abcd');
+  await live.fallback('stall');
+  await live.domDelta('a');
+  await live.domDelta('bcde');
+  await live.finalize('abcde', true, true);
+  assert.deepEqual(delivered, ['abcd', 'e']);
+  // A shorter final response is divergence, even when it is a source prefix.
+  await assert.rejects(live.finalize('abc', false, false), StreamMismatchError);
+});
+
 test('OpenAI, Responses and Anthropic refuse success after a divergent stream', () => {
   for (const Writer of [ChatStreamWriter, ResponsesStreamWriter, AnthropicStreamWriter]) {
     let output = '';

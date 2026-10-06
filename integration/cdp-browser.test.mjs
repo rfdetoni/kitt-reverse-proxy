@@ -4,11 +4,10 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
-import { CdpStreamTap } from '../dist/runtime/read/tap-cdp.js';
-import { TapStreamAdapter } from '../dist/runtime/read/tap-adapter.js';
-import { completedRawContract } from '../dist/runtime/read/contract-text.js';
+import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
+import { abortableSleep } from '../dist/runtime/cancellation.js';
 
-test('real Chromium CDP preserves completed contracts independently of damaged HTML', {timeout: 30_000}, async () => {
+test('real Chromium hybrid reader preserves contracts and stops failed delivery', {timeout: 30_000}, async () => {
   const expected = JSON.stringify({action: 'final_response', tool: null, tool_input: null, content: '    <div>ação 😀</div>\n\nline\nline  ', reasoning_summary: '', loop: null});
   const receivedPrompts = [];
   const server = createServer(async (request, response) => {
@@ -40,53 +39,58 @@ test('real Chromium CDP preserves completed contracts independently of damaged H
   await once(server, 'listening');
   const origin = `http://127.0.0.1:${server.address().port}`;
   let browser;
-  let tap;
   try {
     browser = await chromium.launch({headless: true});
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(origin);
     await page.locator('#answer').evaluate((element, text) => { element.textContent = text; }, expected);
-    tap = new CdpStreamTap({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'auto', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000});
-    await tap.initialize();
-    assert.equal(tap.health().attached, true);
+    let fetchedDone = true;
+    let monitorAborted = false;
+    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'auto', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
+      const signal = args[6];
+      try { while (!fetchedDone) await abortableSleep(10, signal); }
+      catch (error) { monitorAborted = Boolean(signal?.aborted); throw error; }
+      return {text: await page.locator('#answer').textContent(), deltas: [], durationMs: 0};
+    });
+    await reader.initialize();
+    assert.equal(reader.describe().tap.attached, true);
+    const fetchTurn = (prompt, newline) => {
+      fetchedDone = false;
+      const pending = page.evaluate(async ({prompt, newline}) => {
+        const response = await fetch('/backend-api/conversation', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({messages: [{role: 'user', content: prompt}], newline})});
+        await response.text();
+      }, {prompt, newline}).finally(() => { fetchedDone = true; });
+      void pending.catch(() => undefined);
+      return pending;
+    };
 
     for (const [index, newline] of ['\n', '\r\n', '\r'].entries()) {
       const prompt = `CURRENT UNIQUE TASK ${index}: preserve raw source text`;
-      const turn = tap.arm(prompt);
-      const adapter = new TapStreamAdapter(turn.profile, true);
-      let ended = false;
-      const consuming = (async () => {
-        for await (const event of turn.events()) {
-          if (event.type === 'error') assert.fail(event.reason);
-          if (event.type === 'matched') adapter.matchedResponse(event.url, event.method, event.contentType);
-          if (event.type === 'chunk') adapter.push(event.bytes);
-          if (event.type === 'end') { assert.equal(event.ok, true); adapter.end(); ended = true; }
-        }
-      })();
-      // Attach rejection handling immediately while the browser request is running.
-      const fetched = page.evaluate(async ({prompt, newline}) => {
-        const response = await fetch('/backend-api/conversation', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({messages: [{role: 'user', content: prompt}], newline})});
-        await response.text();
-      }, {prompt, newline});
-      await Promise.all([consuming, fetched]);
-      assert.equal(ended, true);
-      assert.equal(adapter.accumulatedText(), expected);
+      reader.arm(prompt);
+      const fetched = fetchTurn(prompt, newline);
+      const [result] = await Promise.all([reader.read([], prompt, undefined, undefined, true), fetched]);
+      assert.equal(result.text, expected);
+      assert.equal(result.readDiagnostics.tap_trusted, true);
       if (index === 0) {
-        const verified = adapter.verification(await page.locator('#answer').textContent());
-        assert.ok(verified);
-        tap.recordVerified(verified.profile);
+        assert.equal(result.readDiagnostics.tap_verified, true);
         await page.locator('#answer').evaluate(element => { element.textContent = 'renderer-damaged-contract'; });
       } else {
-        assert.equal(turn.mode, 'active');
+        assert.equal(result.readDiagnostics.tap_mode, 'active');
         assert.equal(await page.locator('#answer').textContent(), 'renderer-damaged-contract');
-        assert.equal(completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(), ended && tap.health().trusted), expected);
       }
     }
-    assert.equal(receivedPrompts.length, 3);
-    assert.equal(new Set(receivedPrompts).size, 3);
+    const failure = new Error('downstream disconnected');
+    const prompt = 'CURRENT UNIQUE FAILED DELIVERY TASK';
+    reader.arm(prompt);
+    const fetched = fetchTurn(prompt, '\n');
+    await assert.rejects(reader.read([], prompt, () => { throw failure; }, undefined, true), error => error === failure);
+    await fetched;
+    assert.equal(monitorAborted, true);
+    assert.equal(reader.describe().tap.trusted, true);
+    assert.equal(receivedPrompts.length, 4);
+    assert.equal(new Set(receivedPrompts).size, 4);
   } finally {
-    await tap?.detach();
     await browser?.close();
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

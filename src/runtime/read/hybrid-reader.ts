@@ -98,10 +98,14 @@ export class HybridUiResponseReader {
     const trustedBeforeRead = Boolean(this.tap.health().trusted);
     const startedAt = Date.now();
     const adapter = new TapStreamAdapter(turn.profile, preferRawContract);
+    let deliveryFailed = false;
     const reconciler = new ResponseReconciler(
       this.config.readMode ?? 'auto',
       turn.mode,
-      onDelta,
+      onDelta ? async (delta) => {
+        try { await onDelta(delta); }
+        catch (error) { deliveryFailed = true; throw error; }
+      } : undefined,
       startedAt
     );
 
@@ -120,74 +124,86 @@ export class HybridUiResponseReader {
     };
 
     const tapTask = (async () => {
-      try {
-        for await (const event of turn.events()) {
-          if (event.type === 'matched') {
-            matched = true;
-            matchedAt = event.t;
-            adapter.matchedResponse(event.url, event.method, event.contentType);
-            continue;
-          }
-          if (event.type === 'chunk') {
-            if (firstByteAt === undefined) firstByteAt = event.t;
-            try {
-              for (const delta of adapter.push(event.bytes)) await reconciler.tapDelta(delta);
-            } catch {
-              await failTap('decode_error');
-              turn.cancel();
-            }
-            continue;
-          }
-          if (event.type === 'end') {
-            if (!event.ok) {
-              await failTap('stream_aborted');
-              continue;
-            }
-            adapterEnded = true;
-            try {
-              for (const delta of adapter.end()) await reconciler.tapDelta(delta);
-            } catch {
-              await failTap('decode_error');
-            }
-            continue;
-          }
-          await failTap(event.reason);
+      for await (const event of turn.events()) {
+        if (event.type === 'matched') {
+          matched = true;
+          matchedAt = event.t;
+          adapter.matchedResponse(event.url, event.method, event.contentType);
+          continue;
         }
-      } catch {
-        await failTap('internal_error');
+        if (event.type === 'chunk') {
+          if (firstByteAt === undefined) firstByteAt = event.t;
+          let deltas: string[];
+          try {
+            deltas = adapter.push(event.bytes);
+          } catch {
+            await failTap('decode_error');
+            turn.cancel();
+            continue;
+          }
+          for (const delta of deltas) await reconciler.tapDelta(delta);
+          continue;
+        }
+        if (event.type === 'end') {
+          if (!event.ok) {
+            await failTap('stream_aborted');
+            continue;
+          }
+          let deltas: string[];
+          try {
+            deltas = adapter.end();
+          } catch {
+            await failTap('decode_error');
+            continue;
+          }
+          adapterEnded = true;
+          for (const delta of deltas) await reconciler.tapDelta(delta);
+          continue;
+        }
+        await failTap(event.reason);
       }
     })();
+    // Observe failures immediately, even if the monitor throws synchronously.
+    void tapTask.catch(() => undefined);
 
+    const monitoring = new AbortController();
     let dom: UiResponseResult;
     try {
-      dom = await this.monitor(
+      const domTask = this.monitor(
         this.session,
         this.provider,
         this.config,
         baseline,
         sentPrompt,
         (delta) => reconciler.domDelta(delta),
-        signal
+        signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal
       );
+      // A completed tap still needs the DOM; a failed delivery must stop the read.
+      dom = await Promise.race([domTask, tapTask.then(() => domTask)]);
     } catch (error) {
+      monitoring.abort();
       turn.cancel();
       await tapTask.catch(() => undefined);
-      const recovered = error instanceof UiTimeoutError && !signal?.aborted
+      const recovered = error instanceof UiTimeoutError && !signal?.aborted && !deliveryFailed
         ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(),
           preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode) && turn.mode === 'active' && matched && adapterEnded && !tapFailure)
         : undefined;
       if (recovered === undefined) throw error;
       dom = { text: '', deltas: [], firstDeltaMs: undefined, durationMs: Math.max(0, Date.now() - startedAt) };
+    } finally {
+      monitoring.abort();
     }
 
     turn.cancel();
-    await tapTask.catch(() => undefined);
+    await tapTask;
     if (!adapterEnded) {
+      let deltas: string[] = [];
       try {
-        for (const delta of adapter.end()) await reconciler.tapDelta(delta);
+        deltas = adapter.end();
       } catch {
         await failTap('decode_error');
       }
+      for (const delta of deltas) await reconciler.tapDelta(delta);
     }
 
     let canonicalText: string;

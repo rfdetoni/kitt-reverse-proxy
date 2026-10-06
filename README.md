@@ -1,3 +1,9 @@
+## Release 4.9.12 — hybrid delivery failures and DOM lag
+
+Propagate consumer delivery failures unchanged, observe tap-task rejection immediately and stop the concurrent DOM monitor when delivery fails. Decode failures keep their existing fallback; callback failures no longer masquerade as corrupted provider bytes. A lagging DOM may catch up to an already delivered prefix without replay, while final divergence and truncation remain errors.
+
+The Chromium gate now runs the full hybrid reader: trust acquisition, raw contracts with damaged HTML and failed-consumer monitor cancellation. See [release notes and limits](docs/RELEASE_4.9.12.md).
+
 ## Release 4.9.11 — CDP lifecycle and source integrity
 
 Serialize CDP attachment, reconnection and detachment; release partially attached sessions on failure. Preserve buffered-before-live byte order while streaming activates, including the existing turn byte budget. Reject redirects, changed final response URLs and non-success HTTP bodies before raw extraction. Both SSE decoding paths preserve indentation and multiline data across CR, LF and split CRLF boundaries.
