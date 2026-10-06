@@ -11,6 +11,9 @@ import { detectProvider } from '../dist/providers/catalog.js';
 import { collectVisibleSnapshots, extractArtifactContents } from '../dist/runtime/ui-dom.js';
 import { parseContractJson } from '../dist/util/contract-json.js';
 import { readFileSync } from 'node:fs';
+import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
+import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
+import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
 test('real Chromium hybrid reader preserves contracts and stops failed delivery', {timeout: 30_000}, async () => {
   const expected = JSON.stringify({action: 'final_response', tool: null, tool_input: null, content: '    <div>ação 😀</div>\n\nline\nline  ', reasoning_summary: '', loop: null});
@@ -128,5 +131,54 @@ test('real Chromium DOM preserves the logged Gemini contract beside code artifac
     const text = result.completion.choices[0].message.content;
     assert.equal(text, candidate);
     assert.deepEqual(parseContractJson(text).value.tool_input, {operation:'repo.list',arguments:{path:'.'}});
+  } finally { await browser.close(); }
+});
+
+test('real Chromium requires submission acceptance and monitors semantic generation controls', {timeout: 30_000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const session = {context, page};
+    const provider = detectProvider('https://gemini.google.com/app');
+    const config = {manualInterventionTimeoutMs: 1_000, uiResponseTimeoutMs: 1_000, uiSettleMs: 100, headed: false};
+    await page.setContent(`<rich-textarea><div id="draft" class="ql-editor" contenteditable="true"></div></rich-textarea>
+      <button aria-label="Send message" onclick="window.clicks=(window.clicks||0)+1">Send</button>`);
+    await assert.rejects(sendUiPrompt(session, provider, config, 'Current task'), error => error instanceof UiAutomationError && /confirm/i.test(error.message));
+    assert.equal(await page.evaluate(() => window.clicks), 1);
+    assert.equal(await page.locator('#draft').innerText(), 'Current task');
+
+    // Acceptance can leave the editor populated while a fast response arrives.
+    await page.locator('button').evaluate(button => {
+      button.onclick = () => {
+        const answer = document.createElement('model-response');
+        answer.textContent = 'Accepted answer';
+        document.body.append(answer);
+      };
+    });
+    await sendUiPrompt(session, provider, config, 'Next task');
+    assert.equal(await page.locator('model-response').innerText(), 'Accepted answer');
+
+    await page.setContent(`<rich-textarea><div id="draft" class="ql-editor" contenteditable="true"></div></rich-textarea>
+      <button id="send" aria-label="Send message">Send</button>
+      <button id="stop" aria-label="Stop output" hidden>Stop</button>`);
+    await page.locator('#send').evaluate(button => {
+      button.onclick = () => {
+        document.querySelector('#draft').textContent = '';
+        document.querySelector('#stop').hidden = false;
+        const answer = document.createElement('model-response');
+        answer.textContent = 'partial';
+        document.body.append(answer);
+        setTimeout(() => {answer.textContent = 'partial complete'; document.querySelector('#stop').hidden = true;}, 2_200);
+      };
+    });
+    const baseline = await collectVisibleSnapshots(page, provider.ui.responseSelectors);
+    await sendUiPrompt(session, provider, config, 'Generate');
+    await page.locator('#draft').fill('Existing user draft');
+    await assert.rejects(sendUiPrompt(session, provider, config, 'Do not replace draft'), /ainda está gerando/);
+    assert.equal(await page.locator('#draft').innerText(), 'Existing user draft');
+    const result = await awaitUiResponse(session, provider, config, baseline, 'Generate');
+    assert.equal(result.text, 'partial complete');
+    assert.ok(result.durationMs >= 2_000, 'must not finish at the partial answer or time out during generation');
   } finally { await browser.close(); }
 });

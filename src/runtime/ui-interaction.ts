@@ -4,7 +4,7 @@ import { logger } from '../logger.js';
 import type { ProviderPreset } from '../providers/catalog.js';
 import { detectBrowserGate, type BrowserGate } from '../security/challenge.js';
 import type { AppConfig, LiveBrowserSession } from '../types.js';
-import { anyVisible, firstVisibleLocator } from './ui-dom.js';
+import { anyVisible, collectVisibleSnapshots, firstVisibleLocator, selectChangedSnapshot, type UiTextSnapshot } from './ui-dom.js';
 import { selectorCandidates, type SelectorCandidate } from './semantic-locator.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { ManualInterventionRequiredError, UiAutomationError } from './ui-errors.js';
@@ -74,14 +74,15 @@ async function firstEditableLocator(page: Page, selectors: readonly string[]): P
   return undefined;
 }
 
-async function readComposerText(input: Locator): Promise<string> {
+async function readComposerText(input: Locator): Promise<string | undefined> {
   return input.evaluate((element: Element) => {
+    if (!element.isConnected) return undefined;
     if ('value' in element && typeof (element as HTMLInputElement).value === 'string') {
       return (element as HTMLInputElement).value;
     }
     const html = element as HTMLElement;
     return html.innerText || html.textContent || '';
-  }).catch(() => '');
+  }, undefined, {timeout: 500}).catch(() => undefined);
 }
 
 async function describeComposerTarget(input: Locator): Promise<string> {
@@ -150,7 +151,7 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     // Rich editors can reject fill(); continue with an actual focused editor path.
   }
 
-  if (normalizeComposerText(await readComposerText(input)) === expected) return;
+  if (normalizeComposerText(await readComposerText(input) ?? '') === expected) return;
 
   await input.focus().catch(() => undefined);
   await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
@@ -158,11 +159,11 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
   await input.press('Backspace').catch(() => undefined);
   await page.keyboard.insertText(prompt).catch(() => undefined);
 
-  if (normalizeComposerText(await readComposerText(input)) === expected) return;
+  if (normalizeComposerText(await readComposerText(input) ?? '') === expected) return;
 
   await setComposerTextThroughDom(input, prompt).catch(() => undefined);
 
-  const actual = normalizeComposerText(await readComposerText(input));
+  const actual = normalizeComposerText(await readComposerText(input) ?? '');
   if (actual !== expected) {
     const target = await describeComposerTarget(input);
     throw new UiAutomationError(
@@ -174,23 +175,42 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
 async function waitForSubmissionConfirmation(
   session: LiveBrowserSession,
   provider: ProviderPreset,
-  input: Locator,
-  wasStreaming: boolean,
+  baseline: readonly UiTextSnapshot[],
+  prompt: string,
   signal?: AbortSignal
 ): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const startedAt = Date.now();
+  const deadline = startedAt + 5_000;
   const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
+  let remainingChars: number | undefined;
   while (Date.now() < deadline) {
     throwIfAborted(signal);
 
-    const remaining = normalizeComposerText(await readComposerText(input));
-    if (!remaining) return;
-
-    const streamingNow = await anyVisible(session.page, streamingSelectors);
-    if (!wasStreaming && streamingNow) return;
+    // A detached/unreadable editor is not evidence that the draft was cleared.
+    const current = await firstEditableLocator(session.page, provider.ui.inputSelectors);
+    const text = current ? await readComposerText(current.locator) : undefined;
+    remainingChars = text === undefined ? undefined : normalizeComposerText(text).length;
+    let confirmation = remainingChars === 0 ? 'composer_cleared' : '';
+    if (!confirmation && await anyVisible(session.page, streamingSelectors)) confirmation = 'generation_started';
+    if (!confirmation) {
+      const responses = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
+      if (selectChangedSnapshot(baseline, responses, prompt)) confirmation = 'response_changed';
+    }
+    if (confirmation) {
+      logger.debug('ui.prompt.submission', {
+        provider_id: provider.id, outcome: 'confirmed', confirmation,
+        wait_ms: Date.now() - startedAt, prompt_chars: prompt.length
+      });
+      return;
+    }
 
     await abortableSleep(100, signal);
   }
+  logger.event('warn', 'ui.prompt.submission', {
+    provider_id: provider.id, outcome: 'unconfirmed', wait_ms: Date.now() - startedAt,
+    prompt_chars: prompt.length, remaining_chars: remainingChars ?? null
+  });
+  throw new UiAutomationError('O chat não confirmou o envio do prompt em 5s. Confira o Chromium antes de tentar novamente; o prompt não foi reenviado automaticamente.');
 }
 
 export async function browserGate(page: Page, provider: ProviderPreset): Promise<BrowserGate | null> {
@@ -266,7 +286,10 @@ export async function sendUiPrompt(
   });
 
   const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
-  const wasStreaming = await anyVisible(session.page, streamingSelectors);
+  if (await anyVisible(session.page, streamingSelectors)) {
+    throw new UiAutomationError('O chat ainda está gerando uma resposta. Aguarde a conclusão antes de enviar outro prompt.');
+  }
+  const baseline = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
   await writeComposerText(session.page, input, prompt);
 
   await abortableSleep(150, signal);
@@ -291,12 +314,7 @@ export async function sendUiPrompt(
     throwIfAborted(signal);
     await input.focus().catch(() => undefined);
     await input.press('Enter', { timeout: 2_000 });
-    submitted = true;
   }
 
-  if (!submitted) {
-    throw new UiAutomationError('Não foi possível submeter o prompt ao chat web.');
-  }
-
-  await waitForSubmissionConfirmation(session, provider, input, wasStreaming, signal);
+  await waitForSubmissionConfirmation(session, provider, baseline, prompt, signal);
 }
