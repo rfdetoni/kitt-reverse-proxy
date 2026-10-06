@@ -57,7 +57,7 @@ export class ResponseReconciler {
   async finalize(finalDomText: string, tapVerified: boolean, tapTrusted: boolean): Promise<ReconcilerResult> {
     await this.enqueue(async () => {
       this.domText = finalDomText;
-      await this.flushDomSuffix();
+      await this.flushDomSuffix(true);
     });
     await this.delivery;
     return {
@@ -88,7 +88,9 @@ export class ResponseReconciler {
     return next;
   }
 
-  private async flushDomSuffix(): Promise<void> {
+  private async flushDomSuffix(final = false): Promise<void> {
+    // The DOM can lag behind bytes already delivered by the tap.
+    if (!final && this.emitted.startsWith(this.domText)) return;
     if (!this.domText) {
       if (this.emitted && this.onDelta) throw new StreamMismatchError();
       if (!this.onDelta) { this.emitted = ''; this.deltas.length = 0; }
