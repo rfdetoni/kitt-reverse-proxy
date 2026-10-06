@@ -7,11 +7,20 @@ export class ContractJsonError extends Error {
 }
 
 export function unwrapContractJson(text: string): string {
-  const value = text.trim();
-  const fenced = value.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/iu);
+  const labeled = text.trim().match(/^json[ \t]*\r?\n([\s\S]+)$/iu);
+  const value = (labeled ? labeled[1]! : text).trim();
+  const fence = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/iu;
+  const fenced = value.match(fence);
   if (fenced) return fenced[1]!.trim();
-  const labeled = value.match(/^json[ \t]*\r?\n([\s\S]+)$/iu);
-  return labeled ? labeled[1]!.trim() : value;
+  // Some renderers expose both the plain object and its fenced code mirror.
+  // Only an exact copy is presentation; differing decisions remain invalid.
+  const opening = value.indexOf('\n```');
+  if (opening >= 0) {
+    const plain = value.slice(0, opening).trim();
+    const mirror = value.slice(opening + 1).match(fence);
+    if (plain.startsWith('{') && plain.endsWith('}') && mirror?.[1]?.trim() === plain) return plain;
+  }
+  return value;
 }
 
 interface Parsed { value: unknown; end: number; }
@@ -22,8 +31,8 @@ const MAX_DEPTH = 64;
 const STRING_ESCAPES: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
 export function parseContractJson(text: string, onMember?: (key: string, value: unknown, path: string, stablePrefix: boolean) => void): { value: unknown; text: string; repaired: boolean } {
+  if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) throw new ContractJsonError('limit', 'JSON payload exceeds 2 MiB');
   const source = unwrapContractJson(text);
-  if (Buffer.byteLength(source, 'utf8') > MAX_BYTES) throw new ContractJsonError('limit', 'JSON payload exceeds 2 MiB');
   let work = 0;
   let branches = 0;
   let furthest = 0;

@@ -462,7 +462,8 @@ export class UiChatExecutor implements ChatExecutor {
     );
     for (const artifact of artifactsAfter) knownArtifacts.add(artifactFingerprint(artifact));
     this.artifactFingerprints = knownArtifacts;
-    if (!protocolEnabled && artifacts.length > 0) {
+    // Artifact display blocks must never decorate a machine contract payload.
+    if (!protocolEnabled && !bufferResponse && options?.preferRawContract !== true && artifacts.length > 0) {
       const artifactBlocks = artifacts
         .filter((artifact) => !textToParse.includes(artifact.code))
         .map((artifact) => {

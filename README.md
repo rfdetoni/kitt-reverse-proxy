@@ -1,3 +1,9 @@
+## Release 4.9.13 — Gemini contract presentation recovery
+
+A complete plain JSON object followed by its exact fenced copy is one renderer presentation and can be decoded locally. Differing copies, additional prose, multiple bare objects and duplicate keys remain rejected. Source fields are unchanged; the complete input stays within the 2 MiB recovery bound.
+
+Agent and structured-output responses no longer receive appended display artifacts. Generic chat still receives artifact display blocks, and explicit tool artifact hydration retains its existing matching rules. A contract-only fixture from the reported Gemini failure now executes its original `repo.list` call in one upstream attempt. See [evidence and limits](docs/RELEASE_4.9.13.md).
+
 ## Release 4.9.12 — hybrid delivery failures and DOM lag
 
 Propagate consumer delivery failures unchanged, observe tap-task rejection immediately and stop the concurrent DOM monitor when delivery fails. Decode failures keep their existing fallback; callback failures no longer masquerade as corrupted provider bytes. A lagging DOM may catch up to an already delivered prefix without replay, while final divergence and truncation remain errors.

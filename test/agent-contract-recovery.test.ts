@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import express from 'express';
 
 import { createOpenAiRouter } from '../src/proxy/openai-router.js';
@@ -104,7 +105,7 @@ test('contract repair keeps the same session lease and original task context', a
   }
 });
 
-async function executeRecovery(outputs: string[], maxAttempts = 3): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
+async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonObject[]): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
   let attempts = 0;
   const lease: SessionExecutionLease = {
     sessionId: 'recovery-regression', contextKey: `recovery-${Math.random()}`, generation: 1,
@@ -125,13 +126,25 @@ async function executeRecovery(outputs: string[], maxAttempts = 3): Promise<{ st
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
       method:'POST', headers:{'content-type':'application/json','x-kitt-agent-contract':'v2'},
       body:JSON.stringify({messages:[{role:'user',content:'Create x.py'}], kitt_meta:{max_upstream_attempts:maxAttempts},
-        tools:[{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}}]})
+        tools:tools ?? [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}}]})
     });
     return {status:response.status,body:await response.json() as Record<string, unknown>,attempts};
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 }
 const writeContract = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'x.py',content:'one\ntwo\n'},content:null,reasoning_summary:'',loop:null});
 const falseFinal = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'File created.',reasoning_summary:'',loop:null});
+
+test('the logged Gemini mirror executes the original action without an upstream repair', async () => {
+  const candidate = readFileSync('test/fixtures/gemini-mirrored-contract.txt', 'utf8');
+  const recovered = await executeRecovery([candidate], 1, [{type:'function',function:{name:'kitt_runtime',parameters:{type:'object',properties:{operation:{enum:['repo.list']},arguments:{type:'object',properties:{path:{type:'string'}},required:['path'],additionalProperties:false}},required:['operation','arguments'],additionalProperties:false}}}]);
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.attempts, 1);
+  const choices = recovered.body.choices as Array<{message:{content:string;tool_calls:Array<{function:{name:string;arguments:string}}>}}>;
+  assert.equal(choices[0]!.message.tool_calls.length, 1);
+  assert.equal(choices[0]!.message.tool_calls[0]!.function.name, 'kitt_runtime');
+  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {operation:'repo.list',arguments:{path:'.'}});
+  assert.equal(choices[0]!.message.content, 'Inspeção inicial do diretório de trabalho para verificar estrutura existente.');
+});
 
 test('local contract syntax repair avoids an upstream retry and preserves file formatting', async () => {
   const recovered = await executeRecovery([writeContract.replace('one\\ntwo\\n','one\ntwo\n')]);
