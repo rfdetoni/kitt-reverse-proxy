@@ -46,6 +46,7 @@ export function buildManagedProxyArgs(input: {
   logContent: 'none' | 'metadata' | 'full';
   logFile: string;
   ownerPid?: number;
+  ownerFingerprint?: string;
 }): string[] {
   return [
     input.cliPath,
@@ -61,7 +62,8 @@ export function buildManagedProxyArgs(input: {
     '--log-level', String(input.logLevel),
     '--log-content', input.logContent,
     '--log-file', input.logFile,
-    ...(input.ownerPid ? ['--owner-pid', String(input.ownerPid)] : [])
+    ...(input.ownerPid ? ['--owner-pid', String(input.ownerPid)] : []),
+    ...(input.ownerFingerprint ? ['--owner-fingerprint', input.ownerFingerprint] : [])
   ];
 }
 
@@ -288,6 +290,12 @@ export class ServiceManager {
     const ownerPid = Number.isInteger(options.ownerPid) && Number(options.ownerPid) > 0
       ? Number(options.ownerPid)
       : undefined;
+    const ownerFingerprint = ownerPid
+      ? processFingerprint(ownerPid)
+      : undefined;
+    if (ownerPid && !ownerFingerprint) {
+      throw new Error('Could not establish managed Agent process identity.');
+    }
     const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
     let browserHostPid = owner?.browserHostPid;
     let browserHostFingerprint = owner?.browserHostFingerprint;
@@ -345,7 +353,8 @@ export class ServiceManager {
       logLevel,
       logContent,
       logFile: serviceLogFile,
-      ...(ownerPid ? { ownerPid } : {})
+      ...(ownerPid ? { ownerPid } : {}),
+      ...(ownerFingerprint ? { ownerFingerprint } : {})
     });
     const child = spawn(process.execPath, args, {
       detached: true,
@@ -385,6 +394,7 @@ export class ServiceManager {
       logContent,
       logFile: serviceLogFile,
       ...(ownerPid ? { ownerPid } : {}),
+      ...(ownerFingerprint ? { ownerFingerprint } : {}),
       ...(browserHostPid && browserHostFingerprint && browserHostCdpPort
         ? {
             browserHostPid,
