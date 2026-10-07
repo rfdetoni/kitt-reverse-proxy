@@ -70,6 +70,34 @@ function optionalPort(params: Record<string, unknown>): number | undefined {
   return value;
 }
 
+function optionalInteger(
+  params: Record<string, unknown>,
+  name: string,
+  minimum: number,
+  maximum?: number
+): number | undefined {
+  const value = params[name];
+  if (value === undefined || value === null) return undefined;
+  if (
+    typeof value !== 'number'
+    || !Number.isInteger(value)
+    || value < minimum
+    || (maximum !== undefined && value > maximum)
+  ) {
+    throw new Error(`Control parameter ${name} must be an integer between ${minimum} and ${maximum ?? '∞'}.`);
+  }
+  return value;
+}
+
+function optionalLogContent(params: Record<string, unknown>): 'none' | 'metadata' | 'full' | undefined {
+  const value = optionalString(params, 'log_content');
+  if (value === undefined) return undefined;
+  if (value !== 'none' && value !== 'metadata' && value !== 'full') {
+    throw new Error('Control parameter log_content must be none, metadata or full.');
+  }
+  return value;
+}
+
 export async function dispatchControlRequest(
   request: ControlRequest,
   root?: string
@@ -125,15 +153,27 @@ export async function dispatchControlRequest(
       id?: string;
       port?: number;
       host?: string;
+      logLevel?: 0 | 1 | 2;
+      logContent?: 'none' | 'metadata' | 'full';
+      logFile?: string;
+      ownerPid?: number;
     } = { target: requiredString(params, 'target') };
     const profile = optionalString(params, 'profile');
     const id = optionalString(params, 'id');
     const host = optionalString(params, 'host');
     const port = optionalPort(params);
+    const logLevel = optionalInteger(params, 'log_level', 0, 2);
+    const logContent = optionalLogContent(params);
+    const logFile = optionalString(params, 'log_file');
+    const ownerPid = optionalInteger(params, 'owner_pid', 1);
     if (profile) options.profile = profile;
     if (id) options.id = id;
     if (host) options.host = host;
     if (port !== undefined) options.port = port;
+    if (logLevel !== undefined) options.logLevel = logLevel as 0 | 1 | 2;
+    if (logContent !== undefined) options.logContent = logContent;
+    if (logFile) options.logFile = logFile;
+    if (ownerPid !== undefined) options.ownerPid = ownerPid;
     return { schema_version: 1, instance: await services.start(options) };
   }
   if (request.action === 'service.stop') {

@@ -20,6 +20,11 @@ export interface ProxyInstanceRecord {
   pid: number;
   processFingerprint: string;
   startedAt: string;
+  logLevel?: 0 | 1 | 2;
+  logContent?: 'none' | 'metadata' | 'full';
+  logFile?: string;
+  ownerPid?: number;
+  ownerFingerprint?: string;
   browserHostPid?: number;
   browserHostFingerprint?: string;
   browserHostCdpPort?: number;

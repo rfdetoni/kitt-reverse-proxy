@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cliLaunchPresets } from '../config.js';
@@ -25,10 +25,46 @@ export interface StartServiceOptions {
   profile?: string;
   port?: number;
   host?: string;
+  logLevel?: 0 | 1 | 2;
+  logContent?: 'none' | 'metadata' | 'full';
+  logFile?: string;
+  ownerPid?: number;
 }
 
 export interface ServiceStatus extends ProxyInstanceRecord {
   status: 'ready' | 'running' | 'unhealthy';
+}
+
+export function buildManagedProxyArgs(input: {
+  cliPath: string;
+  target: ResolvedServiceTarget;
+  host: string;
+  port: number;
+  profileDirectory: string;
+  browserHostCdpPort?: number;
+  logLevel: 0 | 1 | 2;
+  logContent: 'none' | 'metadata' | 'full';
+  logFile: string;
+  ownerPid?: number;
+  ownerFingerprint?: string;
+}): string[] {
+  return [
+    input.cliPath,
+    input.target.input,
+    '--provider', input.target.provider,
+    '--transport', 'ui',
+    '--api-model', input.target.model,
+    '--host', input.host,
+    '--port', String(input.port),
+    ...(input.browserHostCdpPort
+      ? ['--cdp-url', `http://127.0.0.1:${input.browserHostCdpPort}`, '--user-data-dir', input.profileDirectory]
+      : ['--user-data-dir', input.profileDirectory]),
+    '--log-level', String(input.logLevel),
+    '--log-content', input.logContent,
+    '--log-file', input.logFile,
+    ...(input.ownerPid ? ['--owner-pid', String(input.ownerPid)] : []),
+    ...(input.ownerFingerprint ? ['--owner-fingerprint', input.ownerFingerprint] : [])
+  ];
 }
 
 export const SERVICE_READY_TIMEOUT_MS = 330_000;
@@ -244,6 +280,22 @@ export class ServiceManager {
 
     const logs = join(this.root, 'logs');
     mkdirSync(logs, { recursive: true });
+    const requestedLogFile = options.logFile?.trim();
+    const serviceLogFile = requestedLogFile
+      ? join(dirname(requestedLogFile), `reverse-proxy-${id}.log`)
+      : join(logs, `${id}.log`);
+    mkdirSync(dirname(serviceLogFile), { recursive: true });
+    const logLevel = options.logLevel ?? 0;
+    const logContent = options.logContent ?? (logLevel >= 2 ? 'full' : 'metadata');
+    const ownerPid = Number.isInteger(options.ownerPid) && Number(options.ownerPid) > 0
+      ? Number(options.ownerPid)
+      : undefined;
+    const ownerFingerprint = ownerPid
+      ? processFingerprint(ownerPid)
+      : undefined;
+    if (ownerPid && !ownerFingerprint) {
+      throw new Error('Could not establish managed Agent process identity.');
+    }
     const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
     let browserHostPid = owner?.browserHostPid;
     let browserHostFingerprint = owner?.browserHostFingerprint;
@@ -291,19 +343,19 @@ export class ServiceManager {
       }
     }
 
-    const args = [
+    const args = buildManagedProxyArgs({
       cliPath,
-      target.input,
-      '--provider', target.provider,
-      '--transport', 'ui',
-      '--api-model', target.model,
-      '--host', host,
-      '--port', String(port),
-      ...(browserHostPid && browserHostCdpPort
-        ? ['--cdp-url', `http://127.0.0.1:${browserHostCdpPort}`, '--user-data-dir', profile.directory]
-        : ['--user-data-dir', profile.directory]),
-      '--log-file', join(logs, `${id}.log`)
-    ];
+      target,
+      host,
+      port,
+      profileDirectory: profile.directory,
+      ...(browserHostPid && browserHostCdpPort ? { browserHostCdpPort } : {}),
+      logLevel,
+      logContent,
+      logFile: serviceLogFile,
+      ...(ownerPid ? { ownerPid } : {}),
+      ...(ownerFingerprint ? { ownerFingerprint } : {})
+    });
     const child = spawn(process.execPath, args, {
       detached: true,
       stdio: 'ignore',
@@ -338,6 +390,11 @@ export class ServiceManager {
       pid: child.pid,
       processFingerprint: serviceFingerprint!,
       startedAt: new Date().toISOString(),
+      logLevel,
+      logContent,
+      logFile: serviceLogFile,
+      ...(ownerPid ? { ownerPid } : {}),
+      ...(ownerFingerprint ? { ownerFingerprint } : {}),
       ...(browserHostPid && browserHostFingerprint && browserHostCdpPort
         ? {
             browserHostPid,
@@ -405,11 +462,15 @@ export class ServiceManager {
       if (!instance) throw new Error('Unknown reverse-proxy instance: ' + id);
       await this.stopUnlocked(instance.id);
       return await this.startUnlocked({
-      target: instance.target,
-      id: instance.id,
-      profile: instance.profileId,
-      port: instance.port,
-        host: instance.host
+        target: instance.target,
+        id: instance.id,
+        profile: instance.profileId,
+        port: instance.port,
+        host: instance.host,
+        ...(instance.logLevel !== undefined ? { logLevel: instance.logLevel } : {}),
+        ...(instance.logContent !== undefined ? { logContent: instance.logContent } : {}),
+        ...(instance.logFile ? { logFile: instance.logFile } : {}),
+        ...(instance.ownerPid !== undefined ? { ownerPid: instance.ownerPid } : {})
       });
     });
   }

@@ -102,14 +102,49 @@ async function serviceCommand(args: string[]): Promise<number> {
       throw new Error('Usage: kitt-reverse-proxy service start <provider|url> [--profile <id>] [--id <id>] [--port <n>]');
     }
     const rawPort = flagValue(args, '--port');
-    const options: { target: string; profile?: string; id?: string; port?: number; host?: string } = { target };
+    const rawLogLevel = flagValue(args, '--log-level');
+    const rawOwnerPid = flagValue(args, '--owner-pid');
+    const rawLogContent = flagValue(args, '--log-content');
+    const options: {
+      target: string;
+      profile?: string;
+      id?: string;
+      port?: number;
+      host?: string;
+      logLevel?: 0 | 1 | 2;
+      logContent?: 'none' | 'metadata' | 'full';
+      logFile?: string;
+      ownerPid?: number;
+    } = { target };
     const profile = flagValue(args, '--profile');
     const id = flagValue(args, '--id');
     const host = flagValue(args, '--host');
+    const logFile = flagValue(args, '--log-file');
     if (profile) options.profile = profile;
     if (id) options.id = id;
     if (host) options.host = host;
     if (rawPort !== undefined) options.port = Number(rawPort);
+    if (rawLogLevel !== undefined) {
+      const level = Number(rawLogLevel);
+      if (!Number.isInteger(level) || level < 0 || level > 2) {
+        throw new Error('--log-level must be 0, 1 or 2.');
+      }
+      options.logLevel = level as 0 | 1 | 2;
+    }
+    if (rawLogContent !== undefined) {
+      if (!['none', 'metadata', 'full'].includes(rawLogContent)) {
+        throw new Error('--log-content must be none, metadata or full.');
+      }
+      options.logContent = rawLogContent as 'none' | 'metadata' | 'full';
+    }
+    if (logFile) options.logFile = logFile;
+    if (rawOwnerPid !== undefined) {
+      const ownerPid = Number(rawOwnerPid);
+      if (!Number.isInteger(ownerPid) || ownerPid < 1) {
+        throw new Error('--owner-pid must be a positive integer.');
+      }
+      options.ownerPid = ownerPid;
+    }
     const instance = await manager.start(options);
     print({ schema_version: 1, instance }, json);
     return 0;
