@@ -11,6 +11,32 @@ import { notifyIfUpdateAvailable } from './update-check.js';
 import { SERVICE_VERSION } from './version.js';
 import { runControlPlaneCli } from './control-plane/cli.js';
 
+function flagValue(args: readonly string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function withoutFlagValue(args: readonly string[], name: string): string[] {
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === name) {
+      index += 1;
+      continue;
+    }
+    result.push(args[index]);
+  }
+  return result;
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   const controlPlaneCode = await runControlPlaneCli(rawArgs);
@@ -52,7 +78,16 @@ async function main(): Promise<void> {
   }
 
   const parentStdinLifecycle = rawArgs.includes('--parent-stdin-lifecycle');
-  const args = rawArgs.filter((arg) => arg !== '--parent-stdin-lifecycle');
+  const rawOwnerPid = flagValue(rawArgs, '--owner-pid');
+  const ownerPid = rawOwnerPid === undefined ? undefined : Number(rawOwnerPid);
+  if (
+    ownerPid !== undefined
+    && (!Number.isInteger(ownerPid) || ownerPid < 1)
+  ) {
+    throw new Error('--owner-pid must be a positive integer.');
+  }
+  const lifecycleArgs = rawArgs.filter((arg) => arg !== '--parent-stdin-lifecycle');
+  const args = withoutFlagValue(lifecycleArgs, '--owner-pid');
   const parsed = parseCliArgs(args);
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
@@ -62,6 +97,7 @@ async function main(): Promise<void> {
   logger.trace('proxy.config.full', { config, argv: args });
 
   let parentClosed = false;
+  let ownerWatch: NodeJS.Timeout | undefined;
   let shutdownHandler: ((signal: string) => Promise<void>) | null = null;
   if (parentStdinLifecycle) {
     process.stdin.resume();
@@ -101,6 +137,10 @@ async function main(): Promise<void> {
     const shutdown = async (signal: string): Promise<void> => {
       if (shuttingDown) return;
       shuttingDown = true;
+      if (ownerWatch) {
+        clearInterval(ownerWatch);
+        ownerWatch = undefined;
+      }
       logger.info(`${signal} recebido. Encerrando servidor e sessão browser...`);
       let forced = false;
       const forceTimer = setTimeout(() => {
@@ -118,8 +158,16 @@ async function main(): Promise<void> {
     shutdownHandler = shutdown;
     process.once('SIGINT', () => void shutdown('SIGINT'));
     process.once('SIGTERM', () => void shutdown('SIGTERM'));
+    if (ownerPid) {
+      ownerWatch = setInterval(() => {
+        if (!processAlive(ownerPid)) void shutdown('OWNER_EXIT');
+      }, 500);
+      ownerWatch.unref();
+      if (!processAlive(ownerPid)) await shutdown('OWNER_EXIT');
+    }
     if (parentClosed) await shutdown('PARENT_STDIN_EOF');
   } catch (error) {
+    if (ownerWatch) clearInterval(ownerWatch);
     await manager.close();
     await runtime.session.close();
     await flushTracing();
