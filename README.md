@@ -1,3 +1,9 @@
+## Release 4.9.16 — Agent-owned managed services
+
+Managed services started through the Agent control plane now receive the Agent's log level/content and a dedicated log file in the same log directory. The control plane persists those settings across restart. Agent-started service processes also receive an owner PID and terminate when that Agent process disappears; manually started services do not receive ownership and are unaffected.
+
+The shared Browser Host remains profile-owned rather than tied to one Agent PID, so one Agent exiting cannot tear down a browser host still used by another service. See [release notes](docs/RELEASE_4.9.16.md).
+
 ## Release 4.9.15 — Passive RPC capture and human ChatGPT login
 
 The passive tap now correlates POST bodies omitted by CDP, arms its request deadline immediately before browser submission, and learns individual reply paths inside positional arrays and encoded JSON strings. Trusted completed captures preserve the original contract if browser rendering damages it. ChatGPT now uses the human Chrome login bootstrap before automation attaches, including managed services. No request is replayed and no private provider endpoint is fixed. See [evidence and limits](docs/RELEASE_4.9.15.md).
