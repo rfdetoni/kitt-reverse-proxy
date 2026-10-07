@@ -15,15 +15,6 @@ function requiredFlag(args: readonly string[], name: string): string {
   return value;
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
@@ -44,7 +35,7 @@ export async function runBrowserHostCli(args: string[]): Promise<number> {
   const action = args[0] || '';
   if (action !== 'serve') {
     throw new Error(
-      'Usage: kitt-reverse-proxy browser-host serve --profile <dir> --target <url> --cdp-port <port> [--owner-pid <pid>]'
+      'Usage: kitt-reverse-proxy browser-host serve --profile <dir> --target <url> --cdp-port <port>'
     );
   }
 
@@ -61,15 +52,6 @@ export async function runBrowserHostCli(args: string[]): Promise<number> {
   const cdpPort = Number(requiredFlag(args, '--cdp-port'));
   if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65_535) {
     throw new Error('--cdp-port must be an integer between 1 and 65535.');
-  }
-
-  const rawOwnerPid = flagValue(args, '--owner-pid');
-  const ownerPid = rawOwnerPid === undefined ? undefined : Number(rawOwnerPid);
-  if (
-    ownerPid !== undefined
-    && (!Number.isInteger(ownerPid) || ownerPid < 1)
-  ) {
-    throw new Error('--owner-pid must be a positive integer.');
   }
 
   await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
@@ -91,18 +73,9 @@ export async function runBrowserHostCli(args: string[]): Promise<number> {
   process.once('SIGINT', () => void shutdown());
   process.once('SIGTERM', () => void shutdown());
 
-  const ownerWatch = ownerPid
-    ? setInterval(() => {
-        if (!processAlive(ownerPid)) void shutdown();
-      }, 500)
-    : undefined;
-  ownerWatch?.unref();
-  if (ownerPid && !processAlive(ownerPid)) await shutdown();
-
   return await new Promise<number>((resolveCode, reject) => {
     chrome.once('error', reject);
     chrome.once('exit', (code, signal) => {
-      if (ownerWatch) clearInterval(ownerWatch);
       if (!stopping && code !== 0) {
         reject(new Error(
           `Browser host Chrome exited unexpectedly (code=${String(code)}, signal=${String(signal)}).`
