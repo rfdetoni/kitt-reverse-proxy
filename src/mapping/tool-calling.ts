@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseContractJson } from '../util/contract-json.js';
+import { MAX_TOOL_ARGUMENT_BYTES } from '../contracts/provider-limits.js';
 import type { JsonObject, JsonValue, OpenAiCompletion } from '../types.js';
 
 const MAX_TOOLS = 64;
 const MAX_TOOL_PROTOCOL_BYTES = 64 * 1024;
-const MAX_TOOL_ARGUMENT_BYTES = 64 * 1024;
 const MAX_TOOL_RESULT_BYTES = 256 * 1024;
 const MAX_PARALLEL_CALLS = 16;
 const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;

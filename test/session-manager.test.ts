@@ -332,3 +332,59 @@ test('resource pressure admits the first named session but protects an active on
     await manager.close();
   }
 });
+
+
+test('admitted idle-session reuse cannot be evicted by concurrent creation', async () => {
+  const closed: string[] = [];
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'), provider: 'chatgpt', config,
+    factory: async id => ({ executor: executor(id), browserSession: {
+      context: { pages: () => [] }, async close() { closed.push(id); }
+    } as unknown as LiveBrowserSession })
+  });
+  try {
+    await manager.execute('A1', {});
+    const [reuse, creation] = await Promise.allSettled([manager.execute('A1', {}), manager.execute('B2', {})]);
+    assert.equal(reuse.status, 'fulfilled');
+    assert.equal(creation.status, 'rejected');
+    assert.equal(closed.includes('A1'), false);
+    // Failed admission must release its reservations; A can be recycled afterwards.
+    await manager.execute('B2', {});
+    assert.equal(closed.includes('A1'), true);
+  } finally { await manager.close(); }
+});
+
+test('cancelled automation closes only its tab and does not click after a pending lookup', async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  let clicks = 0;
+  let closed = false;
+  let providerClosed = false;
+  const locator = {
+    async getAttribute() { entered(); await pending; return null; },
+    locator() { return { first: () => ({ count: async () => 0 }) }; },
+    async click() { clicks += 1; }
+  };
+  const page = {
+    isClosed: () => closed, url: () => 'http://localhost/',
+    locator: () => ({ first: () => locator }),
+    async close() { closed = true; release(); }, async title() { return 'test'; }
+  };
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'), provider: 'chatgpt', config,
+    defaultBrowserSession: { context: { newPage: async () => page, pages: () => [] },
+      async close() { providerClosed = true; } } as unknown as LiveBrowserSession
+  });
+  const controller = new AbortController();
+  try {
+    const action = manager.browserAction(undefined, 'click', { selector: '#send' }, controller.signal);
+    await reached;
+    controller.abort();
+    await assert.rejects(action, { name: 'RequestAbortedError' });
+    assert.equal(clicks, 0);
+    assert.equal(closed, true);
+    assert.equal(providerClosed, false);
+  } finally { release(); await manager.close(); }
+});

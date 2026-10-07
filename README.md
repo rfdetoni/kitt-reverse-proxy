@@ -1,3 +1,9 @@
+## Release 4.9.17 — Session admission and browser cancellation
+
+Session resolution reserves an admitted caller before asynchronous dispatch. Capacity recycling, idle sweeps and deletion respect reservations; all queue/error paths release them. Automation cancellation closes its dedicated tab and checks before further actions. Agent-contract tool arguments share the inclusive 64 KiB UTF-8 JSON limit with the generic tool route and Agent CLI.
+
+See [release notes](docs/RELEASE_4.9.17.md).
+
 ## Release 4.9.16 — Agent-owned managed services
 
 Managed services started through the Agent control plane now receive the Agent's log level/content and a dedicated log file in the same log directory. The control plane persists those settings across restart. Agent-started service processes also receive an owner PID and terminate when that Agent process disappears; manually started services do not receive ownership and are unaffected.

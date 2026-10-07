@@ -1,4 +1,5 @@
 import type { Locator, Page } from 'playwright';
+import { throwIfAborted } from './cancellation.js';
 import type { JsonObject, LiveBrowserSession } from '../types.js';
 
 export const BROWSER_AUTOMATION_ACTIONS = [
@@ -217,36 +218,45 @@ export class BrowserAutomationSession {
 
   static async create(
     base: LiveBrowserSession,
-    originScope: readonly string[] = [LOOPBACK_SCOPE]
+    originScope: readonly string[] = [LOOPBACK_SCOPE],
+    signal?: AbortSignal
   ): Promise<BrowserAutomationSession> {
+    throwIfAborted(signal);
     const page = await base.context.newPage();
-    const session = new BrowserAutomationSession(page);
-    session.setOriginScope(originScope);
-    const pageWithRouting = page as Page & {
-      route?: Page['route'];
-      on?: Page['on'];
-    };
-    if (typeof pageWithRouting.route === 'function') {
-      await page.route('**/*', async (route) => {
-        const request = route.request();
-        if (
-          request.isNavigationRequest()
-          && request.frame() === page.mainFrame()
-          && !session.isAllowedUrl(request.url())
-        ) {
-          session.blockedNavigationUrl = request.url();
-          await route.abort('blockedbyclient');
-          return;
-        }
-        await route.continue();
-      });
+    try {
+      throwIfAborted(signal);
+      const session = new BrowserAutomationSession(page);
+      session.setOriginScope(originScope);
+      const pageWithRouting = page as Page & {
+        route?: Page['route'];
+        on?: Page['on'];
+      };
+      if (typeof pageWithRouting.route === 'function') {
+        await page.route('**/*', async (route) => {
+          const request = route.request();
+          if (
+            request.isNavigationRequest()
+            && request.frame() === page.mainFrame()
+            && !session.isAllowedUrl(request.url())
+          ) {
+            session.blockedNavigationUrl = request.url();
+            await route.abort('blockedbyclient');
+            return;
+          }
+          await route.continue();
+        });
+      }
+      if (typeof pageWithRouting.on === 'function') {
+        page.on('popup', (popup) => {
+          void popup.close().catch(() => undefined);
+        });
+      }
+      throwIfAborted(signal);
+      return session;
+    } catch (error) {
+      await page.close().catch(() => undefined);
+      throw error;
     }
-    if (typeof pageWithRouting.on === 'function') {
-      page.on('popup', (popup) => {
-        void popup.close().catch(() => undefined);
-      });
-    }
-    return session;
   }
 
   private setOriginScope(originScope: readonly string[]): void {
@@ -337,7 +347,32 @@ export class BrowserAutomationSession {
   async execute(
     actionValue: string,
     args: JsonObject = {},
-    originScope: readonly string[] = [LOOPBACK_SCOPE]
+    originScope: readonly string[] = [LOOPBACK_SCOPE],
+    signal?: AbortSignal
+  ): Promise<JsonObject> {
+    throwIfAborted(signal);
+    // This tab is dedicated to automation. Closing it interrupts Playwright waits
+    // without touching the provider chat tab or undoing already submitted effects.
+    const abort = (): void => { void this.close(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      throwIfAborted(signal);
+      const result = await this.executeAction(actionValue, args, originScope, signal);
+      throwIfAborted(signal);
+      return result;
+    } catch (error) {
+      throwIfAborted(signal);
+      throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  private async executeAction(
+    actionValue: string,
+    args: JsonObject = {},
+    originScope: readonly string[] = [LOOPBACK_SCOPE],
+    signal?: AbortSignal
   ): Promise<JsonObject> {
     this.setOriginScope(originScope);
     const action = actionName(actionValue);
@@ -358,6 +393,7 @@ export class BrowserAutomationSession {
           waitUntil: 'domcontentloaded',
           timeout
         });
+        throwIfAborted(signal);
         this.assertAllowedUrl(this.page.url());
         return {
           action,
@@ -371,7 +407,9 @@ export class BrowserAutomationSession {
         const selector = selectorArg(args);
         const locator = this.page.locator(selector).first();
         await this.assertSafeActivationTarget(locator);
+        throwIfAborted(signal);
         await locator.click({ timeout });
+        throwIfAborted(signal);
         this.assertAllowedUrl(this.page.url());
         return {
           action,
@@ -389,9 +427,12 @@ export class BrowserAutomationSession {
         const submit = booleanArg(args, 'submit', false);
         const locator = this.page.locator(selector).first();
         if (submit) await this.assertSafeActivationTarget(locator);
+        throwIfAborted(signal);
         if (clear) await locator.fill(text, { timeout });
         else await locator.pressSequentially(text, { timeout });
+        throwIfAborted(signal);
         if (submit) await locator.press('Enter', { timeout });
+        throwIfAborted(signal);
         this.assertAllowedUrl(this.page.url());
         return {
           action,

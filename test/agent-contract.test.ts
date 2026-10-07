@@ -748,3 +748,17 @@ test('a known path before ambiguous content remains anchored when its parent has
   assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, repaired, error));
   assert.throws(() => assertAgentRepairContinuity(candidate, repaired.replace('safe.py','other.py'), error), /unaffected candidate data/);
 });
+
+
+test('agent contract bounds serialized UTF-8 tool arguments before returning a call', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'argument-limit' });
+  const input = (content: string) => ({ operation: 'repo.write_file', arguments: { path: 'safe.txt', content } });
+  const response = (tool_input: JsonObject) => completion(JSON.stringify({
+    action: 'use_tool', tool: 'kitt_runtime', tool_input, content: null, reasoning_summary: '', loop: null
+  }));
+  const overhead = Buffer.byteLength(JSON.stringify(input('')), 'utf8');
+  const accepted = input('x'.repeat(65536 - overhead));
+  assert.equal(transformAgentContractCompletion(response(accepted), plan).choices[0]?.finish_reason, 'tool_calls');
+  assert.throws(() => transformAgentContractCompletion(response(input('x'.repeat(65537 - overhead))), plan), /64 KiB/);
+  assert.throws(() => transformAgentContractCompletion(response(input('á'.repeat(32768))), plan), /64 KiB/);
+});

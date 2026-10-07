@@ -129,6 +129,7 @@ interface ManagedSession {
   queue: SerialQueue;
   automationQueue: SerialQueue;
   activeOperations: number;
+  reservations: number;
   createdAt: number;
   lastActivity: number;
   status: 'idle' | 'busy' | 'closing';
@@ -175,6 +176,7 @@ export class SessionManager {
       queue: new SerialQueue(options.config.maxQueue, options.config.minIntervalMs),
       automationQueue: new SerialQueue(options.config.maxQueue, 0),
       activeOperations: 0,
+      reservations: 0,
       createdAt: now,
       lastActivity: now,
       status: 'idle',
@@ -211,41 +213,47 @@ export class SessionManager {
     originScope: readonly string[] = ['loopback']
   ): Promise<JsonObject> {
     const session = await this.resolve(requestedId);
-    if (!session.browserSession) {
-      throw new BrowserAutomationUnavailableError(
-        'Browser automation requires a UI transport with a live browser session.'
-      );
-    }
-    session.lastActivity = Date.now();
-    const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
-    return session.automationQueue.run(async () => {
-      session.activeOperations += 1;
-      session.status = 'busy';
-      session.lastActivity = Date.now();
-      try {
-        if (action.trim().toLowerCase() === 'close') {
-          const current = session.browserAutomation;
-          delete session.browserAutomation;
-          delete session.browserAutomationLastActivity;
-          if (current) await current.close();
-          return { action: 'close', closed: Boolean(current), session_id: session.id };
-        }
-        if (!session.browserAutomation || session.browserAutomation.isClosed()) {
-          session.browserAutomation = await BrowserAutomationSession.create(
-            session.browserSession!,
-            originScope
-          );
-        }
-        session.browserAutomationLastActivity = Date.now();
-        const result = await session.browserAutomation.execute(action, args, originScope);
-        session.browserAutomationLastActivity = Date.now();
-        return { ...result, session_id: session.id };
-      } finally {
-        session.lastActivity = Date.now();
-        session.activeOperations = Math.max(0, session.activeOperations - 1);
-        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
+    try {
+      if (!session.browserSession) {
+        throw new BrowserAutomationUnavailableError(
+          'Browser automation requires a UI transport with a live browser session.'
+        );
       }
-    }, signalWithShutdown);
+      session.lastActivity = Date.now();
+      const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
+      return await session.automationQueue.run(async () => {
+        session.activeOperations += 1;
+        session.status = 'busy';
+        session.lastActivity = Date.now();
+        try {
+          throwIfAborted(signalWithShutdown);
+          if (action.trim().toLowerCase() === 'close') {
+            const current = session.browserAutomation;
+            delete session.browserAutomation;
+            delete session.browserAutomationLastActivity;
+            if (current) await current.close();
+            return { action: 'close', closed: Boolean(current), session_id: session.id };
+          }
+          if (!session.browserAutomation || session.browserAutomation.isClosed()) {
+            session.browserAutomation = await BrowserAutomationSession.create(
+              session.browserSession!,
+              originScope,
+              signalWithShutdown
+            );
+          }
+          throwIfAborted(signalWithShutdown);
+          session.browserAutomationLastActivity = Date.now();
+          const result = await session.browserAutomation.execute(action, args, originScope, signalWithShutdown);
+          throwIfAborted(signalWithShutdown);
+          session.browserAutomationLastActivity = Date.now();
+          return { ...result, session_id: session.id };
+        } finally {
+          session.lastActivity = Date.now();
+          session.activeOperations = Math.max(0, session.activeOperations - 1);
+          session.status = session.activeOperations > 0 ? 'busy' : 'idle';
+        }
+      }, signalWithShutdown);
+    } finally { session.reservations -= 1; }
   }
 
   normalizeSessionId(value: string | undefined): string {
@@ -262,14 +270,17 @@ export class SessionManager {
     const lifecycle = options.lifecycle ?? new ProviderRequestState({ ...(options.signal ? { signal: options.signal } : {}) });
     const signal = combinedSignal(lifecycle.signal, this.shutdownController.signal);
     const startedAt = Date.now();
+    let session: ManagedSession | undefined;
     try {
       throwIfAborted(signal);
-      const session = await traceSpan('kitt.session.resolve', { 'kitt.session.requested': requestedId ?? 'default', 'kitt.provider': this.options.provider }, () => this.resolve(requestedId));
+      session = await traceSpan('kitt.session.resolve', { 'kitt.session.requested': requestedId ?? 'default', 'kitt.provider': this.options.provider }, () => this.resolve(requestedId));
       throwIfAborted(signal);
       const resolvedAt = Date.now();
       updateRequestContext({ sessionId: session.id, provider: session.provider });
       session.lastActivity = Date.now();
+      const leasedSession = session;
       return await session.queue.run(async () => {
+        const session = leasedSession;
         const queueWaitMs = Date.now() - resolvedAt;
         telemetry.recordQueueWait(session.provider, queueWaitMs);
         session.activeOperations += 1; session.status = 'busy';
@@ -301,25 +312,30 @@ export class SessionManager {
     } catch (error) {
       if (error instanceof Error && ownsLifecycle) Object.assign(error, { usage: lifecycle.usage(), requestId: lifecycle.requestId, outcome: lifecycle.submitted ? 'outcome_unknown' : 'failed' });
       throw error;
-    } finally { if (ownsLifecycle) lifecycle.dispose(); }
+    } finally {
+      if (session) session.reservations -= 1;
+      if (ownsLifecycle) lifecycle.dispose();
+    }
   }
 
   async reset(requestedId: string | undefined, signal?: AbortSignal): Promise<void> {
     const session = await this.resolve(requestedId);
-    if (!session.executor.reset) throw new SessionNotSupportedError();
-    const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
-    await session.queue.run(async () => {
-      session.activeOperations += 1;
-      session.status = 'busy';
-      try {
-        await session.executor.reset!();
-        session.generation = ++this.generation;
-      } finally {
-        session.lastActivity = Date.now();
-        session.activeOperations = Math.max(0, session.activeOperations - 1);
-        session.status = session.activeOperations > 0 ? 'busy' : 'idle';
-      }
-    }, signalWithShutdown);
+    try {
+      if (!session.executor.reset) throw new SessionNotSupportedError();
+      const signalWithShutdown = combinedSignal(signal, this.shutdownController.signal);
+      await session.queue.run(async () => {
+        session.activeOperations += 1;
+        session.status = 'busy';
+        try {
+          await session.executor.reset!();
+          session.generation = ++this.generation;
+        } finally {
+          session.lastActivity = Date.now();
+          session.activeOperations = Math.max(0, session.activeOperations - 1);
+          session.status = session.activeOperations > 0 ? 'busy' : 'idle';
+        }
+      }, signalWithShutdown);
+    } finally { session.reservations -= 1; }
   }
 
   async delete(requestedId: string): Promise<boolean> {
@@ -328,7 +344,8 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) return false;
     if (
-      session.status === 'busy'
+      session.reservations > 0
+      || session.status === 'busy'
       || session.queue.depth > 0
       || session.automationQueue.depth > 0
     ) throw new SessionBusyError(id);
@@ -363,12 +380,14 @@ export class SessionManager {
     ).length;
     const idle = values.filter((session) =>
       session.status === 'idle'
+      && session.reservations === 0
       && session.queue.depth === 0
       && session.automationQueue.depth === 0
     ).length;
     const awaitingToolResults = values.filter((session) => awaitsToolResult(session)).length;
     const recyclable = values.filter((session) =>
       !session.isDefault
+      && session.reservations === 0
       && session.status === 'idle'
       && session.queue.depth === 0
       && session.automationQueue.depth === 0
@@ -413,6 +432,7 @@ export class SessionManager {
     const values = [...this.sessions.values()];
     const staleAutomation = values.filter((session) =>
       session.status === 'idle'
+      && session.reservations === 0
       && session.queue.depth === 0
       && session.automationQueue.depth === 0
       && session.browserAutomation
@@ -420,14 +440,18 @@ export class SessionManager {
       && now - (session.browserAutomationLastActivity ?? session.lastActivity) >= automationTimeout
     );
     for (const session of staleAutomation) {
+      // Closing a previous page yields: another request may now hold this session.
+      if (session.reservations !== 0 || session.status !== 'idle'
+          || session.queue.depth !== 0 || session.automationQueue.depth !== 0) continue;
       const current = session.browserAutomation;
       delete session.browserAutomation;
-    delete session.browserAutomationLastActivity;
+      delete session.browserAutomationLastActivity;
       await current?.close().catch(() => undefined);
     }
 
     const stale = values.filter((session) =>
       !session.isDefault
+      && session.reservations === 0
       && session.status === 'idle'
       && session.queue.depth === 0
       && session.automationQueue.depth === 0
@@ -486,10 +510,14 @@ export class SessionManager {
     if (this.closed) throw new SessionNotSupportedError();
     const id = this.normalizeSessionId(requestedId);
     const current = this.sessions.get(id);
-    if (current) return current;
+    if (current) { current.reservations += 1; return current; }
     if (!this.options.factory) throw new SessionNotSupportedError();
     const pending = this.creating.get(id);
-    if (pending) return pending;
+    if (pending) {
+      const session = await pending;
+      session.reservations += 1;
+      return session;
+    }
     const creation = this.create(id);
     this.creating.set(id, creation);
     try { return await creation; }
@@ -513,6 +541,7 @@ export class SessionManager {
       queue: new SerialQueue(this.options.config.maxQueue, this.options.config.minIntervalMs),
       automationQueue: new SerialQueue(this.options.config.maxQueue, 0),
       activeOperations: 0,
+      reservations: 1,
       createdAt: now,
       lastActivity: now,
       status: 'idle',
@@ -564,6 +593,7 @@ export class SessionManager {
     return [...this.sessions.values()]
       .filter((session) =>
         !session.isDefault
+        && session.reservations === 0
         && session.status === 'idle'
         && session.queue.depth === 0
         && session.automationQueue.depth === 0
@@ -602,6 +632,7 @@ export class SessionManager {
 
   private async removeSession(session: ManagedSession): Promise<void> {
     if (this.sessions.get(session.id) !== session) return;
+    if (!this.closed && (session.reservations > 0 || session.queue.depth > 0 || session.automationQueue.depth > 0)) return;
     session.status = 'closing';
     session.queue.close();
     session.automationQueue.close();
