@@ -277,7 +277,8 @@ export class ServiceManager {
           'serve',
           '--profile', profile.directory,
           '--target', target.targetUrl,
-          '--cdp-port', String(browserHostCdpPort)
+          '--cdp-port', String(browserHostCdpPort),
+          ...(ownerPid ? ['--owner-pid', String(ownerPid)] : [])
         ],
         {
           detached: true,
