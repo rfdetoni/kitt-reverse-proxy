@@ -457,10 +457,10 @@ export class ServiceManager {
         profile: instance.profileId,
         port: instance.port,
         host: instance.host,
-        logLevel: instance.logLevel,
-        logContent: instance.logContent,
-        logFile: instance.logFile,
-        ownerPid: instance.ownerPid
+        ...(instance.logLevel !== undefined ? { logLevel: instance.logLevel } : {}),
+        ...(instance.logContent !== undefined ? { logContent: instance.logContent } : {}),
+        ...(instance.logFile ? { logFile: instance.logFile } : {}),
+        ...(instance.ownerPid !== undefined ? { ownerPid: instance.ownerPid } : {})
       });
     });
   }
