@@ -18,7 +18,8 @@ test('managed proxy launch forwards inherited logging and owner pid', () => {
     logLevel: 2,
     logContent: 'full',
     logFile: '/tmp/kitt/reverse-proxy-chatgpt-3001.log',
-    ownerPid: 4242
+    ownerPid: 4242,
+    ownerFingerprint: 'agent-fingerprint'
   });
 
   assert.deepEqual(args.slice(0, 3), [
@@ -33,6 +34,10 @@ test('managed proxy launch forwards inherited logging and owner pid', () => {
     '/tmp/kitt/reverse-proxy-chatgpt-3001.log'
   );
   assert.equal(args[args.indexOf('--owner-pid') + 1], '4242');
+  assert.equal(
+    args[args.indexOf('--owner-fingerprint') + 1],
+    'agent-fingerprint'
+  );
   assert.equal(args[args.indexOf('--user-data-dir') + 1], '/tmp/profile');
 });
 
