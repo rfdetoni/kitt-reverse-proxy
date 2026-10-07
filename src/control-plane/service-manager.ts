@@ -35,6 +35,36 @@ export interface ServiceStatus extends ProxyInstanceRecord {
   status: 'ready' | 'running' | 'unhealthy';
 }
 
+export function buildManagedProxyArgs(input: {
+  cliPath: string;
+  target: ResolvedServiceTarget;
+  host: string;
+  port: number;
+  profileDirectory: string;
+  browserHostCdpPort?: number;
+  logLevel: 0 | 1 | 2;
+  logContent: 'none' | 'metadata' | 'full';
+  logFile: string;
+  ownerPid?: number;
+}): string[] {
+  return [
+    input.cliPath,
+    input.target.input,
+    '--provider', input.target.provider,
+    '--transport', 'ui',
+    '--api-model', input.target.model,
+    '--host', input.host,
+    '--port', String(input.port),
+    ...(input.browserHostCdpPort
+      ? ['--cdp-url', `http://127.0.0.1:${input.browserHostCdpPort}`, '--user-data-dir', input.profileDirectory]
+      : ['--user-data-dir', input.profileDirectory]),
+    '--log-level', String(input.logLevel),
+    '--log-content', input.logContent,
+    '--log-file', input.logFile,
+    ...(input.ownerPid ? ['--owner-pid', String(input.ownerPid)] : [])
+  ];
+}
+
 export const SERVICE_READY_TIMEOUT_MS = 330_000;
 
 export function resolveServiceTarget(input: string): ResolvedServiceTarget {
@@ -305,22 +335,18 @@ export class ServiceManager {
       }
     }
 
-    const args = [
+    const args = buildManagedProxyArgs({
       cliPath,
-      target.input,
-      '--provider', target.provider,
-      '--transport', 'ui',
-      '--api-model', target.model,
-      '--host', host,
-      '--port', String(port),
-      ...(browserHostPid && browserHostCdpPort
-        ? ['--cdp-url', `http://127.0.0.1:${browserHostCdpPort}`, '--user-data-dir', profile.directory]
-        : ['--user-data-dir', profile.directory]),
-      '--log-level', String(logLevel),
-      '--log-content', logContent,
-      '--log-file', serviceLogFile,
-      ...(ownerPid ? ['--owner-pid', String(ownerPid)] : [])
-    ];
+      target,
+      host,
+      port,
+      profileDirectory: profile.directory,
+      ...(browserHostPid && browserHostCdpPort ? { browserHostCdpPort } : {}),
+      logLevel,
+      logContent,
+      logFile: serviceLogFile,
+      ...(ownerPid ? { ownerPid } : {})
+    });
     const child = spawn(process.execPath, args, {
       detached: true,
       stdio: 'ignore',
