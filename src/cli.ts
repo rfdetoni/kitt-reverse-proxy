@@ -10,6 +10,7 @@ import { SessionManager } from './runtime/session-manager.js';
 import { notifyIfUpdateAvailable } from './update-check.js';
 import { SERVICE_VERSION } from './version.js';
 import { runControlPlaneCli } from './control-plane/cli.js';
+import { processAlive, processMatches } from './control-plane/process-identity.js';
 
 function flagValue(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -27,15 +28,6 @@ function withoutFlagValue(args: readonly string[], name: string): string[] {
     if (value !== undefined) result.push(value);
   }
   return result;
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function main(): Promise<void> {
@@ -81,6 +73,7 @@ async function main(): Promise<void> {
   const parentStdinLifecycle = rawArgs.includes('--parent-stdin-lifecycle');
   const rawOwnerPid = flagValue(rawArgs, '--owner-pid');
   const ownerPid = rawOwnerPid === undefined ? undefined : Number(rawOwnerPid);
+  const ownerFingerprint = flagValue(rawArgs, '--owner-fingerprint')?.trim() || undefined;
   if (
     ownerPid !== undefined
     && (!Number.isInteger(ownerPid) || ownerPid < 1)
@@ -88,7 +81,10 @@ async function main(): Promise<void> {
     throw new Error('--owner-pid must be a positive integer.');
   }
   const lifecycleArgs = rawArgs.filter((arg) => arg !== '--parent-stdin-lifecycle');
-  const args = withoutFlagValue(lifecycleArgs, '--owner-pid');
+  const args = withoutFlagValue(
+    withoutFlagValue(lifecycleArgs, '--owner-pid'),
+    '--owner-fingerprint'
+  );
   const parsed = parseCliArgs(args);
   if ('help' in parsed) { printHelp(); return; }
   const config = parsed;
@@ -160,11 +156,16 @@ async function main(): Promise<void> {
     process.once('SIGINT', () => void shutdown('SIGINT'));
     process.once('SIGTERM', () => void shutdown('SIGTERM'));
     if (ownerPid) {
+      const ownerStillMatches = (): boolean => (
+        ownerFingerprint
+          ? processMatches(ownerPid, ownerFingerprint)
+          : processAlive(ownerPid)
+      );
       ownerWatch = setInterval(() => {
-        if (!processAlive(ownerPid)) void shutdown('OWNER_EXIT');
+        if (!ownerStillMatches()) void shutdown('OWNER_EXIT');
       }, 500);
       ownerWatch.unref();
-      if (!processAlive(ownerPid)) await shutdown('OWNER_EXIT');
+      if (!ownerStillMatches()) await shutdown('OWNER_EXIT');
     }
     if (parentClosed) await shutdown('PARENT_STDIN_EOF');
   } catch (error) {
