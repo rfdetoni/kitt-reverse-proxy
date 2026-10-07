@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cliLaunchPresets } from '../config.js';
@@ -25,6 +25,10 @@ export interface StartServiceOptions {
   profile?: string;
   port?: number;
   host?: string;
+  logLevel?: 0 | 1 | 2;
+  logContent?: 'none' | 'metadata' | 'full';
+  logFile?: string;
+  ownerPid?: number;
 }
 
 export interface ServiceStatus extends ProxyInstanceRecord {
@@ -244,6 +248,16 @@ export class ServiceManager {
 
     const logs = join(this.root, 'logs');
     mkdirSync(logs, { recursive: true });
+    const requestedLogFile = options.logFile?.trim();
+    const serviceLogFile = requestedLogFile
+      ? join(dirname(requestedLogFile), `reverse-proxy-${id}.log`)
+      : join(logs, `${id}.log`);
+    mkdirSync(dirname(serviceLogFile), { recursive: true });
+    const logLevel = options.logLevel ?? 0;
+    const logContent = options.logContent ?? (logLevel >= 2 ? 'full' : 'metadata');
+    const ownerPid = Number.isInteger(options.ownerPid) && Number(options.ownerPid) > 0
+      ? Number(options.ownerPid)
+      : undefined;
     const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
     let browserHostPid = owner?.browserHostPid;
     let browserHostFingerprint = owner?.browserHostFingerprint;
@@ -302,7 +316,10 @@ export class ServiceManager {
       ...(browserHostPid && browserHostCdpPort
         ? ['--cdp-url', `http://127.0.0.1:${browserHostCdpPort}`, '--user-data-dir', profile.directory]
         : ['--user-data-dir', profile.directory]),
-      '--log-file', join(logs, `${id}.log`)
+      '--log-level', String(logLevel),
+      '--log-content', logContent,
+      '--log-file', serviceLogFile,
+      ...(ownerPid ? ['--owner-pid', String(ownerPid)] : [])
     ];
     const child = spawn(process.execPath, args, {
       detached: true,
@@ -338,6 +355,10 @@ export class ServiceManager {
       pid: child.pid,
       processFingerprint: serviceFingerprint!,
       startedAt: new Date().toISOString(),
+      logLevel,
+      logContent,
+      logFile: serviceLogFile,
+      ...(ownerPid ? { ownerPid } : {}),
       ...(browserHostPid && browserHostFingerprint && browserHostCdpPort
         ? {
             browserHostPid,
@@ -405,11 +426,15 @@ export class ServiceManager {
       if (!instance) throw new Error('Unknown reverse-proxy instance: ' + id);
       await this.stopUnlocked(instance.id);
       return await this.startUnlocked({
-      target: instance.target,
-      id: instance.id,
-      profile: instance.profileId,
-      port: instance.port,
-        host: instance.host
+        target: instance.target,
+        id: instance.id,
+        profile: instance.profileId,
+        port: instance.port,
+        host: instance.host,
+        logLevel: instance.logLevel,
+        logContent: instance.logContent,
+        logFile: instance.logFile,
+        ownerPid: instance.ownerPid
       });
     });
   }
