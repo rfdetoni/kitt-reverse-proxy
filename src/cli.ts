@@ -23,7 +23,8 @@ function withoutFlagValue(args: readonly string[], name: string): string[] {
       index += 1;
       continue;
     }
-    result.push(args[index]);
+    const value = args[index];
+    if (value !== undefined) result.push(value);
   }
   return result;
 }
