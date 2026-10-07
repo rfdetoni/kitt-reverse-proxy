@@ -24,6 +24,7 @@ export interface ProxyInstanceRecord {
   logContent?: 'none' | 'metadata' | 'full';
   logFile?: string;
   ownerPid?: number;
+  ownerFingerprint?: string;
   browserHostPid?: number;
   browserHostFingerprint?: string;
   browserHostCdpPort?: number;
