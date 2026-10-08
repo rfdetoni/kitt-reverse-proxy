@@ -99,7 +99,7 @@ export function parseKAP(raw: string): KAPMessage {
       assign(root, path, lines.slice(i + 1, until).join("\n"), assigned);
       i = until;
     } else {
-      const match = /^(STRING|INTEGER|BOOLEAN|NULL|ARRAY|OBJECT) ([A-Za-z0-9_.]+)(?: = (.*))?$/.exec(line);
+      const match = /^(STRING|INTEGER|DECIMAL|BOOLEAN|NULL|ARRAY|OBJECT) ([A-Za-z0-9_.]+)(?: = (.*))?$/.exec(line);
       if (!match) throw new KAPError("Unexpected KAP line: " + line.slice(0, 80));
       const [, type, path, rawValue] = match;
       let value: unknown;
@@ -108,6 +108,9 @@ export function parseKAP(raw: string): KAPMessage {
         value = rawValue;
       } else if (type === "INTEGER") {
         if (!rawValue || !/^-?(0|[1-9][0-9]*)$/.test(rawValue) || !Number.isSafeInteger(Number(rawValue))) throw new KAPError("Invalid INTEGER");
+        value = Number(rawValue);
+      } else if (type === "DECIMAL") {
+        if (!rawValue || !/^-?(0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(rawValue) || !Number.isFinite(Number(rawValue))) throw new KAPError("Invalid DECIMAL");
         value = Number(rawValue);
       } else if (type === "BOOLEAN") {
         if (rawValue !== "true" && rawValue !== "false") throw new KAPError("Invalid BOOLEAN");
