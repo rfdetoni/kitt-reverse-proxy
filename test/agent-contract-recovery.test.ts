@@ -187,35 +187,38 @@ test('KAP review text with raw quotes requires no JSON escaping', async () => {
   assert.equal(choices[0]!.message.tool_calls,undefined);
 });
 
-test('contract shape recovery still rejects competing tool arguments', async () => {
-  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"x.py","content":"print("hello")","mode":"append"},"content":null,"reasoning_summary":"","loop":null}';
-  const repaired = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'x.py',content:'print("hello")',mode:'append'},content:null,reasoning_summary:'',loop:null});
-  const failed = await executeRecovery([candidate, repaired], 3, [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'},mode:{type:'string'}},required:['path','content'],additionalProperties:false}}}]);
-  assert.equal(failed.status, 409);
-  assert.equal(failed.attempts, 1);
-  assert.equal(failed.body.choices, undefined);
+test('duplicate KAP tool arguments are ambiguous and fail without repair', async () => {
+  const candidate = [
+    'KITT/1', 'ACTION TOOL', 'TOOL write_file',
+    'STRING path = x.py', 'STRING path = malicious.py',
+    'TEXT content', 'print("hello")', 'KITT/ENDTEXT','KITT/END'
+  ].join('\n');
+  const recovered = await executeRecovery([candidate, writeContract], 3);
+  assert.equal(recovered.status,409);
+  assert.equal(recovered.attempts,1);
+  assert.equal(recovered.body.choices,undefined);
 });
 
-test('conflicting review verdicts cannot be resolved by a model repair at any attempt', async () => {
-  const conflicting = '{"action":"final_response","tool":null,"tool_input":null,"content":{"verdict":"OK","verdict":"REJECT","issues":[]},"reasoning_summary":"","loop":null}';
-  const approved = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:{verdict:'OK',issues:[]},reasoning_summary:'',loop:null});
-  const truncated = '{"action":"final_response","tool":null,"tool_input":null,"content":';
-  for (const outputs of [[conflicting, approved], [truncated, conflicting, approved]]) {
-    const failed = await executeRecovery(outputs);
-    assert.equal(failed.status, 409);
-    assert.equal(failed.attempts, outputs.length - 1);
-    assert.equal((failed.body.error as {code:string}).code, 'agent_contract_invalid');
-    assert.equal(failed.body.choices, undefined);
-  }
+test('competing KAP review verdicts are never repaired into a selected outcome', async () => {
+  const candidate = [
+    'KITT/1','ACTION FINAL','OBJECT content',
+    'STRING content.verdict = OK',
+    'STRING content.verdict = REJECT','ARRAY content.issues','KITT/END'
+  ].join('\n');
+  const repaired = 'KITT/1\nACTION FINAL\nOBJECT content\nSTRING content.verdict = OK\nARRAY content.issues\nKITT/END';
+  const failed = await executeRecovery([candidate, repaired],3);
+  assert.equal(failed.status,409);
+  assert.equal(failed.attempts,1);
+  assert.equal(failed.body.choices,undefined);
 });
 
-test('a drifting repair cannot replace a pending write with a successful final response', async () => {
-  const broken = '{"action":"use_tool","tool":"write_file","tool_input":';
-  const failed = await executeRecovery([broken, falseFinal, falseFinal]);
-  assert.equal(failed.status, 409); assert.equal(failed.attempts, 3);
-  assert.equal((failed.body.error as {recoverable:boolean}).recoverable, true);
-  const recovered = await executeRecovery([broken, falseFinal, writeContract]);
-  assert.equal(recovered.status, 200);
+test('a repair cannot turn a partially written KAP TOOL into a successful final answer', async () => {
+  const broken = 'KITT/1\nACTION TOOL\nTOOL write_file\nSTRING path = x.py\nTEXT content\none';
+  const failed = await executeRecovery([broken, falseFinal, falseFinal],3);
+  assert.equal(failed.status,409);
+  assert.equal((failed.body.error as {recoverable:boolean}).recoverable,true);
+  const recovered = await executeRecovery([broken, falseFinal, writeContract],3);
+  assert.equal(recovered.status,200);
   assert.match(JSON.stringify(recovered.body), /tool_calls/);
 });
 
