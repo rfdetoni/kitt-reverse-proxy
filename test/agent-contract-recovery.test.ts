@@ -184,10 +184,24 @@ test('nested review JSON with raw quotes retains the full contract without an up
 
 test('contract shape recovery still rejects competing tool arguments', async () => {
   const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"x.py","content":"print("hello")","mode":"append"},"content":null,"reasoning_summary":"","loop":null}';
-  const failed = await executeRecovery([candidate], 1, [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'},mode:{type:'string'}},required:['path','content'],additionalProperties:false}}}]);
+  const repaired = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'x.py',content:'print("hello")',mode:'append'},content:null,reasoning_summary:'',loop:null});
+  const failed = await executeRecovery([candidate, repaired], 3, [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'},mode:{type:'string'}},required:['path','content'],additionalProperties:false}}}]);
   assert.equal(failed.status, 409);
   assert.equal(failed.attempts, 1);
   assert.equal(failed.body.choices, undefined);
+});
+
+test('conflicting review verdicts cannot be resolved by a model repair at any attempt', async () => {
+  const conflicting = '{"action":"final_response","tool":null,"tool_input":null,"content":{"verdict":"OK","verdict":"REJECT","issues":[]},"reasoning_summary":"","loop":null}';
+  const approved = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:{verdict:'OK',issues:[]},reasoning_summary:'',loop:null});
+  const truncated = '{"action":"final_response","tool":null,"tool_input":null,"content":';
+  for (const outputs of [[conflicting, approved], [truncated, conflicting, approved]]) {
+    const failed = await executeRecovery(outputs);
+    assert.equal(failed.status, 409);
+    assert.equal(failed.attempts, outputs.length - 1);
+    assert.equal((failed.body.error as {code:string}).code, 'agent_contract_invalid');
+    assert.equal(failed.body.choices, undefined);
+  }
 });
 
 test('a drifting repair cannot replace a pending write with a successful final response', async () => {

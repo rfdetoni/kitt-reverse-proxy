@@ -259,8 +259,9 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  if (firstValidationError.kind === 'limit') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
-  const buildFirstRepair = firstValidationError.kind === 'syntax' || firstValidationError.kind === 'ambiguous'
+  // A repair may restore syntax, but cannot choose between competing decisions.
+  if (firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  const buildFirstRepair = firstValidationError.kind === 'syntax'
     ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
   const repairBody = buildFirstRepair(plan, firstValidationError, first.completion.choices[0]?.message.content ?? '');
   logger.trace('agent.contract.request.raw', {
@@ -294,7 +295,8 @@ async function executeAgentContract(
   }
 
   const repairCandidate = first.completion.choices[0]?.message.content ?? '';
-  if (retry.completion.choices[0]?.message.content === repairCandidate || repairValidationError.kind === 'limit') {
+  if (repairValidationError.kind === 'limit' || repairValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', repairValidationError.message, true, 'continue');
+  if (retry.completion.choices[0]?.message.content === repairCandidate) {
     throw new AgentContractError(409, 'agent_contract_invalid', 'Contract repair made no progress within the recovery budget.', true, 'continue');
   }
   // Always anchor to the original decision; a drifting repair is not evidence.

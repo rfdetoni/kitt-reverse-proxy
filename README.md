@@ -1,3 +1,7 @@
+## Release 5.0.1 — Ambiguous decisions never enter model repair
+
+The HTTP recovery flow returns 409 immediately when the response has competing contract interpretations or duplicate keys, including when ambiguity first appears in a repair response. Syntax repair cannot ask a model to choose a verdict or tool arguments. Unique local recovery and faithful syntax/schema repairs remain available. See [release notes](docs/RELEASE_5.0.1.md).
+
 ## Release 5.0.0 — Agent contract v3
 
 Structured plans and review/validation/completion reports travel as objects directly in content. Protocol 0.10.0 owns the response schema and identifiers; Agent 0.85.0 is the compatible consumer. Unsupported Agent versions fail explicitly instead of falling through to generic chat. Unique shape-based recovery remains available. See [release notes](docs/RELEASE_5.0.0.md).
