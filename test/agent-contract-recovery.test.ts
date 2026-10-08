@@ -1,3 +1,4 @@
+import { kapFromHistoricFixture, kapFixture } from './kap-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -17,7 +18,7 @@ function result(content: string): ChatExecutionResult {
       model: 'chatgpt-web',
       choices: [{
         index: 0,
-        message: { role: 'assistant', content },
+        message: { role: 'assistant', content: kapFromHistoricFixture(content) },
         finish_reason: 'stop'
       }]
     },
@@ -161,25 +162,29 @@ test('the logged Gemini mirror executes the original action without an upstream 
   assert.equal(choices[0]!.message.content, 'Inspeção inicial do diretório de trabalho para verificar estrutura existente.');
 });
 
-test('local contract syntax repair avoids an upstream retry and preserves file formatting', async () => {
-  const recovered = await executeRecovery([writeContract.replace('one\\ntwo\\n','one\ntwo\n')]);
-  assert.equal(recovered.status, 200); assert.equal(recovered.attempts, 1);
-  const choices = recovered.body.choices as Array<{message:{tool_calls:Array<{function:{arguments:string}}>}}>;
-  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {path:'x.py',content:'one\ntwo\n'});
-});
-
-test('nested review JSON with raw quotes retains the full contract without an upstream retry', async () => {
-  const content = 'KITT_PLAN_REVIEW: {"verdict":"OK","issues":[]}';
-  const contract = JSON.stringify({action:'final_response',tool:null,tool_input:null,content,
-    reasoning_summary:'Reviewed the plan.',loop:{objective:'Review the execution plan',
-      completion_criteria:['Verify task dependencies','Emit a verdict'],status:'complete',validation_summary:'No blocking issues.'}}, null, 2);
-  const candidate = contract.replace(JSON.stringify(content), '"' + content + '"');
+test('literal multiline KAP write preserves file formatting without upstream repair', async () => {
+  const source = 'one\ntwo\n';
+  const candidate = [
+    'KITT/1','ACTION TOOL','TOOL write_file',
+    'STRING path = x.py', 'TEXT content', source, 'KITT/ENDTEXT', 'KITT/END'
+  ].join('\n');
   const recovered = await executeRecovery([candidate], 1);
   assert.equal(recovered.status, 200);
   assert.equal(recovered.attempts, 1);
+  const choices = recovered.body.choices as Array<{message:{tool_calls:Array<{function:{arguments:string}}>}}>;
+  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {path:'x.py',content:source});
+});
+
+test('KAP review text with raw quotes requires no JSON escaping', async () => {
+  const content = 'KITT_PLAN_REVIEW: {"verdict":"OK","issues":[]}';
+  const recovered = await executeRecovery([[
+    'KITT/1', 'ACTION FINAL', 'TEXT content', content, 'KITT/ENDTEXT', 'KITT/END'
+  ].join('\n')],1);
+  assert.equal(recovered.status,200);
+  assert.equal(recovered.attempts,1);
   const choices = recovered.body.choices as Array<{message:{content:string;tool_calls?:unknown}}>;
   assert.equal(choices[0]!.message.content, content);
-  assert.equal(choices[0]!.message.tool_calls, undefined);
+  assert.equal(choices[0]!.message.tool_calls,undefined);
 });
 
 test('contract shape recovery still rejects competing tool arguments', async () => {
