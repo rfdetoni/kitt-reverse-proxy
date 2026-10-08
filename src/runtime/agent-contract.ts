@@ -644,7 +644,9 @@ function parseStrictContract(text: string): AgentContractResponse {
     if (error instanceof AgentContractValidationError) throw error;
     throw new AgentContractValidationError(
       `${NON_KAP_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : String(error)}`,
-      error instanceof KAPError ? 'syntax' : 'shape'
+      error instanceof KAPError
+        ? (/Duplicate|already assigned|conflict|Conflicting/i.test(error.message) ? 'ambiguous' : 'syntax')
+        : 'shape'
     );
   }
 }
