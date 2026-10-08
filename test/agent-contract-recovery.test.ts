@@ -77,7 +77,7 @@ test('contract repair keeps the same session lease and original task context', a
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-kitt-agent-contract': 'v3',
+          'x-kitt-agent-contract': 'v4',
           'x-kitt-route': 'chat',
           'x-kitt-session-id': 'stable-session'
         },
@@ -105,7 +105,7 @@ test('contract repair keeps the same session lease and original task context', a
   }
 });
 
-async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonObject[], version = 'v3'): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
+async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonObject[], version = 'v4'): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
   let attempts = 0;
   const lease: SessionExecutionLease = {
     sessionId: 'recovery-regression', contextKey: `recovery-${Math.random()}`, generation: 1,
