@@ -645,7 +645,9 @@ function parseStrictContract(text: string): AgentContractResponse {
     throw new AgentContractValidationError(
       `${NON_KAP_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : String(error)}`,
       error instanceof KAPError
-        ? (/Duplicate|already assigned|conflict|Conflicting/i.test(error.message) ? 'ambiguous' : 'syntax')
+        ? (/exceeds|too large|payload.*KiB/i.test(error.message) ? 'limit'
+          : /Duplicate|already assigned|conflict|Conflicting/i.test(error.message) ? 'ambiguous'
+          : 'syntax')
         : 'shape'
     );
   }
@@ -746,31 +748,50 @@ export function buildAgentContractRetryBody(plan: AgentContractPlan): JsonObject
 }
 
 /** A repair may fix syntax but must not change an already explicit decision or valid field. */
+/** Repair may fix malformed syntax, but cannot silently rewrite stable decisions or fields. */
 export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
-  const original = candidate.trim().split(/\r?\n/);
-  const next = repaired.trim().split(/\r?\n/);
-  for (const directive of ['ACTION ', 'TOOL '] as const) {
-    const current = original.filter(line => line.startsWith(directive));
-    if (current.length > 1) throw new AgentContractValidationError('Conflicting contract directives cannot be repaired.', 'ambiguous');
-    if (current.length === 1 && !next.includes(current[0]!)) {
+  const extract = (raw: string): { decisions: Map<string, string>; fields: Map<string, string> } => {
+    const lines = raw.trim().split(/\r?\n/);
+    const decisions = new Map<string, string>();
+    const fields = new Map<string, string>();
+    const directive = /^(STRING|INTEGER|DECIMAL|BOOLEAN|NULL|ARRAY|OBJECT|TEXT) ([A-Za-z0-9_.]+)(?: = .*)?$/;
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index]!;
+      const control = /^(ACTION|TOOL) (.+)$/.exec(line);
+      if (control) {
+        if (decisions.has(control[1]!)) throw new AgentContractValidationError('Conflicting contract directives cannot be repaired.', 'ambiguous');
+        decisions.set(control[1]!, control[2]!);
+        continue;
+      }
+      const match = directive.exec(line);
+      if (!match) continue;
+      const path = match[2]!;
+      if (fields.has(path)) throw new AgentContractValidationError('Competing field values cannot be repaired.', 'ambiguous');
+      if (match[1] === 'TEXT') {
+        const end = lines.indexOf('KITT/ENDTEXT', index + 1);
+        if (end < 0) break; // Truncated field: only complete preceding fields are anchored.
+        fields.set(path, lines.slice(index, end + 1).join('\n'));
+        index = end;
+      } else {
+        fields.set(path, line);
+      }
+    }
+    return { decisions, fields };
+  };
+  const before = extract(candidate);
+  // Never use substring matches: a tool argument echoed inside TEXT is not an action.
+  const after = extract(repaired);
+  for (const [key, value] of before.decisions) {
+    if (after.decisions.get(key) !== value) {
       throw new AgentContractValidationError('Repair changed the original action or tool.', 'ambiguous');
     }
   }
-  // Paths mentioned in a schema error may be modified; completed unrelated fields remain fixed.
-  const allowed = new Set(error.paths.map(path => path.replace(/^\$\/(?:tool_input\/)?/, '').replaceAll('/', '.')));
-  const field = /^(STRING|INTEGER|BOOLEAN|NULL|ARRAY|OBJECT|TEXT) ([A-Za-z0-9_.]+)(?: = .*)?$/;
-  for (let i = 0; i < original.length; i++) {
-    const match = field.exec(original[i]!);
-    if (!match) continue;
-    const path = match[2]!;
-    if ([...allowed].some(p => path === p || path.startsWith(p + '.'))) continue;
-    if (match[1] === 'TEXT') {
-      const end = original.indexOf('KITT/ENDTEXT', i + 1);
-      if (end < 0) continue;
-      const block = original.slice(i, end + 1).join('\n');
-      if (!next.join('\n').includes(block)) throw new AgentContractValidationError('Repair modified a complete TEXT field: ' + path, 'ambiguous');
-      i = end;
-    } else if (!next.includes(original[i]!)) {
+  const allowed = error.paths.map(path =>
+    path.replace(/^\$\/(?:tool_input\/)?/, '').replaceAll('/', '.')
+  );
+  for (const [path, value] of before.fields) {
+    if (allowed.some(prefix => prefix === path || path.startsWith(prefix + '.'))) continue;
+    if (after.fields.get(path) !== value) {
       throw new AgentContractValidationError('Repair modified an unrelated field: ' + path, 'ambiguous');
     }
   }
