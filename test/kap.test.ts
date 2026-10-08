@@ -92,3 +92,29 @@ test('prompts request textual KAP rather than escaped JSON envelopes', () => {
   assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /TEXT arguments\.content/);
   assert.doesNotMatch(AGENT_CONTRACT_SYSTEM_PROMPT, /Prefer bare JSON|Escape double quotes/);
 });
+
+
+test('repair cannot hide a changed target path inside multiline text', async () => {
+  const { assertAgentRepairContinuity, AgentContractValidationError } = await import('../src/runtime/agent-contract.js');
+  const before = [
+    'KITT/1', 'ACTION TOOL', 'TOOL write_file',
+    'STRING path = safe.py', 'TEXT content', 'incomplete'
+  ].join('\n');
+  const unsafe = [
+    'KITT/1', 'ACTION TOOL', 'TOOL write_file',
+    'STRING path = dangerous.py', 'TEXT content',
+    'STRING path = safe.py', 'KITT/ENDTEXT', 'KITT/END'
+  ].join('\n');
+  assert.throws(() => assertAgentRepairContinuity(
+    before, unsafe, new AgentContractValidationError('truncated text', 'syntax')
+  ), /unrelated field/);
+});
+
+test('repair must retain complete decimal review fields', async () => {
+  const { assertAgentRepairContinuity, AgentContractValidationError } = await import('../src/runtime/agent-contract.js');
+  const before = 'KITT/1\nACTION FINAL\nOBJECT content\nDECIMAL content.confidence = 0.95\nKITT/END';
+  const after = before.replace('0.95', '0.01');
+  assert.throws(() => assertAgentRepairContinuity(
+    before, after, new AgentContractValidationError('invalid review', 'shape')
+  ), /unrelated field/);
+});
