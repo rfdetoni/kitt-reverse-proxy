@@ -302,9 +302,10 @@ export async function sendUiPrompt(
 
   while (Date.now() < sendButtonDeadline) {
     throwIfAborted(signal);
-    const send = await firstVisibleLocator(session.page, sendSelectors);
-    if (send && await send.isEnabled().catch(() => false)) {
+    const send = await firstVisibleLocator(session.page, sendSelectors, true);
+    if (send) {
       beforeSubmit?.();
+      logger.debug('ui.prompt.submission', {provider_id: provider.id, outcome: 'dispatch', method: 'button', prompt_chars: prompt.length});
       await send.click({ timeout: 2_000 });
       submitted = true;
       break;
@@ -316,6 +317,7 @@ export async function sendUiPrompt(
     throwIfAborted(signal);
     await input.focus().catch(() => undefined);
     beforeSubmit?.();
+    logger.debug('ui.prompt.submission', {provider_id: provider.id, outcome: 'dispatch', method: 'enter', prompt_chars: prompt.length});
     await input.press('Enter', { timeout: 2_000 });
   }
 

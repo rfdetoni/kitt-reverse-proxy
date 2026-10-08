@@ -17,12 +17,16 @@ function frames(page: Page): Frame[] {
   return page.frames().filter((frame: Frame) => !frame.isDetached());
 }
 
-export async function firstVisibleLocator(page: Page, selectors: readonly string[]): Promise<Locator | undefined> {
+export async function firstVisibleLocator(page: Page, selectors: readonly string[], requireEnabled = false): Promise<Locator | undefined> {
   for (const frame of frames(page)) {
     for (const selector of selectors) {
       try {
-        const locator = frame.locator(selector).last();
-        if (await locator.count() > 0 && await locator.isVisible({ timeout: 150 }).catch(() => false)) {
+        const matches = frame.locator(selector);
+        const candidates = requireEnabled ? await matches.all() : [matches.last()];
+        for (let index = candidates.length - 1; index >= 0; index--) {
+          const locator = candidates[index]!;
+          if (await locator.count() === 0 || !await locator.isVisible({ timeout: 150 }).catch(() => false)) continue;
+          if (requireEnabled && !await locator.isEnabled({ timeout: 150 }).catch(() => false)) continue;
           return locator;
         }
       } catch {

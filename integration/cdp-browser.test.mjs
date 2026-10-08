@@ -134,7 +134,7 @@ test('real Chromium DOM preserves the logged Gemini contract beside code artifac
   } finally { await browser.close(); }
 });
 
-test('real Chromium requires submission acceptance and monitors semantic generation controls', {timeout: 30_000}, async () => {
+test('real Chromium selects enabled send controls, requires acceptance and monitors generation', {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const context = await browser.newContext();
@@ -142,6 +142,24 @@ test('real Chromium requires submission acceptance and monitors semantic generat
     const session = {context, page};
     const provider = detectProvider('https://gemini.google.com/app');
     const config = {manualInterventionTimeoutMs: 1_000, uiResponseTimeoutMs: 1_000, uiSettleMs: 100, headed: false};
+    for (const label of ['Send message', 'Enviar mensagem']) {
+      await page.setContent(`<rich-textarea><div id="draft" class="ql-editor" contenteditable="true"></div></rich-textarea>
+        <button id="active-send" class="send-button" aria-label="${label}">Send</button>
+        <button aria-label="Send message" disabled>Inactive draft</button>
+        <button aria-label="Send message" aria-disabled="true">Inactive variant</button>`);
+      await page.locator('#active-send').evaluate(button => {
+        button.onclick = () => {
+          window.sent = document.querySelector('#draft').innerText;
+          window.clicks = (window.clicks || 0) + 1;
+          document.querySelector('#draft').textContent = '';
+        };
+      });
+      const prompt = 'Current task\nPreserve "quotes" and line breaks.';
+      await sendUiPrompt(session, provider, config, prompt);
+      assert.equal(await page.evaluate(() => window.sent), prompt);
+      assert.equal(await page.evaluate(() => window.clicks), 1);
+      await page.evaluate(() => { delete window.sent; delete window.clicks; });
+    }
     await page.setContent(`<rich-textarea><div id="draft" class="ql-editor" contenteditable="true"></div></rich-textarea>
       <button aria-label="Send message" onclick="window.clicks=(window.clicks||0)+1">Send</button>`);
     await assert.rejects(sendUiPrompt(session, provider, config, 'Current task'), error => error instanceof UiAutomationError && /confirm/i.test(error.message));

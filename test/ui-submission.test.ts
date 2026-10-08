@@ -8,7 +8,7 @@ import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 test('UI submission requires acceptance, including ignored click/Enter and detached composer', async () => {
   const provider = detectProvider('https://gemini.google.com/app');
   const config = {manualInterventionTimeoutMs: 1_000} as AppConfig;
-  await Promise.all(['ignored-click', 'ignored-enter', 'detached', 'cleared'].map(async (mode) => {
+  await Promise.all(['ignored-click', 'ignored-enter', 'detached', 'cleared', 'shadowed'].map(async (mode) => {
     let text = '';
     let submitted = false;
     let clicks = 0;
@@ -25,12 +25,14 @@ test('UI submission requires acceptance, including ignored click/Enter and detac
         return text;
       }
     };
+    const disabled = {count: async () => 1, isVisible: async () => true, isEnabled: async () => false};
     const button = {
-      last() { return this; },
-      count: async () => mode === 'ignored-enter' ? 0 : 1,
+      last() { return mode === 'shadowed' ? disabled : this; },
+      all() { return mode === 'shadowed' ? [this, disabled] : [this]; },
+      count: async () => mode === 'ignored-enter' ? 0 : mode === 'shadowed' ? 2 : 1,
       isVisible: async () => true,
       isEnabled: async () => true,
-      click: async () => { clicks++; submitted = true; if (mode === 'cleared') text = ''; }
+      click: async () => { clicks++; submitted = true; if (mode === 'cleared' || mode === 'shadowed') text = ''; }
     };
     const frame = {
       isDetached: () => false,
@@ -39,7 +41,7 @@ test('UI submission requires acceptance, including ignored click/Enter and detac
     };
     const session = {page: {frames: () => [frame]}} as unknown as LiveBrowserSession;
     const pending = sendUiPrompt(session, provider, config, 'Current task');
-    if (mode === 'cleared') await pending;
+    if (mode === 'cleared' || mode === 'shadowed') await pending;
     else await assert.rejects(pending, (error: unknown) => error instanceof UiAutomationError && /confirm/i.test(error.message));
     assert.equal(clicks, mode === 'ignored-enter' ? 0 : 1);
     assert.equal(enters, mode === 'ignored-enter' ? 1 : 0, 'never submit a second time after uncertain acceptance');

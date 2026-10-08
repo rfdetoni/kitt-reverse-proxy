@@ -1,3 +1,7 @@
+## Release 5.0.2 — Select an enabled chat send control
+
+Submission searches all visible candidates for an enabled send control. A disabled native/ARIA variant no longer masks an active button or sends the flow to Enter, which may only insert a newline in Gemini. Logs distinguish button dispatch, Enter fallback and confirmed acceptance. See [release notes](docs/RELEASE_5.0.2.md).
+
 ## Release 5.0.1 — Ambiguous decisions never enter model repair
 
 The HTTP recovery flow returns 409 immediately when the response has competing contract interpretations or duplicate keys, including when ambiguity first appears in a repair response. Syntax repair cannot ask a model to choose a verdict or tool arguments. Unique local recovery and faithful syntax/schema repairs remain available. See [release notes](docs/RELEASE_5.0.1.md).
