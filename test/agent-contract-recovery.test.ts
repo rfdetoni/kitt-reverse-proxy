@@ -1,4 +1,4 @@
-import { kapFromHistoricFixture, kapFixture } from './kap-fixtures.js';
+import { kapFromHistoricFixture } from './kap-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
