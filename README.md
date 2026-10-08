@@ -1,3 +1,7 @@
+## 5.1.0 — KAP/1 WebChat action wire
+
+Agent contract v4 prompts the WebChat for bounded KAP/1 textual actions instead of nested JSON envelopes; the host still validates permissions and emits OpenAI-compatible tool calls. The wire grammar is maintained by [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP.md).
+
 ## Release 5.0.2 — Select an enabled chat send control
 
 Submission searches all visible candidates for an enabled send control. A disabled native/ARIA variant no longer masks an active button or sends the flow to Enter, which may only insert a newline in Gemini. Logs distinguish button dispatch, Enter fallback and confirmed acceptance. See [release notes](docs/RELEASE_5.0.2.md).

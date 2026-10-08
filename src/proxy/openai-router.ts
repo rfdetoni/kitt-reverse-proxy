@@ -128,7 +128,7 @@ export function buildAgentContractRepairBody(
       `ERROR_KIND: ${validationError.kind}`,
       `AFFECTED_PATHS: ${JSON.stringify(validationError.paths)}`,
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct only the reported output-contract violation. Return one contract action and no extra prose.',
+      'REPAIR_INSTRUCTION: Correct only the reported KAP/1 violation. Return one KITT/1 action ending KITT/END; no extra prose.',
       'Use the candidate as the source of intended action. Preserve it when valid; change only fields implicated by the validation error.',
       'Do not restart, re-plan, summarize, or answer the original task inside the repair response.',
       '[END KITT CONTRACT REPAIR]'
@@ -152,10 +152,10 @@ export function buildAgentContractSerializationRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the candidate action and data, but emit exactly one syntactically valid contract payload matching the output contract.',
       'Do not restart, re-plan, summarize, or answer the original task. Repair serialization only.',
-      'Escape every newline, tab, backslash, quote, and control character inside string values using JSON escapes. Never place literal newlines inside a JSON string.',
-      'When serializing repo.write_file or patch content, preserve the original file indentation and line breaks exactly inside the escaped string. Never flatten or minify file content to make the outer JSON easier to serialize.',
-      'For repo.write_file or patch content, wrap the entire contract object in exactly one ```json fenced block; write no prose, comments, labels, or trailing text outside that block.',
-      'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string. Structured final-response content must also remain an object rather than an escaped JSON string.',
+      'Respond with KAP/1 text: exactly one ACTION and KITT/END; no model-authored JSON.',
+      'Use typed fields for scalar values and TEXT fields for multiline code without escaping quotes or backslashes.',
+      'For structured results use OBJECT content, ARRAY content.items and typed nested fields.',
+      'Preserve the original action, tool name and all unaffected fields exactly.',
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
   });
