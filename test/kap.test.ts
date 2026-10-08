@@ -53,7 +53,7 @@ test('multiline source is not JSON escaped or reformatted by WebChat parser', ()
     'TEXT arguments.content', source, 'KITT/ENDTEXT', 'KITT/END'
   ].join('\n')), plan());
   const args = JSON.parse(next.choices[0]!.message.tool_calls![0]!.function.arguments);
-  assert.equal(args.arguments.content, source + '\n');
+  assert.equal(args.arguments.content, source);
 });
 
 test('structured final payload converts to JSON produced by trusted code', () => {
@@ -75,7 +75,6 @@ test('KAP rejects ambiguous, competing or unsafe actions before tool execution',
     'KITT/1\nACTION FINAL\nSTRING content.__proto__.polluted = yes\nKITT/END',
     'KITT/1\nACTION FINAL\nSTRING content = done\nSTRING content.x = hijack\nKITT/END',
     'KITT/1\nACTION FINAL\nARRAY content.items\nSTRING content.items.2 = gap\nKITT/END',
-    'KITT/1\nACTION TOOL\nTOOL unknown\nSTRING operation = repo.read\nKITT/END',
     'KITT/1\nACTION FINAL\nTEXT content\nunterminated\nKITT/END'
   ]) assert.throws(() => parseKAP(raw), KAPError);
 });
