@@ -37,10 +37,10 @@ function assign(root: Record<string, unknown>, path: string, value: unknown, ass
     const part = parts[i]!;
     const key = Array.isArray(parent) ? Number(part) : part;
     if (Array.isArray(parent) && (!Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
-    let child = (parent as any)[key];
+    let child = (parent as Record<string | number, unknown>)[key];
     if (child === undefined) {
       child = /^[0-9]+$/.test(parts[i + 1]!) ? [] : Object.create(null);
-      (parent as any)[key] = child;
+      (parent as Record<string | number, unknown>)[key] = child;
     }
     if (child === null || typeof child !== "object" || !(Array.isArray(child) || Object.getPrototypeOf(child) === null)) {
       throw new KAPError("Field path conflicts with scalar: " + path);
@@ -51,7 +51,7 @@ function assign(root: Record<string, unknown>, path: string, value: unknown, ass
   const key = Array.isArray(parent) ? Number(last) : last;
   if (Array.isArray(parent) && (!Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
   if (Object.hasOwn(parent, key)) throw new KAPError("Field already assigned: " + path);
-  (parent as any)[key] = value;
+  (parent as Record<string | number, unknown>)[key] = value;
   assigned.add(path);
 }
 
@@ -69,7 +69,7 @@ function complete(value: unknown): void {
 
 /** Never guess a response from prose or interpret a competing second envelope. */
 export function parseKAP(raw: string): KAPMessage {
-  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > MAX_BYTES) throw new KAPError("KAP payload exceeds 64 KiB");
+  if (typeof raw !== "string" || new TextEncoder().encode(raw).length > MAX_BYTES) throw new KAPError("KAP payload exceeds 64 KiB");
   let input = raw.trim();
   const fence = /^```(?:kap|text)?\r?\n([\s\S]*?)\r?\n```$/i.exec(input);
   if (fence) input = fence[1]!;
