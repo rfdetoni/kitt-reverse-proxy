@@ -6,7 +6,7 @@ export class RequestDeadlineError extends Error {
   constructor() { super('The end-to-end request deadline was exceeded.'); this.name = 'RequestDeadlineError'; }
 }
 export class AttemptBudgetError extends Error {
-  constructor() { super('The authorized upstream attempt/prompt budget was exhausted.'); this.name = 'AttemptBudgetError'; }
+  constructor() { super('The authorized upstream attempt budget was exhausted.'); this.name = 'AttemptBudgetError'; }
 }
 export class ProviderRequestState {
   readonly requestId: string;
@@ -14,7 +14,6 @@ export class ProviderRequestState {
   readonly deadline: number;
   readonly signal: AbortSignal;
   readonly maxAttempts: number;
-  readonly maxPromptTokens: number;
   phase: 'queued' | 'submitted' | 'receiving' | 'completed' | 'failed' | 'outcome_unknown' = 'queued';
   attempts = 0;
   promptTokens = 0;
@@ -26,7 +25,8 @@ export class ProviderRequestState {
     this.requestId = input.requestId ?? randomUUID();
     this.deadline = this.startedAt + Math.max(1, Math.min(900_000, input.timeoutMs ?? 240_000));
     this.maxAttempts = Math.max(1, Math.min(3, input.maxAttempts ?? 3));
-    this.maxPromptTokens = Math.max(1, Math.min(1_000_000, input.maxPromptTokens ?? 1_000_000));
+    // Legacy maxPromptTokens is accepted during rolling upgrades but ignored:
+    // the WebChat provider owns context and output token limits.
     this.signal = input.signal ? AbortSignal.any([input.signal, this.controller.signal]) : this.controller.signal;
     this.timer = setTimeout(() => this.controller.abort(new RequestDeadlineError()), Math.max(1, this.deadline - Date.now()));
     this.timer.unref();
@@ -35,7 +35,7 @@ export class ProviderRequestState {
     if (Date.now() >= this.deadline) throw new RequestDeadlineError();
     throwIfAborted(this.signal);
     const tokens = estimateTokenCount(prompt);
-    if (this.attempts >= this.maxAttempts || this.promptTokens + tokens > this.maxPromptTokens) throw new AttemptBudgetError();
+    if (this.attempts >= this.maxAttempts) throw new AttemptBudgetError();
     this.attempts += 1; this.promptTokens += tokens; this.submitted = true; this.phase = 'submitted';
   }
   received(text: string): void { this.completionTokens += estimateTokenCount(text); this.phase = 'receiving'; }

@@ -46,7 +46,7 @@ test('queued cancellation releases capacity immediately without executing the ca
 });
 
 test('one lifecycle charges hidden attempts cumulatively and respects a whole-request deadline', async () => {
-  const lifecycle = new ProviderRequestState({ maxAttempts: 2, maxPromptTokens: 100, timeoutMs: 15 });
+  const lifecycle = new ProviderRequestState({ maxAttempts: 2, maxPromptTokens: 1, timeoutMs: 15 });
   try {
     lifecycle.beforeSubmit('first prompt'); lifecycle.received('candidate'); lifecycle.beforeSubmit('repair prompt');
     assert.throws(() => lifecycle.beforeSubmit('third'), AttemptBudgetError);
@@ -54,6 +54,17 @@ test('one lifecycle charges hidden attempts cumulatively and respects a whole-re
     assert.equal(lifecycle.usage(true).total_tokens, 0);
     await new Promise((r) => setTimeout(r, 20));
     assert.throws(() => lifecycle.beforeSubmit('later'), RequestDeadlineError);
+  } finally { lifecycle.dispose(); }
+});
+
+test('WebChat token usage is telemetry even beyond the former million-token ceiling', () => {
+  const lifecycle = new ProviderRequestState({ maxAttempts: 1 });
+  try {
+    lifecycle.beforeSubmit('x'.repeat(4_100_000));
+    lifecycle.received('y'.repeat(4_100_000));
+    assert.ok(Number(lifecycle.usage().prompt_tokens) > 1_000_000);
+    assert.ok(Number(lifecycle.usage().completion_tokens) > 1_000_000);
+    assert.throws(() => lifecycle.beforeSubmit('another attempt'), AttemptBudgetError);
   } finally { lifecycle.dispose(); }
 });
 

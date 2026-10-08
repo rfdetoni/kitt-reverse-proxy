@@ -1,3 +1,9 @@
+## Release 4.9.18 — WebChat owns token limits
+
+Prompt and completion token estimates are telemetry. Request lifecycle admission enforces attempt/deadline controls without a local token ceiling. Legacy max_prompt_tokens metadata is accepted for rolling upgrades and ignored.
+
+See [release notes](docs/RELEASE_4.9.18.md).
+
 ## Release 4.9.17 — Session admission and browser cancellation
 
 Session resolution reserves an admitted caller before asynchronous dispatch. Capacity recycling, idle sweeps and deletion respect reservations; all queue/error paths release them. Automation cancellation closes its dedicated tab and checks before further actions. Agent-contract tool arguments share the inclusive 64 KiB UTF-8 JSON limit with the generic tool route and Agent CLI.

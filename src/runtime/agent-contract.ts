@@ -350,7 +350,7 @@ function parseKittRequestMetadata(value: unknown): KittRequestMetadata | undefin
     }
     result[key] = raw.trim();
   }
-  for (const [key, limit] of [['max_upstream_attempts', 3], ['deadline_ms', 900_000], ['max_prompt_tokens', 1_000_000]] as const) {
+  for (const [key, limit] of [['max_upstream_attempts', 3], ['deadline_ms', 900_000]] as const) {
     const raw = value[key]; if (raw === undefined) continue;
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1 || raw > limit) {
       throw new AgentContractError(400, 'agent_contract_metadata_invalid', `invalid kitt_meta.${key}`);
