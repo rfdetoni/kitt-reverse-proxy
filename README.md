@@ -1,3 +1,7 @@
+## Release 5.0.0 — Agent contract v3
+
+Structured plans and review/validation/completion reports travel as objects directly in content. Protocol 0.10.0 owns the response schema and identifiers; Agent 0.85.0 is the compatible consumer. Unsupported Agent versions fail explicitly instead of falling through to generic chat. Unique shape-based recovery remains available. See [release notes](docs/RELEASE_5.0.0.md).
+
 ## Release 4.9.19 — Nested JSON contract recovery
 
 Agent-contract recovery uses its mandatory field shape to discard parses that swallow required fields when WebChat omits quote escapes inside content. Exactly one matching interpretation is required; competing tool arguments remain invalid. The complete content is preserved without another provider request.

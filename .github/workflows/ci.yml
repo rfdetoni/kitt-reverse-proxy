@@ -24,6 +24,15 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
+      - name: Checkout authoritative Agent contract
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: rfdetoni/kitt-protocol
+          ref: c3bb542f81f8808f0d93f950ab6af5c223fddf4b
+          path: protocol-source
+          persist-credentials: false
+      - name: Check generated Agent response schema
+        run: python3 protocol-source/scripts/export_agent_contract.py --check --output src/contracts/agent-contract.ts
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - name: Typecheck critical surface
         run: npm run check

@@ -79,7 +79,11 @@ function markStructuredOutput(res: Response, failed: boolean): void {
 }
 
 function agentContractEnabled(req: Request): boolean {
-  return (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase() === AGENT_CONTRACT_VERSION;
+  const version = (req.get(AGENT_CONTRACT_HEADER) || '').trim().toLowerCase();
+  if (version && version !== AGENT_CONTRACT_VERSION) {
+    throw new AgentContractError(400, 'agent_contract_version_mismatch', `Unsupported Agent contract ${version}; expected ${AGENT_CONTRACT_VERSION}. Update Agent and Proxy together.`);
+  }
+  return Boolean(version);
 }
 
 function compactContractRepairMessages(plan: AgentContractPlan, candidate: string): JsonObject[] {
@@ -151,7 +155,7 @@ export function buildAgentContractSerializationRepairBody(
       'Escape every newline, tab, backslash, quote, and control character inside string values using JSON escapes. Never place literal newlines inside a JSON string.',
       'When serializing repo.write_file or patch content, preserve the original file indentation and line breaks exactly inside the escaped string. Never flatten or minify file content to make the outer JSON easier to serialize.',
       'For repo.write_file or patch content, wrap the entire contract object in exactly one ```json fenced block; write no prose, comments, labels, or trailing text outside that block.',
-      'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string.',
+      'For action="use_tool", tool_input must remain a JSON object; never serialize tool_input as a JSON string. Structured final-response content must also remain an object rather than an escaped JSON string.',
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
   });

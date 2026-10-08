@@ -77,7 +77,7 @@ test('contract repair keeps the same session lease and original task context', a
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-kitt-agent-contract': 'v2',
+          'x-kitt-agent-contract': 'v3',
           'x-kitt-route': 'chat',
           'x-kitt-session-id': 'stable-session'
         },
@@ -105,7 +105,7 @@ test('contract repair keeps the same session lease and original task context', a
   }
 });
 
-async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonObject[]): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
+async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonObject[], version = 'v3'): Promise<{ status: number; body: Record<string, unknown>; attempts: number }> {
   let attempts = 0;
   const lease: SessionExecutionLease = {
     sessionId: 'recovery-regression', contextKey: `recovery-${Math.random()}`, generation: 1,
@@ -124,7 +124,7 @@ async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonO
   try {
     const address = server.address(); assert.ok(address && typeof address === 'object');
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
-      method:'POST', headers:{'content-type':'application/json','x-kitt-agent-contract':'v2'},
+      method:'POST', headers:{'content-type':'application/json','x-kitt-agent-contract':version},
       body:JSON.stringify({messages:[{role:'user',content:'Create x.py'}], kitt_meta:{max_upstream_attempts:maxAttempts},
         tools:tools ?? [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}}]})
     });
@@ -133,6 +133,21 @@ async function executeRecovery(outputs: string[], maxAttempts = 3, tools?: JsonO
 }
 const writeContract = JSON.stringify({action:'use_tool',tool:'write_file',tool_input:{path:'x.py',content:'one\ntwo\n'},content:null,reasoning_summary:'',loop:null});
 const falseFinal = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'File created.',reasoning_summary:'',loop:null});
+
+test('structured results cross the HTTP contract without model-side double serialization', async () => {
+  for (const content of [{items:[{title:'Preserve "quotes", tabs\tand newlines\n'}]}, {verdict:'OK',issues:[]}, {verdict:'OK',evidence:['build passed'],issues:[]}]) {
+    const candidate = JSON.stringify({action:'final_response',tool:null,tool_input:null,content,reasoning_summary:'',loop:null});
+    const recovered = await executeRecovery([candidate], 1);
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.attempts, 1);
+    const choices = recovered.body.choices as Array<{message:{content:string}}>;
+    assert.deepEqual(JSON.parse(choices[0]!.message.content), content);
+  }
+  const incompatible = await executeRecovery([falseFinal], 1, undefined, 'v2');
+  assert.equal(incompatible.status, 400);
+  assert.equal(incompatible.attempts, 0);
+  assert.equal((incompatible.body.error as {code:string}).code, 'agent_contract_version_mismatch');
+});
 
 test('the logged Gemini mirror executes the original action without an upstream repair', async () => {
   const candidate = readFileSync('test/fixtures/gemini-mirrored-contract.txt', 'utf8');

@@ -85,7 +85,7 @@ export function providerRecord(provider: ProviderPreset, manager?: SessionManage
 export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
   const sessions = sessionManagementContract(manager);
   return {
-    proxy_contract_version: 2,
+    proxy_contract_version: 3,
     protocol: 'openai-chat-completions',
     native_tool_roundtrip: true,
     agent_contract: {
@@ -93,7 +93,7 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
       header: AGENT_CONTRACT_HEADER,
       route_header: AGENT_ROUTE_HEADER,
       routes: [...AGENT_ROUTES],
-      features: ['host_execution_state_v1', 'task_plan_v1', 'subagent_report_v1', 'hierarchical_request_metadata'],
+      features: ['structured_result_v1', 'host_execution_state_v1', 'task_plan_v1', 'subagent_report_v1', 'hierarchical_request_metadata'],
       limits: { max_plan_tasks: 12, max_plan_bytes: 32768 }
     },
     session_header: 'X-Kitt-Session-Id',

@@ -25,7 +25,7 @@ function fakeManager(): SessionManager {
 
 test('agent-cli contract preserves the stable reverse-proxy integration surface', () => {
   const contract = kittAgentCliCapabilities(fakeManager());
-  assert.equal(contract.proxy_contract_version, 2);
+  assert.equal(contract.proxy_contract_version, 3);
   assert.equal(contract.protocol, 'openai-chat-completions');
   assert.equal(contract.native_tool_roundtrip, true);
   assert.equal(contract.session_header, 'X-Kitt-Session-Id');
