@@ -153,6 +153,28 @@ test('local contract syntax repair avoids an upstream retry and preserves file f
   assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {path:'x.py',content:'one\ntwo\n'});
 });
 
+test('nested review JSON with raw quotes retains the full contract without an upstream retry', async () => {
+  const content = 'KITT_PLAN_REVIEW: {"verdict":"OK","issues":[]}';
+  const contract = JSON.stringify({action:'final_response',tool:null,tool_input:null,content,
+    reasoning_summary:'Reviewed the plan.',loop:{objective:'Review the execution plan',
+      completion_criteria:['Verify task dependencies','Emit a verdict'],status:'complete',validation_summary:'No blocking issues.'}}, null, 2);
+  const candidate = contract.replace(JSON.stringify(content), '"' + content + '"');
+  const recovered = await executeRecovery([candidate], 1);
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.attempts, 1);
+  const choices = recovered.body.choices as Array<{message:{content:string;tool_calls?:unknown}}>;
+  assert.equal(choices[0]!.message.content, content);
+  assert.equal(choices[0]!.message.tool_calls, undefined);
+});
+
+test('contract shape recovery still rejects competing tool arguments', async () => {
+  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"x.py","content":"print("hello")","mode":"append"},"content":null,"reasoning_summary":"","loop":null}';
+  const failed = await executeRecovery([candidate], 1, [{type:'function',function:{name:'write_file',parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string'},mode:{type:'string'}},required:['path','content'],additionalProperties:false}}}]);
+  assert.equal(failed.status, 409);
+  assert.equal(failed.attempts, 1);
+  assert.equal(failed.body.choices, undefined);
+});
+
 test('a drifting repair cannot replace a pending write with a successful final response', async () => {
   const broken = '{"action":"use_tool","tool":"write_file","tool_input":';
   const failed = await executeRecovery([broken, falseFinal, falseFinal]);

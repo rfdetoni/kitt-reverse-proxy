@@ -1,3 +1,9 @@
+## Release 4.9.19 — Nested JSON contract recovery
+
+Agent-contract recovery uses its mandatory field shape to discard parses that swallow required fields when WebChat omits quote escapes inside content. Exactly one matching interpretation is required; competing tool arguments remain invalid. The complete content is preserved without another provider request.
+
+See [release notes](docs/RELEASE_4.9.19.md).
+
 ## Release 4.9.18 — WebChat owns token limits
 
 Prompt and completion token estimates are telemetry. Request lifecycle admission enforces attempt/deadline controls without a local token ceiling. Legacy max_prompt_tokens metadata is accepted for rolling upgrades and ignored.

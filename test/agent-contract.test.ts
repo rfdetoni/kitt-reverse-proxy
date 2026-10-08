@@ -399,6 +399,8 @@ test('accepts only the canonical contract shape after provider extraction', () =
   assert.equal(fenced.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
 
   const legacyDialects = [
+    JSON.stringify({ ...canonical, action: ['use_tool'] }),
+    JSON.stringify({ ...canonical, loop: { objective: 'Review', completion_criteria: ['Verify'], status: ['complete'], validation_summary: '' } }),
     JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }),
     '<kitt-tool>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</kitt-tool>',
     JSON.stringify({

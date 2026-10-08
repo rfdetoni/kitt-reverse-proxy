@@ -30,7 +30,7 @@ const MAX_BRANCHES = 256;
 const MAX_DEPTH = 64;
 const STRING_ESCAPES: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
-export function parseContractJson(text: string, onMember?: (key: string, value: unknown, path: string, stablePrefix: boolean) => void): { value: unknown; text: string; repaired: boolean } {
+export function parseContractJson(text: string, onMember?: (key: string, value: unknown, path: string, stablePrefix: boolean) => void, accepts?: (value: unknown) => boolean): { value: unknown; text: string; repaired: boolean } {
   if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) throw new ContractJsonError('limit', 'JSON payload exceeds 2 MiB');
   const source = unwrapContractJson(text);
   let work = 0;
@@ -167,6 +167,9 @@ export function parseContractJson(text: string, onMember?: (key: string, value: 
   let found = false;
   for (const candidate of value(0, 0, '$')) {
     if (skip(candidate.end) !== source.length) continue;
+    // A caller's mandatory shape can rule out interpretations that swallow
+    // required fields. Never choose between two interpretations it accepts.
+    if (accepts && !accepts(candidate.value)) continue;
     if (found) throw new ContractJsonError('ambiguous', 'Multiple possible JSON interpretations', candidate.end);
     parsed = candidate.value;
     found = true;
