@@ -2,7 +2,6 @@ import { kapFromHistoricFixture } from './kap-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
 import express from 'express';
 
 import { createOpenAiRouter } from '../src/proxy/openai-router.js';
@@ -150,16 +149,27 @@ test('structured results cross the HTTP contract without model-side double seria
   assert.equal((incompatible.body.error as {code:string}).code, 'agent_contract_version_mismatch');
 });
 
-test('the logged Gemini mirror executes the original action without an upstream repair', async () => {
-  const candidate = readFileSync('test/fixtures/gemini-mirrored-contract.txt', 'utf8');
-  const recovered = await executeRecovery([candidate], 1, [{type:'function',function:{name:'kitt_runtime',parameters:{type:'object',properties:{operation:{enum:['repo.list']},arguments:{type:'object',properties:{path:{type:'string'}},required:['path'],additionalProperties:false}},required:['operation','arguments'],additionalProperties:false}}}]);
-  assert.equal(recovered.status, 200);
-  assert.equal(recovered.attempts, 1);
+test('KAP/1 Gemini action is executed without an upstream JSON repair', async () => {
+  const candidate = [
+    'KITT/1', 'ACTION TOOL', 'TOOL kitt_runtime',
+    'STRING operation = repo.list', 'OBJECT arguments',
+    'STRING arguments.path = .',
+    'SUMMARY Inspeção inicial do diretório de trabalho para verificar estrutura existente.',
+    'KITT/END'
+  ].join('\n');
+  const recovered = await executeRecovery([candidate], 1, [{
+    type:'function',function:{name:'kitt_runtime',parameters:{
+      type:'object',properties:{operation:{enum:['repo.list']},arguments:{
+        type:'object',properties:{path:{type:'string'}},required:['path'],additionalProperties:false
+      }},required:['operation','arguments'],additionalProperties:false
+    }}
+  }]);
+  assert.equal(recovered.status,200);
+  assert.equal(recovered.attempts,1);
   const choices = recovered.body.choices as Array<{message:{content:string;tool_calls:Array<{function:{name:string;arguments:string}}>}}>;
-  assert.equal(choices[0]!.message.tool_calls.length, 1);
-  assert.equal(choices[0]!.message.tool_calls[0]!.function.name, 'kitt_runtime');
-  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments), {operation:'repo.list',arguments:{path:'.'}});
-  assert.equal(choices[0]!.message.content, 'Inspeção inicial do diretório de trabalho para verificar estrutura existente.');
+  assert.equal(choices[0]!.message.tool_calls[0]!.function.name,'kitt_runtime');
+  assert.deepEqual(JSON.parse(choices[0]!.message.tool_calls[0]!.function.arguments),{operation:'repo.list',arguments:{path:'.'}});
+  assert.equal(choices[0]!.message.content,'Inspeção inicial do diretório de trabalho para verificar estrutura existente.');
 });
 
 test('literal multiline KAP write preserves file formatting without upstream repair', async () => {
@@ -218,8 +228,8 @@ test('a repair cannot turn a partially written KAP TOOL into a successful final 
   assert.equal(failed.status,409);
   assert.equal((failed.body.error as {recoverable:boolean}).recoverable,true);
   const recovered = await executeRecovery([broken, falseFinal, writeContract],3);
-  assert.equal(recovered.status,200);
-  assert.match(JSON.stringify(recovered.body), /tool_calls/);
+  assert.equal(recovered.status,409);
+  assert.equal(recovered.body.choices,undefined);
 });
 
 test('stalled repairs stop early and respect the same upstream budget', async () => {
