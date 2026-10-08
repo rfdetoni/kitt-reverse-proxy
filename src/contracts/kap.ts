@@ -36,7 +36,7 @@ function assign(root: Record<string, unknown>, path: string, value: unknown, ass
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i]!;
     const key = Array.isArray(parent) ? Number(part) : part;
-    if (Array.isArray(parent) && (!Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
+    if (Array.isArray(parent) && (typeof key !== "number" || !Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
     let child = (parent as Record<string | number, unknown>)[key];
     if (child === undefined) {
       child = /^[0-9]+$/.test(parts[i + 1]!) ? [] : Object.create(null);
@@ -49,7 +49,7 @@ function assign(root: Record<string, unknown>, path: string, value: unknown, ass
   }
   const last = parts[parts.length - 1]!;
   const key = Array.isArray(parent) ? Number(last) : last;
-  if (Array.isArray(parent) && (!Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
+  if (Array.isArray(parent) && (typeof key !== "number" || !Number.isInteger(key) || key < 0 || key > 1024)) throw new KAPError("Invalid array index");
   if (Object.hasOwn(parent, key)) throw new KAPError("Field already assigned: " + path);
   (parent as Record<string | number, unknown>)[key] = value;
   assigned.add(path);
