@@ -40,7 +40,11 @@ export function kapFromHistoricFixture(raw: string): string {
   // malformed model output remains malformed; no production JSON fallback.
   try {
     const candidate = parseContractJson(raw).value as Record<string, any>;
-    if (!candidate || !Object.hasOwn(candidate, 'action') || !Object.hasOwn(candidate, 'tool_input')) return raw;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return raw;
+    if (Object.keys(candidate).sort().join(',') !== 'action,content,loop,reasoning_summary,tool,tool_input') return raw;
+    if (candidate.loop !== null || typeof candidate.action !== 'string' || typeof candidate.reasoning_summary !== 'string') return raw;
+    if (candidate.action === 'use_tool' && (typeof candidate.tool !== 'string' || typeof candidate.tool_input !== 'object')) return raw;
+    if (candidate.action !== 'use_tool' && (candidate.tool !== null || candidate.tool_input !== null)) return raw;
     return kapFixture(candidate);
   } catch { return raw; }
 }
