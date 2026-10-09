@@ -642,6 +642,8 @@ function parseStrictContract(text: string): AgentContractResponse {
     return validateContractShape(parseKAP(text));
   } catch (error) {
     if (error instanceof AgentContractValidationError) throw error;
+    // Detect competing directives even when an earlier malformed line stopped parsing.
+    if (error instanceof KAPError && !/exceeds|too large|payload.*KiB/i.test(error.message)) extractRepairAnchors(text);
     throw new AgentContractValidationError(
       `${NON_KAP_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : String(error)}`,
       error instanceof KAPError
@@ -747,40 +749,41 @@ export function buildAgentContractRetryBody(plan: AgentContractPlan): JsonObject
   return { ...plan.body, messages };
 }
 
-/** A repair may fix syntax but must not change an already explicit decision or valid field. */
-/** Repair may fix malformed syntax, but cannot silently rewrite stable decisions or fields. */
-export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
-  const extract = (raw: string): { decisions: Map<string, string>; fields: Map<string, string> } => {
-    const lines = raw.trim().split(/\r?\n/);
-    const decisions = new Map<string, string>();
-    const fields = new Map<string, string>();
-    const directive = /^(STRING|INTEGER|DECIMAL|BOOLEAN|NULL|ARRAY|OBJECT|TEXT) ([A-Za-z0-9_.]+)(?: = .*)?$/;
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index]!;
-      const control = /^(ACTION|TOOL) (.+)$/.exec(line);
-      if (control) {
-        if (decisions.has(control[1]!)) throw new AgentContractValidationError('Conflicting contract directives cannot be repaired.', 'ambiguous');
-        decisions.set(control[1]!, control[2]!);
-        continue;
-      }
-      const match = directive.exec(line);
-      if (!match) continue;
-      const path = match[2]!;
-      if (fields.has(path)) throw new AgentContractValidationError('Competing field values cannot be repaired.', 'ambiguous');
-      if (match[1] === 'TEXT') {
-        const end = lines.indexOf('KITT/ENDTEXT', index + 1);
-        if (end < 0) break; // Truncated field: only complete preceding fields are anchored.
-        fields.set(path, lines.slice(index, end + 1).join('\n'));
-        index = end;
-      } else {
-        fields.set(path, line);
-      }
+/** Extract stable fields without interpreting directives inside literal TEXT. */
+function extractRepairAnchors(raw: string): { decisions: Map<string, string>; fields: Map<string, string> } {
+  const lines = raw.trim().split(/\r?\n/);
+  const decisions = new Map<string, string>();
+  const fields = new Map<string, string>();
+  const directive = /^(STRING|INTEGER|DECIMAL|BOOLEAN|NULL|ARRAY|OBJECT|TEXT) ([A-Za-z0-9_.]+)(?: = .*)?$/;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    const control = /^(ACTION|TOOL) (.+)$/.exec(line);
+    if (control) {
+      if (decisions.has(control[1]!)) throw new AgentContractValidationError('Conflicting contract directives cannot be repaired.', 'ambiguous');
+      decisions.set(control[1]!, control[2]!);
+      continue;
     }
-    return { decisions, fields };
-  };
-  const before = extract(candidate);
+    const match = directive.exec(line);
+    if (!match) continue;
+    const path = match[2]!;
+    if (fields.has(path)) throw new AgentContractValidationError('Competing field values cannot be repaired.', 'ambiguous');
+    if (match[1] === 'TEXT') {
+      const end = lines.indexOf('KITT/ENDTEXT', index + 1);
+      if (end < 0) break; // Truncated field: only complete preceding fields are anchored.
+      fields.set(path, lines.slice(index, end + 1).join('\n'));
+      index = end;
+    } else {
+      fields.set(path, line);
+    }
+  }
+  return { decisions, fields };
+}
+
+/** Repair cannot rewrite stable decisions or fields. */
+export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
+  const before = extractRepairAnchors(candidate);
   // Never use substring matches: a tool argument echoed inside TEXT is not an action.
-  const after = extract(repaired);
+  const after = extractRepairAnchors(repaired);
   for (const [key, value] of before.decisions) {
     if (after.decisions.get(key) !== value) {
       throw new AgentContractValidationError('Repair changed the original action or tool.', 'ambiguous');

@@ -1,3 +1,7 @@
+## Release 5.1.1 — Reject competing actions before repair
+
+Malformed KAP that contains competing ACTION/TOOL directives or field assignments is rejected before an upstream repair request. Literal TEXT bodies remain opaque. See [release notes](docs/RELEASE_5.1.1.md).
+
 ## 5.1.0 — KAP/1 WebChat action wire
 
 Agent contract v4 prompts the WebChat for bounded KAP/1 textual actions instead of nested JSON envelopes; the host still validates permissions and emits OpenAI-compatible tool calls. The wire grammar is maintained by [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP.md).

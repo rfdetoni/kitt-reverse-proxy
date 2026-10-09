@@ -209,17 +209,19 @@ test('duplicate KAP tool arguments are ambiguous and fail without repair', async
   assert.equal(recovered.body.choices,undefined);
 });
 
-test('competing KAP review verdicts are never repaired into a selected outcome', async () => {
-  const candidate = [
-    'KITT/1','ACTION FINAL','OBJECT content',
-    'STRING content.verdict = OK',
-    'STRING content.verdict = REJECT','ARRAY content.issues','KITT/END'
-  ].join('\n');
+test('competing KAP verdicts and actions fail before any repair can select an outcome', async () => {
+  const candidates = [
+    'KITT/1\nACTION FINAL\nOBJECT content\nSTRING content.verdict = OK\nSTRING content.verdict = REJECT\nARRAY content.issues\nKITT/END',
+    // Captured Gemini failure: malformed line precedes a competing valid action.
+    'KITT/1\nACTION TOOL\nTOOL kitt_runtime\nSTRING operation = artifacts.read\nSTRINGKITT/1\nACTION FINAL\nTEXT content\nincomplete\nKITT/ENDTEXT\nKITT/END'
+  ];
   const repaired = 'KITT/1\nACTION FINAL\nOBJECT content\nSTRING content.verdict = OK\nARRAY content.issues\nKITT/END';
-  const failed = await executeRecovery([candidate, repaired],3);
-  assert.equal(failed.status,409);
-  assert.equal(failed.attempts,1);
-  assert.equal(failed.body.choices,undefined);
+  for (const candidate of candidates) {
+    const failed = await executeRecovery([candidate, repaired], 3);
+    assert.equal(failed.status, 409);
+    assert.equal(failed.attempts, 1);
+    assert.equal(failed.body.choices, undefined);
+  }
 });
 
 test('a repair cannot turn a partially written KAP TOOL into a successful final answer', async () => {
