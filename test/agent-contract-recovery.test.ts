@@ -204,8 +204,8 @@ test('interrupted FINAL is discarded and independently regenerated', async () =>
     'STRING content.title = Old draftKITT/1',
     'ACTION FINAL', 'OBJECT content',
     'STRING content.title = New draft', 'KITT/END'
-  ].join('\\n');
-  const fresh = 'KITT/1\\nACTION FINAL\\nOBJECT content\\nSTRING content.title = Independently regenerated\\nKITT/END';
+  ].join('\n');
+  const fresh = 'KITT/1\nACTION FINAL\nOBJECT content\nSTRING content.title = Independently regenerated\nKITT/END';
   const success = await executeRecovery([restarted, fresh], 2);
   assert.equal(success.status, 200);
   assert.equal(success.attempts, 2);
