@@ -1,3 +1,7 @@
+## Release 5.1.2 — Safe regeneration of interrupted FINAL envelopes
+
+For a truncated Gemini `ACTION FINAL` followed by a new complete FINAL, the proxy discards both competing drafts and requests a fresh, independently validated response within the existing retry budget. Other ambiguities and tool actions still fail closed. Prompt instructions consistently name `KITT/1`. See [release notes](docs/RELEASE_5.1.2.md).
+
 ## Release 5.1.1 — Reject competing actions before repair
 
 Malformed KAP that contains competing ACTION/TOOL directives or field assignments is rejected before an upstream repair request. Literal TEXT bodies remain opaque. See [release notes](docs/RELEASE_5.1.1.md).

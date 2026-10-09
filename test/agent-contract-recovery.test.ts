@@ -197,6 +197,31 @@ test('KAP review text with raw quotes requires no JSON escaping', async () => {
   assert.equal(choices[0]!.message.tool_calls,undefined);
 });
 
+
+test('interrupted FINAL is discarded and independently regenerated', async () => {
+  const restarted = [
+    'KITT/1', 'ACTION FINAL', 'OBJECT content',
+    'STRING content.title = Old draftKITT/1',
+    'ACTION FINAL', 'OBJECT content',
+    'STRING content.title = New draft', 'KITT/END'
+  ].join('\\n');
+  const fresh = 'KITT/1\\nACTION FINAL\\nOBJECT content\\nSTRING content.title = Independently regenerated\\nKITT/END';
+  const success = await executeRecovery([restarted, fresh], 2);
+  assert.equal(success.status, 200);
+  assert.equal(success.attempts, 2);
+  const choices = success.body.choices as Array<{message:{content:string}}>;
+  assert.deepEqual(JSON.parse(choices[0]!.message.content), {title:'Independently regenerated'});
+
+  const failed = await executeRecovery([restarted, 'invalid second response'], 2);
+  assert.equal(failed.status, 409);
+  assert.equal(failed.attempts, 2);
+  assert.equal(failed.body.choices, undefined);
+
+  const exhausted = await executeRecovery([restarted, fresh], 1);
+  assert.equal(exhausted.status, 409);
+  assert.equal(exhausted.attempts, 1);
+});
+
 test('duplicate KAP tool arguments are ambiguous and fail without repair', async () => {
   const candidate = [
     'KITT/1', 'ACTION TOOL', 'TOOL write_file',

@@ -1,4 +1,5 @@
 import { waitForDrain } from './stream-io.js';
+import { parseKAP, KAPError } from '../contracts/kap.js';
 import { ProviderRequestState } from '../runtime/request-state.js';
 import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -199,7 +200,7 @@ function contractResponseDigest(result: ChatExecutionResult): { response_sha256:
 
 function recordContractAttempt(
   plan: AgentContractPlan,
-  attempt: 'initial' | 'repair' | 'serialization-repair',
+  attempt: 'initial' | 'repair' | 'serialization-repair' | 'regeneration',
   result: ChatExecutionResult,
   validationError?: AgentContractValidationError
 ): void {
@@ -220,6 +221,26 @@ function recordContractAttempt(
     deltas: result.deltas,
     metadata: result.metadata ?? null
   });
+}
+
+
+/** Competing drafts are never repaired. This only permits a fresh generation
+ * after an unfinished FINAL prefix and a complete restarted FINAL. */
+function isInterruptedFinalRestart(raw: string): boolean {
+  const text = raw.replace(/\r\n/g, '\n').trim();
+  const header = 'KITT/1\nACTION FINAL\n';
+  if (!text.startsWith(header)) return false;
+  const restart = text.indexOf(header, header.length);
+  if (restart < 0 || text.indexOf(header, restart + header.length) !== -1) return false;
+  const abandoned = text.slice(0, restart);
+  if (abandoned.includes('KITT/END') || /(?:^|\n)(?:TOOL |TEXT )/.test(abandoned)
+    || (abandoned.match(/(?:^|\n)ACTION /g) ?? []).length !== 1) return false;
+  try {
+    return parseKAP(text.slice(restart)).action === 'final_response';
+  } catch (error) {
+    if (error instanceof KAPError) return false;
+    throw error;
+  }
 }
 
 async function executeAgentContract(
@@ -259,7 +280,37 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  // A repair may restore syntax, but cannot choose between competing decisions.
+  // Do not reinterpret competing drafts. Request one independent FINAL instead.
+  if (firstValidationError.kind === 'ambiguous'
+    && isInterruptedFinalRestart(first.completion.choices[0]?.message.content ?? '')) {
+    const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+    messages.push({
+      role: 'user',
+      content: '[KITT FRESH RESPONSE]\\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete KITT/1 ACTION FINAL ending with KITT/END.\\n[END KITT FRESH RESPONSE]'
+    });
+    const body: JsonObject = { ...plan.body, messages };
+    const retryOptions = contractRepairExecutionOptions(plan, options);
+    logger.trace('agent.contract.request.raw', {
+      contract_session_id: plan.sessionId, route: plan.route,
+      attempt: 'regeneration', body, options: retryOptions
+    });
+    const regenerated = await lease.execute(body, retryOptions);
+    try {
+      const transformed = transform(regenerated);
+      if (transformed.completion.choices[0]?.message.tool_calls?.length) {
+        throw new AgentContractValidationError('Regeneration must remain a FINAL response.', 'ambiguous');
+      }
+      recordAgentContractValidation(plan.contextKey, true);
+      recordContractAttempt(plan, 'regeneration', regenerated);
+      return transformed;
+    } catch (error) {
+      if (!(error instanceof AgentContractValidationError)) throw error;
+      recordAgentContractValidation(plan.contextKey, false);
+      recordContractAttempt(plan, 'regeneration', regenerated, error);
+      throw new AgentContractError(409, 'agent_contract_invalid',
+        'Fresh FINAL regeneration failed validation: ' + error.message, true, 'continue');
+    }
+  }
   if (firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
   const buildFirstRepair = firstValidationError.kind === 'syntax'
     ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
