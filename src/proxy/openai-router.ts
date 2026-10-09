@@ -286,7 +286,7 @@ async function executeAgentContract(
     const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
     messages.push({
       role: 'user',
-      content: '[KITT FRESH RESPONSE]\\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete KITT/1 ACTION FINAL ending with KITT/END.\\n[END KITT FRESH RESPONSE]'
+      content: '[KITT FRESH RESPONSE]\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete KITT/1 ACTION FINAL ending with KITT/END.\n[END KITT FRESH RESPONSE]'
     });
     const body: JsonObject = { ...plan.body, messages };
     const retryOptions = contractRepairExecutionOptions(plan, options);
