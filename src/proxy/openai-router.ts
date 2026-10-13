@@ -401,7 +401,7 @@ async function executeAgentContractIdempotent(req: Request, manager: SessionMana
   const requestId = req.get('x-kitt-request-id') || (typeof meta.request_id === 'string' ? meta.request_id : undefined);
   if (req.get('x-kitt-request-id') && meta.request_id && req.get('x-kitt-request-id') !== meta.request_id) throw new AgentContractError(400, 'agent_contract_metadata_invalid', 'Request ID header does not match kitt_meta.');
   const lifecycle = new ProviderRequestState({ ...(requestId ? { requestId } : {}), ...(options.signal ? { signal: options.signal } : {}),
-    timeoutMs: Math.min(240_000, typeof meta.deadline_ms === 'number' ? meta.deadline_ms : 240_000),
+    timeoutMs: Math.min(900_000, typeof meta.deadline_ms === 'number' ? meta.deadline_ms : manager.transport === 'ui' ? 900_000 : 240_000),
     maxAttempts: typeof meta.max_upstream_attempts === 'number' ? meta.max_upstream_attempts : 3 });
   let cache = agentRequestCaches.get(manager);
   if (!cache) { cache = new RequestIdempotencyCache<ChatExecutionResult>(); agentRequestCaches.set(manager, cache); }

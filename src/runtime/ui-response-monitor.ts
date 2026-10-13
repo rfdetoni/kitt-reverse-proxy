@@ -33,6 +33,11 @@ export function uiResponseWatchdogBudget(timeoutMs: number): {
 }
 
 
+export function uiResponseAbsoluteBudget(timeoutMs: number, generating: boolean): number {
+  const normal = uiResponseWatchdogBudget(timeoutMs).absoluteMs;
+  return generating ? Math.max(normal, 900_000) : normal;
+}
+
 async function waitForDomMutation(
   session: LiveBrowserSession,
   timeoutMs: number,
@@ -125,6 +130,9 @@ export async function awaitUiResponse(
   const startedAt = Date.now();
   const watchdog = uiResponseWatchdogBudget(config.uiResponseTimeoutMs);
   const absoluteDeadline = startedAt + watchdog.absoluteMs;
+  // A verified, actively generating web chat may take much longer than the
+  // regular idle budget on large requests. Still cap the entire UI turn.
+  const generatingDeadline = startedAt + uiResponseAbsoluteBudget(config.uiResponseTimeoutMs, true);
   const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
   let lastActivityAt = startedAt;
   const deltas: string[] = [];
@@ -138,10 +146,11 @@ export async function awaitUiResponse(
   let activeSnapshot: UiTextSnapshot | undefined;
   let nextGateCheckAt = startedAt;
   let nextStreamingCheckAt = startedAt;
+  let nextProgressLogAt = startedAt + 30_000;
 
   await abortableSleep(250, signal);
 
-  while (Date.now() < absoluteDeadline) {
+  while (Date.now() < (observedStreaming || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline)) {
     throwIfAborted(signal);
     const now = Date.now();
     if (now >= nextGateCheckAt) {
@@ -199,10 +208,20 @@ export async function awaitUiResponse(
       if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
     }
 
+    if (Date.now() >= nextProgressLogAt) {
+      logger.debug('ui.response.progress', {
+        provider_id: provider.id, elapsed_ms: Date.now() - startedAt,
+        idle_ms: Date.now() - lastActivityAt, response_chars: lastText.length,
+        observed_streaming: observedStreaming, streaming
+      });
+      nextProgressLogAt = Date.now() + 30_000;
+    }
+
     if (Date.now() - lastActivityAt >= watchdog.inactivityMs) {
       logger.event('warn', 'ui.response.timeout', {
         provider_id: provider.id, wait_ms: Date.now() - startedAt, response_chars: lastText.length,
-        first_delta_ms: firstDeltaMs ?? null, observed_streaming: observedStreaming, streaming
+        first_delta_ms: firstDeltaMs ?? null, observed_streaming: observedStreaming,
+        streaming, idle_ms: Date.now() - lastActivityAt
       });
       throw new UiTimeoutError(
         `Nenhum progresso do chat foi detectado em ${Math.round(watchdog.inactivityMs / 1000)}s.`
@@ -210,11 +229,13 @@ export async function awaitUiResponse(
     }
 
     await abortableSleep(streaming ? 120 : 200, signal);
-    const domChanged = await waitForDomMutation(session, streaming ? 260 : 450, signal);
-    if (domChanged) lastActivityAt = Date.now();
+    // Arbitrary page mutations (animations/sidebar) are not model progress.
+    // They only wake the polling loop; actual text or the generating control
+    // determines progress, bounded by the absolute generating deadline.
+    await waitForDomMutation(session, streaming ? 260 : 450, signal);
   }
 
   throw new UiTimeoutError(
-    `O chat excedeu o teto absoluto de ${Math.round(watchdog.absoluteMs / 1000)}s sem resposta final.`
+    `O chat excedeu o teto absoluto de ${Math.round(((observedStreaming || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline) - startedAt) / 1000)}s sem resposta final.`
   );
 }
