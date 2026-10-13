@@ -86,11 +86,15 @@ function promptNeedles(prompt: string): string[] {
   const text = normalize(prompt);
   if (text.length <= 512) return text ? [text] : [];
   const n = 192;
-  return [
+  const anchors = [
     text.slice(0, n),
     text.slice(Math.floor((text.length - n) / 2), Math.floor((text.length - n) / 2) + n),
     text.slice(-n)
-  ];
+  ].map(value => value.trim());
+  const unique = [...new Set(anchors)];
+  // Repeated filler text cannot identify a turn. Require the original full
+  // prompt when independent anchors are unavailable.
+  return unique.length >= 2 ? unique : [text];
 }
 
 function jsonContainsNeedles(value: JsonValue, needles: readonly string[]): number {
