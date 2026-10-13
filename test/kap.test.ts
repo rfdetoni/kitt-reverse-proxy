@@ -118,3 +118,32 @@ test('repair must retain complete decimal review fields', async () => {
     before, after, new AgentContractValidationError('invalid review', 'shape')
   ), /unrelated field/);
 });
+
+test('KAP/2 compact operation alias is bound only through the declared host schema', () => {
+  const next = transformAgentContractCompletion(completion('K2 T repo.read\npath: README.md\nK2/END'), plan());
+  const call = next.choices[0]!.message.tool_calls![0]!;
+  assert.equal(call.function.name, 'kitt_runtime');
+  assert.deepEqual(JSON.parse(call.function.arguments), { operation: 'repo.read', arguments: {path: 'README.md'} });
+  assert.throws(() => transformAgentContractCompletion(completion('K2 T repo.delete\npath: README.md\nK2/END'), plan()), AgentContractValidationError);
+});
+
+test('KAP/2 typed nested fields and tabular plan are parsed without inferred extra actions', () => {
+  const actual = parseKAP('K2 F\ntasks[2]{id,done}:\n  T01,true\n  T02,false\nmeta:\n  rev: 2\nK2/END');
+  assert.equal(actual.action, 'final_response');
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.content)), { tasks:[{id:'T01', done:true}, {id:'T02', done:false}], meta:{rev:2} });
+});
+
+test('KAP/2 preserves literal code even with an embedded envelope terminator', () => {
+  const result = parseKAP('K2 T write_file\npath: a.py\ncontent<<CODE\nprint("ok")\nK2/END\nCODE\nK2/END');
+  assert.equal(result.tool_input?.content, 'print("ok")\nK2/END');
+});
+
+test('KAP/2 rejects competing, unsafe and incomplete objects', () => {
+  for (const raw of [
+    'K2 T write_file\npath: ok\npath: bad\nK2/END',
+    'K2 F\n__proto__:\n  x: yes\nK2/END',
+    'K2 F\ntasks[2]{id}:\n  T01\nK2/END',
+    'K2 T write_file\ncontent<<CODE\nunterminated\nK2/END',
+    'K2 F\nitems[1]{id,id}:\n  T01,T02\nK2/END',
+  ]) assert.throws(() => parseKAP(raw), KAPError);
+});
