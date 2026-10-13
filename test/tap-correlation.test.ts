@@ -398,3 +398,35 @@ test('CDP contract reader accepts only complete compact KAP/2 and rejects disagr
   assert.equal((transportPayload(compact) as {action: string}).action, 'final_response');
   assert.throws(() => selectContractResponseText('K2 F\nChanged.\nK2/END', compact, true), /different valid contract/i);
 });
+
+test('long composer prompts split into adjacent request content parts still correlate', async () => {
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta: 'OK'}) + '\\n\\n').toString('base64')}
+    : {});
+  const {tap, profile} = fixtureTap(async () => cdp);
+  const prompt = 'UNIQUE TASK START ' + 'middle text with separated content segments. '.repeat(25) + 'UNIQUE TASK END';
+  const parts = prompt.match(/[\\s\\S]{1,83}/g)!;
+  assert.ok(parts.length > 3);
+  await tap.initialize();
+  const turn = tap.arm(prompt);
+  try {
+    cdp.emit('Network.requestWillBeSent', {
+      requestId: 'current', type: 'fetch',
+      request: {url: 'https://chatgpt.com/backend-api/conversation', method: 'POST',
+        headers: {'content-type': 'application/json'},
+        postData: JSON.stringify({messages: [{role: 'user', content: {parts}}]})}
+    });
+    response(cdp);
+    cdp.emit('Network.loadingFinished', {requestId: 'current'});
+    const adapter = new TapStreamAdapter(profile);
+    const matched: string[] = [];
+    for await (const event of turn.events()) {
+      if (event.type === 'matched') { matched.push(event.requestId); adapter.matchedResponse(event.url, event.method, event.contentType); }
+      if (event.type === 'chunk') adapter.push(event.bytes);
+      if (event.type === 'end') adapter.end();
+      if (event.type === 'error') assert.fail(event.reason);
+    }
+    assert.deepEqual(matched, ['current']);
+    assert.equal(adapter.accumulatedText(), 'OK');
+  } finally { turn.cancel(); await tap.detach(); }
+});
