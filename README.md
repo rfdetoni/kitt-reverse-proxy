@@ -1,3 +1,7 @@
+# Reverse Proxy 5.3.1 — bounded ChatGPT capture recovery
+
+Long submitted prompts with split request content now correlate without weakening strict anchors. A completed answer in the newest assistant-style conversation turn can be validated even if role attributes changed. See [5.3.1 release notes](docs/RELEASE_5.3.1.md). Live-site reproduction remains a required operator acceptance gate.
+
 ## 5.3.0 — KAP/2 strict TypeScript contract
 
 The proxy uses canonical Protocol 0.13.1 parsers and typed diagnostics. Quoted keys, explicit empty values, object arrays, UTF-8 literal lengths and summary fields are accepted without bypassing host tool schemas or authorization. CDP/DOM recovery continues to recognize completed K2 envelopes.
