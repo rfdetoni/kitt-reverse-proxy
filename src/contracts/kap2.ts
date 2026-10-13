@@ -151,7 +151,7 @@ export function parseKAP2(raw: string): KAPMessage {
     if (kind === 'F') throw new Error('Empty K2 final');
     return { action: kind === 'W' ? 'request_workspace' : 'request_tools', tool: null, tool_input: null, content: null, reasoning_summary: '', loop: null };
   }
-  if (body.some(line => /^K2 (?:[TFWQ])(?: |$)|^K2\/END$/.test(line))) throw new Error('Competing K2 envelope');
+  // Only parsed top-level records are control directives. Literal blocks may contain K2/END.
   const structured = body.length > 0 && (FIELD.test(body[0]!) || LITERAL.test(body[0]!));
   if (kind === 'T' && !structured && body.length) throw new Error('Tools require KAP/2 fields');
   const data = structured ? parseFields(body) : null;
