@@ -129,7 +129,7 @@ export function buildAgentContractRepairBody(
       `ERROR_KIND: ${validationError.kind}`,
       `AFFECTED_PATHS: ${JSON.stringify(validationError.paths)}`,
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct only the reported KAP/1 violation. Return one KITT/1 action ending KITT/END; no extra prose.',
+      'REPAIR_INSTRUCTION: Correct only the reported KAP/2 violation. Return one K2 action ending K2/END; no extra prose.',
       'Use the candidate as the source of intended action. Preserve it when valid; change only fields implicated by the validation error.',
       'Do not restart, re-plan, summarize, or answer the original task inside the repair response.',
       '[END KITT CONTRACT REPAIR]'
@@ -153,9 +153,9 @@ export function buildAgentContractSerializationRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the candidate action and data, but emit exactly one syntactically valid contract payload matching the output contract.',
       'Do not restart, re-plan, summarize, or answer the original task. Repair serialization only.',
-      'Respond with KAP/1 text: exactly one ACTION and KITT/END; no model-authored JSON.',
-      'Use typed fields for scalar values and TEXT fields for multiline code without escaping quotes or backslashes.',
-      'For structured results use OBJECT content, ARRAY content.items and typed nested fields.',
+      'Respond with KAP/2 text: exactly one action and K2/END; no model-authored JSON.',
+      'Use key: value scalars and content<<TAG literal fields for multiline code without escaping quotes or backslashes.',
+      'For structured results use nested two-space-indented fields or tabular rows[count]{fields}:.',
       'Preserve the original action, tool name and all unaffected fields exactly.',
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
@@ -286,7 +286,7 @@ async function executeAgentContract(
     const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
     messages.push({
       role: 'user',
-      content: '[KITT FRESH RESPONSE]\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete KITT/1 ACTION FINAL ending with KITT/END.\n[END KITT FRESH RESPONSE]'
+      content: '[KITT FRESH RESPONSE]\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete K2 F response ending with K2/END.\n[END KITT FRESH RESPONSE]'
     });
     const body: JsonObject = { ...plan.body, messages };
     const retryOptions = contractRepairExecutionOptions(plan, options);
