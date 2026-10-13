@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: rfdetoni/kitt-protocol
-          ref: f1ee72e248e611e03290a5f9bc1ccdffe520c715
+          ref: 3f2050e981bd727c9a0dfead800f400b11e38c0f
           path: protocol-source
           persist-credentials: false
       - name: Check generated Agent response schema
@@ -37,6 +37,7 @@ jobs:
         run: |
           cmp protocol-source/sdk/typescript/src/kap.ts src/contracts/kap.ts
           cmp protocol-source/sdk/typescript/src/kap2.ts src/contracts/kap2.ts
+          cmp protocol-source/sdk/typescript/src/kap-error.ts src/contracts/kap-error.ts
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - name: Typecheck critical surface
         run: npm run check
