@@ -739,13 +739,17 @@ function extractRepairAnchors(raw: string): { decisions: Map<string, string>; fi
     const fields = new Map<string, string>();
     // An incomplete compact response can only be repaired without changing its header.
     // Preserve complete field declarations; literal contents are not interpreted as fields.
-    let literal: string | null = null;
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i]!;
-      if (literal !== null) { if (line === literal) literal = null; continue; }
       if (line === 'K2/END') continue;
       const opening = /^([A-Za-z_][A-Za-z0-9_]*)<<([A-Z_][A-Z0-9_]{0,24})$/.exec(line);
-      if (opening) { fields.set(opening[1]!, line); literal = opening[2]!; continue; }
+      if (opening) {
+        const end = lines.indexOf(opening[2]!, i + 1);
+        if (end < 0) break; // An incomplete literal is not a stable field.
+        fields.set(opening[1]!, lines.slice(i, end + 1).join('\n'));
+        i = end;
+        continue;
+      }
       const match = /^( *)([A-Za-z_][A-Za-z0-9_]*)(?:\[[0-9]+\](?:\{[^}]+\})?)?:/.exec(line);
       if (match) fields.set((match[1] ?? '') + (match[2] ?? ''), line);
     }
