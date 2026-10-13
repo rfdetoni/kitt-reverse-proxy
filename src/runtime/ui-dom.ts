@@ -215,7 +215,7 @@ export function selectCompletedAssistantContract(
   const valid = new Map<string, string>();
   for (const value of samples) {
     const text = value.trim();
-    if (!text || previous.has(text) || !text.startsWith('KITT/1')) continue;
+    if (!text || previous.has(text) || !(text.startsWith('KITT/1') || text.startsWith('K2 '))) continue;
     try {
       const parsed = parseKAP(text);
       const canonical = JSON.stringify(parsed);
@@ -251,7 +251,7 @@ export async function inspectCompletedAssistantContract(
       }, 65_536);
       assistantNodes += scan.count;
       textSamples += scan.samples.length;
-      visibleEndMarkers += scan.samples.filter(value => value.includes('KITT/END')).length;
+      visibleEndMarkers += scan.samples.filter(value => value.includes('KITT/END') || value.includes('K2/END')).length;
       samples.push(...scan.samples);
     } catch { /* Page changes while rendering; next pass can inspect it. */ }
   }
