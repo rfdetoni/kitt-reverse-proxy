@@ -107,6 +107,15 @@ function jsonContainsNeedles(value: JsonValue, needles: readonly string[]): numb
         if (part.includes(needle)) mask |= 1 << index;
       });
     } else if (Array.isArray(item)) {
+      // Web chat can serialize one composer submission as adjacent content
+      // fragments. Match anchors spanning those fragments, but NEVER flatten
+      // the entire JSON document (which could combine unrelated user turns).
+      if (item.length > 0 && item.every(part => typeof part === 'string')) {
+        const joined = normalize(item.join(''));
+        needles.forEach((needle, index) => {
+          if (joined.includes(needle)) mask |= 1 << index;
+        });
+      }
       for (const child of item) visit(child, depth + 1);
     } else if (typeof item === 'object') {
       for (const child of Object.values(item)) visit(child, depth + 1);
