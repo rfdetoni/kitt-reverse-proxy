@@ -523,7 +523,11 @@ export class CdpStreamTap {
         required_anchors: turn.needles.length
       });
     }
-    turn.queue.push({ type: 'error', reason });
+    turn.queue.push({
+      type: 'error', reason,
+      ...(reason === 'no_matching_request' ? { detail:
+        `posts=${turn.postsSeen} decoded=${turn.decodedBodies} partial=${turn.partialMatches}` } : {})
+    });
     turn.queue.close();
     this.current = undefined;
   }

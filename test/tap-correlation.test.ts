@@ -385,7 +385,7 @@ test('large prompt matches correlated POST whose JSON splits the user content', 
     const observed: string[] = [];
     for await (const event of turn.events()) {
       if (event.type === 'matched') observed.push(event.requestId);
-      if (event.type === 'error') assert.fail(event.reason);
+      if (event.type === 'error') assert.fail(`${event.reason}: ${event.detail ?? ''}`);
     }
     assert.deepEqual(observed, ['current']);
   } finally { turn.cancel(); await tap.detach(); }
