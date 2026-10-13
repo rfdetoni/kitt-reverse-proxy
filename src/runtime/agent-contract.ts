@@ -784,7 +784,7 @@ function extractRepairAnchors(raw: string): { decisions: Map<string, string>; fi
       const opening = /^([A-Za-z_][A-Za-z0-9_]*)<<([A-Z_][A-Z0-9_]{0,24})$/.exec(line);
       if (opening) { fields.set(opening[1]!, line); literal = opening[2]!; continue; }
       const match = /^( *)([A-Za-z_][A-Za-z0-9_]*)(?:\[[0-9]+\](?:\{[^}]+\})?)?:/.exec(line);
-      if (match) fields.set(match[1] + match[2], line);
+      if (match) fields.set((match[1] ?? '') + (match[2] ?? ''), line);
     }
     return { decisions, fields };
   }
