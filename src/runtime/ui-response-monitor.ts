@@ -225,7 +225,7 @@ export async function awaitUiResponse(
         && !tap?.receiving && !lastText) {
       if (!generationStoppedAt) generationStoppedAt = Date.now();
       if (Date.now() >= nextAssistantProbeAt) {
-        const probe = await inspectCompletedAssistantContract(session.page, baseline);
+        const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
         nextAssistantProbeAt = Date.now() + 2_000;
         if (probe.text) {
           logger.debug('ui.response.assistant_fallback', {
@@ -238,7 +238,7 @@ export async function awaitUiResponse(
         if (!assistantProbeLogged && Date.now() - generationStoppedAt >= 5_000) {
           assistantProbeLogged = true;
           logger.event('warn', 'ui.response.capture_missing', {
-            provider_id: provider.id, assistant_nodes: probe.assistantNodes,
+            provider_id: provider.id, assistant_nodes: probe.assistantNodes, structural_turn_nodes: probe.structuralTurnNodes,
             text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers
           });
         }
