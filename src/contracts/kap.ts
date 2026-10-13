@@ -1,4 +1,6 @@
 /** KAP/1: bounded textual LLM wire format. Host still validates tools and completion. */
+import { parseKAP2 } from './kap2.js';
+
 export type KAPAction = "TOOL" | "FINAL" | "WORKSPACE" | "TOOLS";
 export interface KAPMessage {
   action: "use_tool" | "final_response" | "request_workspace" | "request_tools";
@@ -69,6 +71,10 @@ function complete(value: unknown): void {
 
 /** Never guess a response from prose or interpret a competing second envelope. */
 export function parseKAP(raw: string): KAPMessage {
+  if (raw.trim().startsWith("K2 ")) {
+    try { return parseKAP2(raw); }
+    catch (error) { throw new KAPError(error instanceof Error ? error.message : String(error)); }
+  }
   if (typeof raw !== "string" || new TextEncoder().encode(raw).length > MAX_BYTES) throw new KAPError("KAP payload exceeds 64 KiB");
   let input = raw.trim();
   const fence = /^```(?:kap|text)?\r?\n([\s\S]*?)\r?\n```$/i.exec(input);
