@@ -111,8 +111,11 @@ async function describeComposerTarget(input: Locator): Promise<string> {
   }).catch(() => 'unknown');
 }
 
-async function setComposerTextThroughDom(input: Locator, prompt: string): Promise<void> {
-  await input.evaluate((element: Element, text: string) => {
+async function setComposerTextThroughDom(
+  input: Locator, prompt: string, replaceRichText = false
+): Promise<void> {
+  await input.evaluate((element: Element, payload: { text: string; replaceRichText: boolean }) => {
+    const { text, replaceRichText } = payload;
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
       const prototype = element instanceof HTMLTextAreaElement
         ? HTMLTextAreaElement.prototype
@@ -138,11 +141,16 @@ async function setComposerTextThroughDom(input: Locator, prompt: string): Promis
     selection?.removeAllRanges();
     selection?.addRange(range);
 
+    // Chromium/React rich editors may autoformat pasted Markdown through
+    // fill/insertText, changing the user's characters. A single DOM reset is
+    // bounded and must be independently verified before submission.
     let inserted = false;
-    try {
-      inserted = document.execCommand('insertText', false, text);
-    } catch {
-      inserted = false;
+    if (!replaceRichText) {
+      try {
+        inserted = document.execCommand('insertText', false, text);
+      } catch {
+        inserted = false;
+      }
     }
     if (!inserted) html.textContent = text;
     html.dispatchEvent(new InputEvent('input', {
@@ -151,7 +159,7 @@ async function setComposerTextThroughDom(input: Locator, prompt: string): Promis
       inputType: 'insertText',
       data: text
     }));
-  }, prompt, { timeout: 5_000 });
+  }, { text: prompt, replaceRichText }, { timeout: 5_000 });
 }
 
 async function writeComposerText(page: Page, input: Locator, prompt: string): Promise<void> {
@@ -189,8 +197,25 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     }
   }
 
-  // Never try repeated keyboard or DOM reinsertion for very large drafts:
-  // Chromium may stall and the draft may accumulate duplicated characters.
+  if (largePrompt && !native) {
+    // Large contenteditable fields frequently autoformat markdown during
+    // Playwright fill. Retry once with a direct, non-typing DOM assignment.
+    // Verify again after the editor's controlled-state reconciliation.
+    await setComposerTextThroughDom(input, prompt, true).catch(() => undefined);
+    await abortableSleep(250);
+    if (await composerHasExpectedText(input, expected)) {
+      await abortableSleep(250);
+      if (await composerHasExpectedText(input, expected)) {
+        logger.debug('ui.composer.write', {
+          outcome: 'verified', strategy: 'rich_dom_replace',
+          prompt_chars: prompt.length, duration_ms: Date.now() - startedAt
+        });
+        return;
+      }
+    }
+  }
+
+  // Do not ever send a corrupted draft, or retry a 65 KiB keyboard paste.
   if (largePrompt) {
     const actual = normalizeComposerText(await readComposerText(input) ?? '');
     const target = await describeComposerTarget(input);

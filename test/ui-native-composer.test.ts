@@ -21,7 +21,7 @@ test('large native ChatGPT textarea uses one input event, not Playwright fill/ke
         && !code.includes('Object.getOwnPropertyDescriptor')) return true;
       if (code.includes('Object.getOwnPropertyDescriptor')) {
         nativeWrites += 1;
-        current = String(arg);
+        current = String((arg as { text: string }).text);
         return;
       }
       if (code.includes('html.innerText')) return submitted ? '' : current;
