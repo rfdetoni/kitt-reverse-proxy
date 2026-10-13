@@ -132,7 +132,7 @@ export class HybridUiResponseReader {
           matched = true;
           matchedAt = event.t;
           adapter.matchedResponse(event.url, event.method, event.contentType);
-          logger.debug('ui.tap.matched', { provider_id: this.provider.id, mode: turn.mode, since_start_ms: event.t - startedAt });
+          logger.debug('ui.tap.matched', { provider_id: this.provider?.id ?? 'unknown', mode: turn.mode, since_start_ms: event.t - startedAt });
           continue;
         }
         if (event.type === 'chunk') {
@@ -163,11 +163,11 @@ export class HybridUiResponseReader {
             continue;
           }
           adapterEnded = true;
-          logger.debug('ui.tap.complete', { provider_id: this.provider.id, bytes: tapBytes, text_chars: adapter.accumulatedText().length });
+          logger.debug('ui.tap.complete', { provider_id: this.provider?.id ?? 'unknown', bytes: tapBytes, text_chars: adapter.accumulatedText().length });
           for (const delta of deltas) await reconciler.tapDelta(delta);
           continue;
         }
-        logger.debug('ui.tap.fallback', { provider_id: this.provider.id, reason: event.reason, bytes: tapBytes });
+        logger.debug('ui.tap.fallback', { provider_id: this.provider?.id ?? 'unknown', reason: event.reason, bytes: tapBytes });
         await failTap(event.reason);
       }
     })();
@@ -210,7 +210,7 @@ export class HybridUiResponseReader {
       ]);
       if (ready.source === 'tap') {
         logger.debug('ui.tap.raw_contract_recovered', {
-          provider_id: this.provider.id, text_chars: ready.raw.length
+          provider_id: this.provider?.id ?? 'unknown', text_chars: ready.raw.length
         });
         dom = { text: ready.raw, deltas: [], firstDeltaMs: firstByteAt === undefined
           ? undefined : firstByteAt - startedAt, durationMs: Date.now() - startedAt };

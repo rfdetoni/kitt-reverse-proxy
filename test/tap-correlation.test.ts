@@ -343,11 +343,11 @@ test('named reply parts retain their ordered source while opaque tuples keep sep
 });
 
 test('a correlated complete KAP/1 reply can be recovered only after tap trust', () => {
-  const raw = 'KITT/1\\nACTION FINAL\\nTEXT content\\nFinished\\nKITT/ENDTEXT\\nKITT/END';
+  const raw = 'KITT/1\nACTION FINAL\nTEXT content\nFinished\nKITT/ENDTEXT\nKITT/END';
   assert.equal(completedRawContract(raw, '', false), undefined);
   assert.equal(completedRawContract(raw, '', true), raw);
   assert.equal((transportPayload(raw) as { action: string }).action, 'final_response');
   assert.equal(completedRawContract(raw.replace('KITT/END', ''), '', true), undefined);
-  const different = 'KITT/1\\nACTION FINAL\\nTEXT content\\nDifferent\\nKITT/ENDTEXT\\nKITT/END';
+  const different = 'KITT/1\nACTION FINAL\nTEXT content\nDifferent\nKITT/ENDTEXT\nKITT/END';
   assert.throws(() => selectContractResponseText(different, raw, true), /ambiguous|different/i);
 });
