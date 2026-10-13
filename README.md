@@ -1,3 +1,7 @@
+## 5.3.0 — KAP/2 strict TypeScript contract
+
+The proxy uses canonical Protocol 0.13.1 parsers and typed diagnostics. Quoted keys, explicit empty values, object arrays, UTF-8 literal lengths and summary fields are accepted without bypassing host tool schemas or authorization. CDP/DOM recovery continues to recognize completed K2 envelopes.
+
 ## 5.2.1 — KAP/2 stream and repair hardening
 
 Strictly recover finished K2 frames from trusted DOM and CDP sources, reject competing actions in plain text, and preserve complete source literals during repair. The canonical parser is pinned to Protocol 0.12.1.
