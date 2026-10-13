@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: rfdetoni/kitt-protocol
-          ref: 3f2050e981bd727c9a0dfead800f400b11e38c0f
+          ref: 2e38e53ab5ce0d471948bb1220b3f50f432f78d0
           path: protocol-source
           persist-credentials: false
       - name: Check generated Agent response schema
