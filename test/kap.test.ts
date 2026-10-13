@@ -88,8 +88,8 @@ test('declared tool schema and host policy remain enforced after textual parsing
 });
 
 test('prompts request textual KAP rather than escaped JSON envelopes', () => {
-  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /KITT\/1/);
-  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /TEXT arguments\.content/);
+  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /K2 T/);
+  assert.match(AGENT_CONTRACT_SYSTEM_PROMPT, /content<<TAG/);
   assert.doesNotMatch(AGENT_CONTRACT_SYSTEM_PROMPT, /Prefer bare JSON|Escape double quotes/);
 });
 
