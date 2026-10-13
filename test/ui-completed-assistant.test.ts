@@ -21,3 +21,10 @@ test('two distinct completed assistant envelopes fail closed', () => {
   const other = completed.replace('Finished task', 'Different task');
   assert.equal(selectCompletedAssistantContract([completed, other], []), undefined);
 });
+
+test('completed compact KAP/2 assistant output is recoverable but truncated output is not', () => {
+  const compact = 'K2 F\nValidated.\nK2/END';
+  assert.equal(selectCompletedAssistantContract([compact], []), compact);
+  assert.equal(selectCompletedAssistantContract([compact.replace('K2/END', '')], []), undefined);
+  assert.equal(selectCompletedAssistantContract([compact], [{ selector: 'old', frameIndex: 0, count: 1, text: compact }]), undefined);
+});
