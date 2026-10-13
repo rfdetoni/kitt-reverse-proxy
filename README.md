@@ -576,8 +576,8 @@ Hybrid read controls:
 ```text
 --read-mode <auto|dom|tap>       default: auto
 --tap-match-timeout-ms <ms>      default: 4000
---tap-first-byte-ms <ms>         default: 8000
---tap-stall-ms <ms>              default: 5000
+--tap-first-byte-ms <ms>         default: 45000
+--tap-stall-ms <ms>              default: 90000
 --tap-max-bytes <bytes>          default: 8388608
 --tap-breaker-threshold <n>      default: 3
 --tap-breaker-cooldown-s <s>     default: 300

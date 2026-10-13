@@ -24,3 +24,8 @@ The proxy now uses correlated CDP bytes as a response-progress signal:
 Tests cover KAP raw recovery/trust restrictions and live CDP progress
 without DOM changes. A live authenticated browser is still needed to
 confirm whether the target session actually exposes tap chunks.
+
+The passive tap defaults are relaxed from 8 seconds before first byte to
+45 seconds, and from 5 seconds between chunks to 90 seconds. The UI
+inactivity watchdog and absolute request budget remain bounded; explicit
+operator-configured tap limits continue to take precedence.

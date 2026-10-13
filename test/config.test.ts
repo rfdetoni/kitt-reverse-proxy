@@ -124,3 +124,10 @@ test('hybrid read controls parse conservatively and DOM remains an explicit kill
   assert.equal(config.tapVerifyTurns, 5);
   assert.throws(() => parseCliArgs(['chatgpt', '--read-mode', 'unsafe']), /Read mode inválido/);
 });
+
+test('default passive tap tolerates slow initial and intermittent response chunks', () => {
+  const config = parseCliArgs(['chatgpt']);
+  if ('help' in config) throw new Error('unexpected help');
+  assert.equal(config.tapFirstByteMs, 45_000);
+  assert.equal(config.tapStallMs, 90_000);
+});
