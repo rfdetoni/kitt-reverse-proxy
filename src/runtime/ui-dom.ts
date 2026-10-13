@@ -206,16 +206,18 @@ export interface AssistantContractProbe {
   assistantNodes: number;
   textSamples: number;
   visibleEndMarkers: number;
+  structuralTurnNodes: number;
 }
 
 export function selectCompletedAssistantContract(
-  samples: readonly string[], baseline: readonly UiTextSnapshot[]
+  samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
   const previous = new Set(baseline.map(item => item.text.trim()));
   const valid = new Map<string, string>();
   for (const value of samples) {
     const text = value.trim();
-    if (!text || previous.has(text) || !(text.startsWith('KITT/1') || text.startsWith('K2 '))) continue;
+    if (!text || previous.has(text) || (sentPrompt && sentPrompt.includes(text)) ||
+        !(text.startsWith('KITT/1') || text.startsWith('K2 '))) continue;
     try {
       const parsed = parseKAP(text);
       const canonical = JSON.stringify(parsed);
@@ -226,9 +228,10 @@ export function selectCompletedAssistantContract(
 }
 
 export async function inspectCompletedAssistantContract(
-  page: Page, baseline: readonly UiTextSnapshot[]
+  page: Page, baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): Promise<AssistantContractProbe> {
   let assistantNodes = 0;
+  let structuralTurnNodes = 0;
   let textSamples = 0;
   let visibleEndMarkers = 0;
   const samples: string[] = [];
@@ -241,22 +244,43 @@ export async function inspectCompletedAssistantContract(
           'article[aria-label*="assistant" i], article[aria-label*="chatgpt" i]'
         )) as HTMLElement[];
         const newest = roots[roots.length - 1];
-        if (!newest) return { count: 0, samples: [] as string[] };
-        const nodes = [newest, ...Array.from(newest.querySelectorAll(
-          'pre, [class*="prose"], [class*="markdown"], [data-testid*="message-content"]'
-        ))].slice(-12) as HTMLElement[];
-        const texts = nodes.map(node => (node.innerText || node.textContent || '')
+        if (newest) {
+          const nodes = [newest, ...Array.from(newest.querySelectorAll(
+            'pre, [class*="prose"], [class*="markdown"], [data-testid*="message-content"]'
+          ))].slice(-12) as HTMLElement[];
+          const texts = nodes.map(node => (node.innerText || node.textContent || '')
+            .trim().slice(0, maxChars)).filter(Boolean);
+          return { count: roots.length, structural: 0, samples: texts };
+        }
+        // ChatGPT periodically changes role attributes. Only consider the
+        // LAST conversation turn with an assistant-style markdown descendant.
+        // Never read the page body, composer, a user-tagged turn or prior turns.
+        const turns = Array.from(document.querySelectorAll(
+          'main article[data-testid^="conversation-turn"], ' +
+          'main [data-testid^="conversation-turn-"]'
+        )) as HTMLElement[];
+        const latest = turns[turns.length - 1];
+        if (!latest || latest.matches('[data-message-author-role="user"], [data-role="user"]')
+            || latest.querySelector('[data-message-author-role="user"], [data-role="user"], [data-testid="user-message"]')) {
+          return { count: 0, structural: turns.length, samples: [] as string[] };
+        }
+        const markdown = Array.from(latest.querySelectorAll(
+          '.markdown, .prose, [data-testid="message-content"]'
+        )) as HTMLElement[];
+        const samples = markdown.slice(-8).map(node => (node.innerText || node.textContent || '')
           .trim().slice(0, maxChars)).filter(Boolean);
-        return { count: roots.length, samples: texts };
+        return { count: 0, structural: turns.length, samples };
       }, 65_536);
       assistantNodes += scan.count;
+      structuralTurnNodes += scan.structural;
       textSamples += scan.samples.length;
       visibleEndMarkers += scan.samples.filter(value => value.includes('KITT/END') || value.includes('K2/END')).length;
       samples.push(...scan.samples);
     } catch { /* Page changes while rendering; next pass can inspect it. */ }
   }
-  const text = selectCompletedAssistantContract(samples, baseline);
-  return { ...(text ? { text } : {}), assistantNodes, textSamples, visibleEndMarkers };
+  const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
+  return { ...(text ? { text } : {}), assistantNodes, textSamples,
+    visibleEndMarkers, structuralTurnNodes };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {
