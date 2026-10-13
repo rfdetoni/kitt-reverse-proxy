@@ -9,6 +9,7 @@ import {
 } from '../ui-response-monitor.js';
 import type { UiTextSnapshot } from '../ui-dom.js';
 import { logger } from '../../logger.js';
+import { abortableSleep } from '../cancellation.js';
 import { CdpStreamTap } from './tap-cdp.js';
 import { TapStreamAdapter } from './tap-adapter.js';
 import { ResponseReconciler } from './reconciler.js';
@@ -200,9 +201,13 @@ export class HybridUiResponseReader {
         { source: 'dom'; value: UiResponseResult } | { source: 'tap'; raw: string }
       > => {
         const raw = await tapCompleted;
-        return raw === undefined
-          ? { source: 'dom', value: await domTask }
-          : { source: 'tap', raw };
+        if (raw === undefined) return { source: 'dom', value: await domTask };
+        // Allow DOM to settle and surface intervention/consumer errors before
+        // choosing the already validated CDP completion. No blind replay.
+        return await Promise.race([
+          domTask.then(value => ({ source: 'dom' as const, value })),
+          abortableSleep(1_500, signal).then(() => ({ source: 'tap' as const, raw }))
+        ]);
       })();
       const ready = await Promise.race([
         domTask.then(value => ({ source: 'dom' as const, value })),
