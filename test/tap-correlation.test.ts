@@ -390,3 +390,11 @@ test('large prompt matches correlated POST whose JSON splits the user content', 
     assert.deepEqual(observed, ['current']);
   } finally { turn.cancel(); await tap.detach(); }
 });
+
+test('CDP contract reader accepts only complete compact KAP/2 and rejects disagreement', () => {
+  const compact = 'K2 F\nDone.\nK2/END';
+  assert.equal(completedRawContract(compact, '', true), compact);
+  assert.equal(completedRawContract(compact.replace('K2/END', ''), '', true), undefined);
+  assert.equal((transportPayload(compact) as {action: string}).action, 'final_response');
+  assert.throws(() => selectContractResponseText('K2 F\nChanged.\nK2/END', compact, true), /different valid contract/i);
+});
