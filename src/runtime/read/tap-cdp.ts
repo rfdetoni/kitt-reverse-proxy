@@ -1,4 +1,5 @@
 import type { CDPSession } from 'playwright';
+import { logger } from '../../logger.js';
 import { RESOURCE_LIMITS, utf8Bytes } from '../../core/resource-limits.js';
 import { decodeRequestBody } from '../../discovery/body-codec.js';
 import { scoreRequestCandidate } from '../../discovery/scoring.js';
@@ -42,7 +43,10 @@ interface PendingBody {
 interface ActiveTurn {
   mode: TapTurnMode;
   profile?: TapProfile | undefined;
-  needle: string;
+  needles: readonly string[];
+  postsSeen: number;
+  decodedBodies: number;
+  partialMatches: number;
   queue: AsyncEventQueue<TapEvent>;
   candidates: Map<string, Candidate>;
   pendingBodies: Map<string, PendingBody>;
@@ -76,17 +80,36 @@ function normalize(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-function promptNeedle(prompt: string): string {
-  const value = normalize(prompt);
-  return value;
+/** Three separated 192-character anchors preserve exact-turn correlation
+ * even when a large user prompt is represented in several JSON fields. */
+function promptNeedles(prompt: string): string[] {
+  const text = normalize(prompt);
+  if (text.length <= 512) return text ? [text] : [];
+  const n = 192;
+  return [
+    text.slice(0, n),
+    text.slice(Math.floor((text.length - n) / 2), Math.floor((text.length - n) / 2) + n),
+    text.slice(-n)
+  ];
 }
 
-function jsonContainsNeedle(value: JsonValue, needle: string, depth = 0): boolean {
-  if (depth > 12 || value == null) return false;
-  if (typeof value === 'string') return normalize(value).includes(needle);
-  if (Array.isArray(value)) return value.some((item) => jsonContainsNeedle(item, needle, depth + 1));
-  if (typeof value === 'object') return Object.values(value).some((item) => jsonContainsNeedle(item, needle, depth + 1));
-  return false;
+function jsonContainsNeedles(value: JsonValue, needles: readonly string[]): number {
+  let mask = 0;
+  const visit = (item: JsonValue, depth: number): void => {
+    if (depth > 12 || item == null || mask === (1 << needles.length) - 1) return;
+    if (typeof item === 'string') {
+      const part = normalize(item);
+      needles.forEach((needle, index) => {
+        if (part.includes(needle)) mask |= 1 << index;
+      });
+    } else if (Array.isArray(item)) {
+      for (const child of item) visit(child, depth + 1);
+    } else if (typeof item === 'object') {
+      for (const child of Object.values(item)) visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+  return mask;
 }
 
 function contentTypeAllowed(contentType: string): boolean {
@@ -202,7 +225,10 @@ export class CdpStreamTap {
     const turn: ActiveTurn = {
       mode: decision.mode,
       ...(profile ? { profile } : {}),
-      needle: promptNeedle(prompt),
+      needles: promptNeedles(prompt),
+      postsSeen: 0,
+      decodedBodies: 0,
+      partialMatches: 0,
       queue,
       candidates: new Map(),
       pendingBodies: new Map(),
@@ -211,7 +237,7 @@ export class CdpStreamTap {
     };
     turn.matchTimer = setTimeout(
       () => this.fail(turn, 'no_matching_request'),
-      this.config.tapMatchTimeoutMs ?? 4_000
+      Math.max(this.config.tapMatchTimeoutMs ?? 4_000, prompt.length > 16_384 ? 20_000 : 0)
     );
     turn.matchTimer.unref?.();
     this.current = turn;
@@ -253,6 +279,7 @@ export class CdpStreamTap {
     const method = typeof request.method === 'string' ? request.method : '';
     const postData = typeof request.postData === 'string' ? request.postData : '';
     if (!requestId || !url || method.toUpperCase() !== 'POST') return;
+    turn.postsSeen++;
     if (turn.candidates.has(requestId) || turn.pendingBodies.has(requestId)) return;
     if (turn.candidates.size + turn.pendingBodies.size >= RESOURCE_LIMITS.discoveryCandidates) return;
     if (turn.profile && !profileMatches(turn.profile, url, method)) return;
@@ -300,7 +327,13 @@ export class CdpStreamTap {
     if (utf8Bytes(postData) > RESOURCE_LIMITS.discoveryRequestBytes) return;
     let decoded: ReturnType<typeof decodeRequestBody>;
     try { decoded = decodeRequestBody(postData, pending.contentType); } catch { return; }
-    if (!decoded || !turn.needle || !jsonContainsNeedle(decoded.body, turn.needle)) return;
+    if (!decoded || !turn.needles.length) return;
+    turn.decodedBodies++;
+    const matchedMask = jsonContainsNeedles(decoded.body, turn.needles);
+    if (matchedMask !== (1 << turn.needles.length) - 1) {
+      if (matchedMask) turn.partialMatches++;
+      return;
+    }
     const { url, method, resourceType } = pending;
     const score = scoreRequestCandidate(url, decoded.body, resourceType, this.provider.id) + 50;
     if (score < 70) return;
@@ -482,6 +515,14 @@ export class CdpStreamTap {
   private fail(turn: ActiveTurn, reason: TapFailureReason): void {
     if (this.current !== turn || turn.cancelled) return;
     this.clearTurnTimers(turn);
+    if (reason === 'no_matching_request') {
+      logger.debug('ui.tap.match_diagnostics', {
+        posts_seen: turn.postsSeen,
+        decoded_bodies: turn.decodedBodies,
+        partial_matches: turn.partialMatches,
+        required_anchors: turn.needles.length
+      });
+    }
     turn.queue.push({ type: 'error', reason });
     turn.queue.close();
     this.current = undefined;

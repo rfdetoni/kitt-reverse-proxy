@@ -35,6 +35,10 @@ export const CHATGPT_PLUGIN = defineProviderPlugin({
     ],
     responseSelectors: [
       '[data-message-author-role="assistant"] .markdown',
+      '[data-message-author-role="assistant"] pre',
+      '[data-message-author-role="assistant"] .prose',
+      '[data-role="assistant"] .prose',
+      '[data-testid*="assistant-message"] .prose',
       '.agent-turn .markdown',
       'article [data-message-author-role="assistant"] .markdown',
       '[data-message-id] .markdown',

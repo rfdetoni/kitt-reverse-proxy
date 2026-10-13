@@ -13,6 +13,7 @@ import type {
 } from '../types.js';
 import {
   collectVisibleSnapshots,
+  inspectCompletedAssistantContract,
   extractArtifactContents,
   type ExtractedArtifact,
   type UiTextSnapshot
@@ -429,6 +430,13 @@ export class UiChatExecutor implements ChatExecutor {
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+    if (this.provider.id === 'chatgpt') {
+      const previousContract = await inspectCompletedAssistantContract(this.session.page, baseline);
+      if (previousContract.text) baseline.push({
+        selector: '[prior-assistant-contract]', frameIndex: -1,
+        count: 1, text: previousContract.text
+      });
+    }
     const promptSendStartedAt = Date.now();
     options?.lifecycle?.beforeSubmit(prompt);
     await this.sendPrompt(prompt, options?.signal);

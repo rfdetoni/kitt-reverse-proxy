@@ -4,6 +4,7 @@ import type { AppConfig, ChatExecutionOptions, LiveBrowserSession } from '../typ
 import {
   anyVisible,
   collectVisibleSnapshots,
+  inspectCompletedAssistantContract,
   readVisibleSnapshotSlot,
   selectChangedSnapshot,
   type UiTextSnapshot
@@ -155,6 +156,9 @@ export async function awaitUiResponse(
   let nextGateCheckAt = startedAt;
   let nextStreamingCheckAt = startedAt;
   let nextProgressLogAt = startedAt + 30_000;
+  let generationStoppedAt = 0;
+  let nextAssistantProbeAt = 0;
+  let assistantProbeLogged = false;
 
   await abortableSleep(250, signal);
 
@@ -214,6 +218,36 @@ export async function awaitUiResponse(
     if (tap?.lastByteAt && tap.lastByteAt > lastActivityAt && tap.lastByteAt <= Date.now()) {
       lastActivityAt = tap.lastByteAt;
       observedTap = true;
+    }
+
+    if (streaming) generationStoppedAt = 0;
+    if (provider.id === 'chatgpt' && observedStreaming && !streaming
+        && !tap?.receiving && !lastText) {
+      if (!generationStoppedAt) generationStoppedAt = Date.now();
+      if (Date.now() >= nextAssistantProbeAt) {
+        const probe = await inspectCompletedAssistantContract(session.page, baseline);
+        nextAssistantProbeAt = Date.now() + 2_000;
+        if (probe.text) {
+          logger.debug('ui.response.assistant_fallback', {
+            provider_id: provider.id, response_chars: probe.text.length,
+            stopped_for_ms: Date.now() - generationStoppedAt
+          });
+          return { text: probe.text, deltas: [], firstDeltaMs: Date.now() - startedAt,
+            durationMs: Date.now() - startedAt };
+        }
+        if (!assistantProbeLogged && Date.now() - generationStoppedAt >= 5_000) {
+          assistantProbeLogged = true;
+          logger.event('warn', 'ui.response.capture_missing', {
+            provider_id: provider.id, assistant_nodes: probe.assistantNodes,
+            text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers
+          });
+        }
+      }
+      if (Date.now() - generationStoppedAt >= 20_000) {
+        throw new UiTimeoutError(
+          'O ChatGPT terminou de gerar, mas o proxy não conseguiu extrair a resposta do assistente.'
+        );
+      }
     }
 
     if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {

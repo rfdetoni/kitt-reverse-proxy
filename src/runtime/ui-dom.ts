@@ -1,4 +1,5 @@
 import type { Frame, Locator, Page } from 'playwright';
+import { parseKAP } from '../contracts/kap.js';
 
 export interface UiTextSnapshot {
   selector: string;
@@ -196,6 +197,66 @@ export async function readVisibleSnapshotSlot(
   } catch {
     return undefined;
   }
+}
+
+/** Fallback for a completed ChatGPT response when markdown selectors are stale.
+ * Only inspect assistant-owned containers, never body text or user turns. */
+export interface AssistantContractProbe {
+  text?: string;
+  assistantNodes: number;
+  textSamples: number;
+  visibleEndMarkers: number;
+}
+
+export function selectCompletedAssistantContract(
+  samples: readonly string[], baseline: readonly UiTextSnapshot[]
+): string | undefined {
+  const previous = new Set(baseline.map(item => item.text.trim()));
+  const valid = new Map<string, string>();
+  for (const value of samples) {
+    const text = value.trim();
+    if (!text || previous.has(text) || !text.startsWith('KITT/1')) continue;
+    try {
+      const parsed = parseKAP(text);
+      const canonical = JSON.stringify(parsed);
+      if (!valid.has(canonical)) valid.set(canonical, text);
+    } catch { /* Incomplete or UI-transformed text cannot execute as a contract. */ }
+  }
+  return valid.size === 1 ? [...valid.values()][0] : undefined;
+}
+
+export async function inspectCompletedAssistantContract(
+  page: Page, baseline: readonly UiTextSnapshot[]
+): Promise<AssistantContractProbe> {
+  let assistantNodes = 0;
+  let textSamples = 0;
+  let visibleEndMarkers = 0;
+  const samples: string[] = [];
+  for (const frame of frames(page)) {
+    try {
+      const scan = await frame.evaluate((maxChars) => {
+        const roots = Array.from(document.querySelectorAll(
+          '[data-message-author-role="assistant"], ' +
+          '[data-role="assistant"], [data-testid*="assistant-message"], ' +
+          'article[aria-label*="assistant" i], article[aria-label*="chatgpt" i]'
+        )) as HTMLElement[];
+        const newest = roots[roots.length - 1];
+        if (!newest) return { count: 0, samples: [] as string[] };
+        const nodes = [newest, ...Array.from(newest.querySelectorAll(
+          'pre, [class*="prose"], [class*="markdown"], [data-testid*="message-content"]'
+        ))].slice(-12) as HTMLElement[];
+        const texts = nodes.map(node => (node.innerText || node.textContent || '')
+          .trim().slice(0, maxChars)).filter(Boolean);
+        return { count: roots.length, samples: texts };
+      }, 65_536);
+      assistantNodes += scan.count;
+      textSamples += scan.samples.length;
+      visibleEndMarkers += scan.samples.filter(value => value.includes('KITT/END')).length;
+      samples.push(...scan.samples);
+    } catch { /* Page changes while rendering; next pass can inspect it. */ }
+  }
+  const text = selectCompletedAssistantContract(samples, baseline);
+  return { ...(text ? { text } : {}), assistantNodes, textSamples, visibleEndMarkers };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {

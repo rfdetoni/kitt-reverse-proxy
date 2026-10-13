@@ -351,3 +351,42 @@ test('a correlated complete KAP/1 reply can be recovered only after tap trust', 
   const different = 'KITT/1\nACTION FINAL\nTEXT content\nDifferent\nKITT/ENDTEXT\nKITT/END';
   assert.throws(() => selectContractResponseText(different, raw, true), /ambiguous|different/i);
 });
+
+test('large prompt matches correlated POST whose JSON splits the user content', async () => {
+  const prompt = 'START UNIQUE CORRELATION TOKEN' + ' a'.repeat(4_000) + ' END UNIQUE CORRELATION TOKEN';
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  const fragmentSize = 192;
+  const middleStart = Math.floor((normalized.length - fragmentSize) / 2);
+  const fragments = [
+    normalized.slice(0, fragmentSize),
+    normalized.slice(middleStart, middleStart + fragmentSize),
+    normalized.slice(-fragmentSize)
+  ];
+  const wire = 'data: ' + JSON.stringify({ delta: 'matched-reply' }) + '\n\n';
+  const cdp = fakeCdp(async method =>
+    method === 'Network.streamResourceContent'
+      ? { bufferedData: Buffer.from(wire).toString('base64') } : {});
+  const { tap } = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const turn = tap.arm(prompt);
+  try {
+    cdp.emit('Network.requestWillBeSent', {
+      requestId: 'current',
+      type: 'fetch',
+      request: {
+        url: 'https://chatgpt.com/backend-api/conversation',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        postData: JSON.stringify({ messages: fragments.map(content => ({ role: 'user', content })) })
+      }
+    });
+    response(cdp);
+    cdp.emit('Network.loadingFinished', { requestId: 'current' });
+    const observed: string[] = [];
+    for await (const event of turn.events()) {
+      if (event.type === 'matched') observed.push(event.requestId);
+      if (event.type === 'error') assert.fail(event.reason);
+    }
+    assert.deepEqual(observed, ['current']);
+  } finally { turn.cancel(); await tap.detach(); }
+});
