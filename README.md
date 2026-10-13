@@ -1,3 +1,7 @@
+## KAP/2 — compact model output (5.2.0)
+
+The proxy now requests strict `K2 T` or `K2 F` text, with a bounded TOON-inspired grammar, tabular plan fields, literal code blocks and host-schema-validated operation aliases. The authoritative grammar and safety contract are documented in [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP2.md). Host-side validation remains mandatory.
+
 ## Release 5.1.4 — Native textarea handling for large WebChat prompts
 
 Confirm the editor is actually editable, then use one native input event for large textarea prompts instead of Playwright's slow browser fill path. Validation still prevents sending corrupted drafts. See [release notes](docs/RELEASE_5.1.4.md).
