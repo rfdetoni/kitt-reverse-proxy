@@ -401,11 +401,11 @@ test('CDP contract reader accepts only complete compact KAP/2 and rejects disagr
 
 test('long composer prompts split into adjacent request content parts still correlate', async () => {
   const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
-    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta: 'OK'}) + '\\n\\n').toString('base64')}
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta: 'OK'}) + '\n\n').toString('base64')}
     : {});
   const {tap, profile} = fixtureTap(async () => cdp);
   const prompt = 'UNIQUE TASK START ' + 'middle text with separated content segments. '.repeat(25) + 'UNIQUE TASK END';
-  const parts = prompt.match(/[\\s\\S]{1,83}/g)!;
+  const parts = prompt.match(/[\s\S]{1,83}/g)!;
   assert.ok(parts.length > 3);
   await tap.initialize();
   const turn = tap.arm(prompt);
