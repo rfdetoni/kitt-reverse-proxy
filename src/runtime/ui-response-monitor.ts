@@ -15,6 +15,12 @@ import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
 
+/** Progress from a matched CDP response, not arbitrary page mutations. */
+export interface UiTransportActivity {
+  lastByteAt?: number;
+  receiving: boolean;
+}
+
 export interface UiResponseResult {
   text: string;
   deltas: string[];
@@ -125,7 +131,8 @@ export async function awaitUiResponse(
   baseline: readonly UiTextSnapshot[],
   sentPrompt: string,
   onDelta?: ChatExecutionOptions['onDelta'],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  tapActivity?: () => UiTransportActivity | undefined
 ): Promise<UiResponseResult> {
   const startedAt = Date.now();
   const watchdog = uiResponseWatchdogBudget(config.uiResponseTimeoutMs);
@@ -142,6 +149,7 @@ export async function awaitUiResponse(
   let streamedText = '';
   let stableSince = 0;
   let observedStreaming = false;
+  let observedTap = false;
   let streaming = false;
   let activeSnapshot: UiTextSnapshot | undefined;
   let nextGateCheckAt = startedAt;
@@ -150,7 +158,7 @@ export async function awaitUiResponse(
 
   await abortableSleep(250, signal);
 
-  while (Date.now() < (observedStreaming || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline)) {
+  while (Date.now() < (observedStreaming || observedTap || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline)) {
     throwIfAborted(signal);
     const now = Date.now();
     if (now >= nextGateCheckAt) {
@@ -200,7 +208,15 @@ export async function awaitUiResponse(
       }
     }
 
-    if (!streaming && lastText && !isThinkingIndicator(lastText)) {
+    const tap = tapActivity?.();
+    // Correlated response bytes are progress even when the UI is still
+    // rendering or its assistant selectors do not match current markup.
+    if (tap?.lastByteAt && tap.lastByteAt > lastActivityAt && tap.lastByteAt <= Date.now()) {
+      lastActivityAt = tap.lastByteAt;
+      observedTap = true;
+    }
+
+    if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {
       if (stableSince === 0) stableSince = Date.now();
       const settleMs = observedStreaming
         ? Math.max(750, config.uiSettleMs)
@@ -212,7 +228,9 @@ export async function awaitUiResponse(
       logger.debug('ui.response.progress', {
         provider_id: provider.id, elapsed_ms: Date.now() - startedAt,
         idle_ms: Date.now() - lastActivityAt, response_chars: lastText.length,
-        observed_streaming: observedStreaming, streaming
+        observed_streaming: observedStreaming, streaming, observed_tap: observedTap,
+        tap_receiving: tap?.receiving ?? false,
+        tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null
       });
       nextProgressLogAt = Date.now() + 30_000;
     }
@@ -236,6 +254,6 @@ export async function awaitUiResponse(
   }
 
   throw new UiTimeoutError(
-    `O chat excedeu o teto absoluto de ${Math.round(((observedStreaming || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline) - startedAt) / 1000)}s sem resposta final.`
+    `O chat excedeu o teto absoluto de ${Math.round(((observedStreaming || observedTap || firstDeltaMs !== undefined ? generatingDeadline : absoluteDeadline) - startedAt) / 1000)}s sem resposta final.`
   );
 }

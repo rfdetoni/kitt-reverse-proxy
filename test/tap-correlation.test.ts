@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { CdpStreamTap } from '../src/runtime/read/tap-cdp.js';
 import { TapStreamAdapter } from '../src/runtime/read/tap-adapter.js';
-import { selectContractResponseText } from '../src/runtime/read/contract-text.js';
+import { completedRawContract, selectContractResponseText, transportPayload } from '../src/runtime/read/contract-text.js';
 import { decodeTextBody } from '../src/discovery/decoder.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
@@ -340,4 +340,14 @@ test('named reply parts retain their ordered source while opaque tuples keep sep
   active.push(Buffer.from('data: '+JSON.stringify({parts:['next ','source']})+'\n\n'));
   active.end();
   assert.equal(active.accumulatedText(),'next source');
+});
+
+test('a correlated complete KAP/1 reply can be recovered only after tap trust', () => {
+  const raw = 'KITT/1\\nACTION FINAL\\nTEXT content\\nFinished\\nKITT/ENDTEXT\\nKITT/END';
+  assert.equal(completedRawContract(raw, '', false), undefined);
+  assert.equal(completedRawContract(raw, '', true), raw);
+  assert.equal((transportPayload(raw) as { action: string }).action, 'final_response');
+  assert.equal(completedRawContract(raw.replace('KITT/END', ''), '', true), undefined);
+  const different = 'KITT/1\\nACTION FINAL\\nTEXT content\\nDifferent\\nKITT/ENDTEXT\\nKITT/END';
+  assert.throws(() => selectContractResponseText(different, raw, true), /ambiguous|different/i);
 });

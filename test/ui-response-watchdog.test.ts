@@ -37,3 +37,25 @@ test('actively generating WebChat is allowed up to 15 minutes, not the 4-minute 
   assert.equal(uiResponseAbsoluteBudget(180_000, false), 360_000);
   assert.equal(uiResponseAbsoluteBudget(180_000, true), 900_000);
 });
+
+test('correlated CDP bytes extend response activity even without DOM text', async () => {
+  const started = Date.now();
+  const session = {
+    page: {
+      frames: () => [], url: () => 'https://chatgpt.com/',
+      evaluate: async () => false
+    }
+  } as unknown as LiveBrowserSession;
+  const config = {uiResponseTimeoutMs: 1000, uiSettleMs: 100, headed: true} as AppConfig;
+  let tapTime = started;
+  const heartbeat = setInterval(() => { tapTime = Date.now(); }, 150);
+  setTimeout(() => clearInterval(heartbeat), 1600);
+  try {
+    await assert.rejects(
+      awaitUiResponse(session, detectProvider('https://chatgpt.com'), config, [], 'prompt',
+        undefined, undefined, () => ({lastByteAt: tapTime, receiving: true})),
+      (error: unknown) => error instanceof UiTimeoutError && /Nenhum progresso/.test(error.message)
+    );
+    assert.ok(Date.now() - started >= 2000, 'tap activity must postpone inactivity timeout');
+  } finally { clearInterval(heartbeat); }
+});

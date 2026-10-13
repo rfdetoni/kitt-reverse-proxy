@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
+import { parseKAP } from '../../contracts/kap.js';
 import { toolCallEnvelopes } from '../../mapping/tool-calling.js';
 import { parseContractJson, ContractJsonError } from '../../util/contract-json.js';
 
 export function transportPayload(text: string, strict = false): unknown {
+  // KITT agent replies use KAP/1, not JSON. Parse the complete envelope
+  // including its terminal KITT/END before accepting a recovered tap body.
+  if (text.trimStart().startsWith('KITT/1\\n')) return parseKAP(text.trim());
   const parse = (candidate: string): unknown => {
     const parsed = parseContractJson(candidate);
     if (strict && parsed.repaired) throw new ContractJsonError('syntax', 'Alternative stream requires syntax repair');

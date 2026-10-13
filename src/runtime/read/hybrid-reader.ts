@@ -8,6 +8,7 @@ import {
   type UiResponseResult
 } from '../ui-response-monitor.js';
 import type { UiTextSnapshot } from '../ui-dom.js';
+import { logger } from '../../logger.js';
 import { CdpStreamTap } from './tap-cdp.js';
 import { TapStreamAdapter } from './tap-adapter.js';
 import { ResponseReconciler } from './reconciler.js';
@@ -114,6 +115,8 @@ export class HybridUiResponseReader {
     let firstByteAt: number | undefined;
     let matched = false;
     let adapterEnded = false;
+    let tapLastByteAt: number | undefined;
+    let tapBytes = 0;
 
     const failTap = async (reason: TapFailureReason): Promise<void> => {
       if (!tapFailure) {
@@ -129,10 +132,13 @@ export class HybridUiResponseReader {
           matched = true;
           matchedAt = event.t;
           adapter.matchedResponse(event.url, event.method, event.contentType);
+          logger.debug('ui.tap.matched', { provider_id: this.provider.id, mode: turn.mode, since_start_ms: event.t - startedAt });
           continue;
         }
         if (event.type === 'chunk') {
           if (firstByteAt === undefined) firstByteAt = event.t;
+          tapLastByteAt = event.t;
+          tapBytes += event.bytes.byteLength;
           let deltas: string[];
           try {
             deltas = adapter.push(event.bytes);
@@ -157,9 +163,11 @@ export class HybridUiResponseReader {
             continue;
           }
           adapterEnded = true;
+          logger.debug('ui.tap.complete', { provider_id: this.provider.id, bytes: tapBytes, text_chars: adapter.accumulatedText().length });
           for (const delta of deltas) await reconciler.tapDelta(delta);
           continue;
         }
+        logger.debug('ui.tap.fallback', { provider_id: this.provider.id, reason: event.reason, bytes: tapBytes });
         await failTap(event.reason);
       }
     })();
@@ -176,10 +184,31 @@ export class HybridUiResponseReader {
         baseline,
         sentPrompt,
         (delta) => reconciler.domDelta(delta),
-        signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal
+        signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal,
+        () => ({ ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }), receiving: matched && !adapterEnded && !tapFailure })
       );
-      // A completed tap still needs the DOM; a failed delivery must stop the read.
-      dom = await Promise.race([domTask, tapTask.then(() => domTask)]);
+      // Once the CDP request has completed, a previously trusted, strictly
+      // validated KAP/1 stream can finish without waiting for a broken DOM
+      // assistant selector. Cold/unverified taps still require DOM evidence.
+      const tapCompleted = tapTask.then(() => completedRawContract(
+        adapter.accumulatedText(),
+        adapter.accumulatedAlternativeText(),
+        preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode)
+          && turn.mode === 'active' && matched && adapterEnded && !tapFailure
+      ));
+      const ready = await Promise.race([
+        domTask.then(value => ({ source: 'dom' as const, value })),
+        tapCompleted.then(raw => raw === undefined
+          ? domTask.then(value => ({ source: 'dom' as const, value }))
+          : { source: 'tap' as const, raw })
+      ]);
+      if (ready.source === 'tap') {
+        logger.debug('ui.tap.raw_contract_recovered', {
+          provider_id: this.provider.id, text_chars: ready.raw.length
+        });
+        dom = { text: ready.raw, deltas: [], firstDeltaMs: firstByteAt === undefined
+          ? undefined : firstByteAt - startedAt, durationMs: Date.now() - startedAt };
+      } else dom = ready.value;
     } catch (error) {
       monitoring.abort();
       turn.cancel();
