@@ -147,3 +147,13 @@ test('KAP/2 rejects competing, unsafe and incomplete objects', () => {
     'K2 F\nitems[1]{id,id}:\n  T01,T02\nK2/END',
   ]) assert.throws(() => parseKAP(raw), KAPError);
 });
+
+
+test('KAP/2 repair cannot alter completed literal source data', async () => {
+  const { assertAgentRepairContinuity, AgentContractValidationError } = await import('../src/runtime/agent-contract.js');
+  const before = 'K2 T write_file\npath: safe.py\ncontent<<SOURCE\nsafe()\nSOURCE\nK2/END';
+  const after = before.replace('safe()', 'dangerous()');
+  assert.throws(() => assertAgentRepairContinuity(
+    before, after, new AgentContractValidationError('invalid path', 'shape', ['$/tool_input/path'])
+  ), /Repair modified an unrelated field: content/);
+});
