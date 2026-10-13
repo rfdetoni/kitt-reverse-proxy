@@ -138,7 +138,7 @@ function parseFields(lines: string[]): Record<string, unknown> {
 
 /** One complete envelope only; does not execute tools or repair invalid payloads. */
 export function parseKAP2(raw: string): KAPMessage {
-  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_SIZE) throw new Error('KAP/2 exceeds 64 KiB');
+  if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > MAX_SIZE) throw new Error('KAP/2 exceeds 64 KiB');
   const lines = raw.trim().split(/\r?\n/);
   if (lines.length > MAX_LINES || lines.at(-1) !== 'K2/END') throw new Error('Missing K2/END');
   const header = /^K2 ([TFWQ])(?: ([A-Za-z0-9_.:-]{1,64}))?$/.exec(lines[0] ?? '');
