@@ -1,3 +1,7 @@
+## 5.2.1 — KAP/2 stream and repair hardening
+
+Strictly recover finished K2 frames from trusted DOM and CDP sources, reject competing actions in plain text, and preserve complete source literals during repair. The canonical parser is pinned to Protocol 0.12.1.
+
 ## KAP/2 — compact model output (5.2.0)
 
 The proxy now requests strict `K2 T` or `K2 F` text, with a bounded TOON-inspired grammar, tabular plan fields, literal code blocks and host-schema-validated operation aliases. The authoritative grammar and safety contract are documented in [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP2.md). Host-side validation remains mandatory.
