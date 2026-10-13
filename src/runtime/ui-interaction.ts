@@ -24,16 +24,9 @@ function normalizeComposerText(value: string): string {
   return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function selectorTargetsEditableElement(selector: string): boolean {
-  const normalized = selector.toLowerCase();
-  return /(^|[\s>+~,])textarea(?:[\s.#[:]|$)/.test(normalized)
-    || /(^|[\s>+~,])input(?:[\s.#[:]|$)/.test(normalized)
-    || normalized.includes('[contenteditable="true"]')
-    || normalized.includes("[contenteditable='true']");
-}
-
 async function locatorIsEditable(input: Locator): Promise<boolean> {
   return input.evaluate((element: Element) => {
+    if (!element.isConnected) return false;
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
       return !element.disabled && !element.readOnly;
     }
@@ -53,7 +46,7 @@ async function firstEditableLocator(page: Page, selectors: readonly string[]): P
         if (await candidate.count() === 0) continue;
         if (!await candidate.isVisible({ timeout: 150 }).catch(() => false)) continue;
 
-        if (selectorTargetsEditableElement(descriptor.selector) || await locatorIsEditable(candidate)) {
+        if (await locatorIsEditable(candidate)) {
           return { locator: candidate, frameIndex, ...descriptor };
         }
 
@@ -95,6 +88,13 @@ async function composerHasExpectedText(input: Locator, expected: string): Promis
     return (element as HTMLElement).textContent ?? '';
   }, undefined, { timeout: 500 }).catch(() => undefined);
   return typeof raw === 'string' && normalizeComposerText(raw) === expected;
+}
+
+async function isNativeComposer(input: Locator): Promise<boolean> {
+  return input.evaluate((element: Element) =>
+    element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement,
+    undefined, { timeout: 500 }
+  ).catch(() => false);
 }
 
 async function describeComposerTarget(input: Locator): Promise<string> {
@@ -151,7 +151,7 @@ async function setComposerTextThroughDom(input: Locator, prompt: string): Promis
       inputType: 'insertText',
       data: text
     }));
-  }, prompt);
+  }, prompt, { timeout: 5_000 });
 }
 
 async function writeComposerText(page: Page, input: Locator, prompt: string): Promise<void> {
@@ -159,19 +159,34 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
 
   const startedAt = Date.now();
   const largePrompt = prompt.length >= 16_384;
-  let fillFailed = false;
+  const native = largePrompt && await isNativeComposer(input);
+  const strategy = native ? 'native_input' : 'fill';
+  let writeFailed = false;
+  let writeErrorType = '';
   try {
-    await input.fill(prompt, { timeout: largePrompt ? 8_000 : 2_000 });
-  } catch {
-    fillFailed = true;
+    if (native) {
+      // For large native textareas, assign the value and dispatch one input
+      // event instead of performing a huge browser keyboard/fill operation.
+      await setComposerTextThroughDom(input, prompt);
+    } else {
+      await input.fill(prompt, { timeout: largePrompt ? 8_000 : 2_000 });
+    }
+  } catch (error) {
+    writeFailed = true;
+    writeErrorType = error instanceof Error ? error.name : 'unknown';
   }
 
   if (await composerHasExpectedText(input, expected)) {
-    logger.debug('ui.composer.write', {
-      strategy: 'fill', prompt_chars: prompt.length,
-      duration_ms: Date.now() - startedAt, fill_failed: fillFailed
-    });
-    return;
+    // A controlled React editor may replace its value on the next tick.
+    // Do not submit merely because one transient read matched.
+    if (native) await abortableSleep(100);
+    if (await composerHasExpectedText(input, expected)) {
+      logger.debug('ui.composer.write', {
+        outcome: 'verified', strategy, prompt_chars: prompt.length,
+        duration_ms: Date.now() - startedAt, write_failed: writeFailed
+      });
+      return;
+    }
   }
 
   // Never try repeated keyboard or DOM reinsertion for very large drafts:
@@ -180,9 +195,10 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     const actual = normalizeComposerText(await readComposerText(input) ?? '');
     const target = await describeComposerTarget(input);
     logger.event('warn', 'ui.composer.write', {
-      outcome: 'integrity_failure', strategy: 'fill_only',
+      outcome: 'integrity_failure', strategy,
       prompt_chars: prompt.length, actual_chars: actual.length,
-      duration_ms: Date.now() - startedAt, fill_failed: fillFailed
+      duration_ms: Date.now() - startedAt, write_failed: writeFailed,
+      write_error_type: writeErrorType || null
     });
     throw new UiAutomationError(
       `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. Texto grande não foi redigitado automaticamente.`

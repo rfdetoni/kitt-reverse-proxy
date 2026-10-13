@@ -1,3 +1,7 @@
+## Release 5.1.4 — Native textarea handling for large WebChat prompts
+
+Confirm the editor is actually editable, then use one native input event for large textarea prompts instead of Playwright's slow browser fill path. Validation still prevents sending corrupted drafts. See [release notes](docs/RELEASE_5.1.4.md).
+
 ## Release 5.1.3 — Reliable large WebChat prompts
 
 Prevents the current Agent task from being replayed as browser history, verifies rich-editor content using rendered and raw text, and avoids slow keyboard reinsertions when large drafts fail validation. See [release notes](docs/RELEASE_5.1.3.md).

@@ -20,7 +20,8 @@ test('UI submission requires acceptance, including ignored click/Enter and detac
       fill: async (value: string) => { text = value; },
       focus: async () => {},
       press: async () => { enters++; submitted = true; },
-      evaluate: async () => {
+      evaluate: async (fn: unknown) => {
+        if (String(fn).includes('html.isContentEditable')) return true;
         if (mode === 'detached' && submitted) throw new Error('detached composer');
         return text;
       }

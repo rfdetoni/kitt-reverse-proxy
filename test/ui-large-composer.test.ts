@@ -15,7 +15,8 @@ test('large editor mismatch never triggers a second keyboard insertion', async (
     count: async () => 1,
     isVisible: async () => true,
     fill: async (value: string) => { draft = value + 'EXTRA'; },
-    evaluate: async () => draft,
+    evaluate: async (fn: unknown) =>
+      String(fn).includes('html.isContentEditable') ? true : draft,
     focus: async () => { fallbackInteractions += 1; },
     click: async () => { fallbackInteractions += 1; },
     press: async () => { fallbackInteractions += 1; }
