@@ -5,7 +5,7 @@ export class KAPError extends Error {
   constructor(message: string, code?: string, line?: number) {
     super(message);
     this.name = 'KAPError';
-    this.code = code;
-    this.line = line;
+    if (code !== undefined) this.code = code;
+    if (line !== undefined) this.line = line;
   }
 }
