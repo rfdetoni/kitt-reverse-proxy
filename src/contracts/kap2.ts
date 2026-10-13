@@ -153,6 +153,9 @@ export function parseKAP2(raw: string): KAPMessage {
   }
   // Only parsed top-level records are control directives. Literal blocks may contain K2/END.
   const structured = body.length > 0 && (FIELD.test(body[0]!) || LITERAL.test(body[0]!));
+  if (!structured && body.some(line => /^K2 (?:[TFWQ])(?: |$)|^K2\/END$/.test(line))) {
+    throw new Error('Competing KAP/2 action or terminator in plain content');
+  }
   if (kind === 'T' && !structured && body.length) throw new Error('Tools require KAP/2 fields');
   const data = structured ? parseFields(body) : null;
   if (kind === 'T') {
