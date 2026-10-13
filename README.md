@@ -1,3 +1,7 @@
+## Release 5.1.3 — Reliable large WebChat prompts
+
+Prevents the current Agent task from being replayed as browser history, verifies rich-editor content using rendered and raw text, and avoids slow keyboard reinsertions when large drafts fail validation. See [release notes](docs/RELEASE_5.1.3.md).
+
 ## Release 5.1.2 — Safe regeneration of interrupted FINAL envelopes
 
 For a truncated Gemini `ACTION FINAL` followed by a new complete FINAL, the proxy discards both competing drafts and requests a fresh, independently validated response within the existing retry budget. Other ambiguities and tool actions still fail closed. Prompt instructions consistently name `KITT/1`. See [release notes](docs/RELEASE_5.1.2.md).

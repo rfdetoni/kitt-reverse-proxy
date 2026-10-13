@@ -85,6 +85,18 @@ async function readComposerText(input: Locator): Promise<string | undefined> {
   }, undefined, {timeout: 500}).catch(() => undefined);
 }
 
+async function composerHasExpectedText(input: Locator, expected: string): Promise<boolean> {
+  const rendered = await readComposerText(input);
+  if (rendered === undefined) return false;
+  if (normalizeComposerText(rendered) === expected) return true;
+  // Rich-editor innerText can include layout-only breaks not in the actual draft.
+  const raw = await input.evaluate((element: Element) => {
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return undefined;
+    return (element as HTMLElement).textContent ?? '';
+  }, undefined, { timeout: 500 }).catch(() => undefined);
+  return typeof raw === 'string' && normalizeComposerText(raw) === expected;
+}
+
 async function describeComposerTarget(input: Locator): Promise<string> {
   return input.evaluate((element: Element) => {
     const html = element as HTMLElement;
@@ -145,13 +157,37 @@ async function setComposerTextThroughDom(input: Locator, prompt: string): Promis
 async function writeComposerText(page: Page, input: Locator, prompt: string): Promise<void> {
   const expected = normalizeComposerText(prompt);
 
+  const startedAt = Date.now();
+  const largePrompt = prompt.length >= 16_384;
+  let fillFailed = false;
   try {
-    await input.fill(prompt, { timeout: 2_000 });
+    await input.fill(prompt, { timeout: largePrompt ? 8_000 : 2_000 });
   } catch {
-    // Rich editors can reject fill(); continue with an actual focused editor path.
+    fillFailed = true;
   }
 
-  if (normalizeComposerText(await readComposerText(input) ?? '') === expected) return;
+  if (await composerHasExpectedText(input, expected)) {
+    logger.debug('ui.composer.write', {
+      strategy: 'fill', prompt_chars: prompt.length,
+      duration_ms: Date.now() - startedAt, fill_failed: fillFailed
+    });
+    return;
+  }
+
+  // Never try repeated keyboard or DOM reinsertion for very large drafts:
+  // Chromium may stall and the draft may accumulate duplicated characters.
+  if (largePrompt) {
+    const actual = normalizeComposerText(await readComposerText(input) ?? '');
+    const target = await describeComposerTarget(input);
+    logger.event('warn', 'ui.composer.write', {
+      outcome: 'integrity_failure', strategy: 'fill_only',
+      prompt_chars: prompt.length, actual_chars: actual.length,
+      duration_ms: Date.now() - startedAt, fill_failed: fillFailed
+    });
+    throw new UiAutomationError(
+      `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. Texto grande não foi redigitado automaticamente.`
+    );
+  }
 
   await input.focus().catch(() => undefined);
   await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
@@ -159,12 +195,12 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
   await input.press('Backspace').catch(() => undefined);
   await page.keyboard.insertText(prompt).catch(() => undefined);
 
-  if (normalizeComposerText(await readComposerText(input) ?? '') === expected) return;
+  if (await composerHasExpectedText(input, expected)) return;
 
   await setComposerTextThroughDom(input, prompt).catch(() => undefined);
 
   const actual = normalizeComposerText(await readComposerText(input) ?? '');
-  if (actual !== expected) {
+  if (!await composerHasExpectedText(input, expected)) {
     const target = await describeComposerTarget(input);
     throw new UiAutomationError(
       `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}.`

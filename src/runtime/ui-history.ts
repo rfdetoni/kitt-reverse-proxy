@@ -114,7 +114,10 @@ function matchesSelectedPrompt(message: CanonicalMessage, selected: UiPromptSele
     if (message.toolCallId && selected.toolCallId) return message.toolCallId === selected.toolCallId;
     return message.text.replace(/^\[tool:[^\]]*\]\n?/i, '') === selected.text;
   }
-  return message.text === selected.text;
+  // The caller can prefix the latest user turn with orchestration context.
+  // This is the same logical turn, not older chat history.
+  return message.text === selected.text
+    || selected.text.endsWith(`\n\n${message.text}`);
 }
 
 function historyRoleLabel(message: CanonicalMessage): string {
