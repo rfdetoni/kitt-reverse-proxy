@@ -196,11 +196,17 @@ export class HybridUiResponseReader {
         preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode)
           && turn.mode === 'active' && matched && adapterEnded && !tapFailure
       ));
+      const tapReady = (async (): Promise<
+        { source: 'dom'; value: UiResponseResult } | { source: 'tap'; raw: string }
+      > => {
+        const raw = await tapCompleted;
+        return raw === undefined
+          ? { source: 'dom', value: await domTask }
+          : { source: 'tap', raw };
+      })();
       const ready = await Promise.race([
         domTask.then(value => ({ source: 'dom' as const, value })),
-        tapCompleted.then(raw => raw === undefined
-          ? domTask.then(value => ({ source: 'dom' as const, value }))
-          : { source: 'tap' as const, raw })
+        tapReady
       ]);
       if (ready.source === 'tap') {
         logger.debug('ui.tap.raw_contract_recovered', {
