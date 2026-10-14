@@ -426,7 +426,8 @@ export function selectCompletedAssistantContract(
   const previousVisible = baseline.filter(item => item.selector === '[pre-submit-visible-text]')
     .map(item => item.text);
   const valid = new Map<string, string>();
-  for (const value of samples) {
+  // Nested DOM snapshots can contain the same reply multiple times.
+  for (const value of new Set(samples)) {
     const candidates = new Set([...kapCandidatesFromRenderedText(value), ...compactFinalCandidates(value)]);
     for (const text of candidates) {
       if (previous.has(text) || previousVisible.some(old => old.includes(text))
@@ -708,9 +709,10 @@ export async function inspectCompletedAssistantContract(
   }
   const mutationSamples = await recentFreshContractDomSamples(page);
   samples.push(...mutationSamples);
-  const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
-  const repairText = text ? undefined : selectFreshRenderedFrameForRepair(samples, baseline, sentPrompt);
-  const compact = new Set(samples.flatMap(compactFinalCandidates));
+  const uniqueSamples = [...new Set(samples)];
+  const text = selectCompletedAssistantContract(uniqueSamples, baseline, sentPrompt);
+  const repairText = text ? undefined : selectFreshRenderedFrameForRepair(uniqueSamples, baseline, sentPrompt);
+  const compact = new Set(uniqueSamples.flatMap(compactFinalCandidates));
   const beforeText = baseline.map(item => sameVisibleWords(item.text));
   const freshCompactCandidates = [...compact].filter(candidate =>
     !sameVisibleWords(sentPrompt).includes(sameVisibleWords(candidate))
@@ -719,7 +721,7 @@ export async function inspectCompletedAssistantContract(
   let freshVisibleChars = 0;
   if (oldVisible) {
     const anchor = oldVisible.slice(-Math.min(oldVisible.length, 512));
-    for (const value of samples) {
+    for (const value of uniqueSamples) {
       const pos = anchor ? value.lastIndexOf(anchor) : -1;
       if (pos >= 0) freshVisibleChars = Math.max(freshVisibleChars, value.length - pos - anchor.length);
     }

@@ -1,5 +1,6 @@
 export class AsyncEventQueue<T> {
   private readonly items: T[] = [];
+  private head = 0;
   private readonly waiters: Array<(value: IteratorResult<T>) => void> = [];
   private closed = false;
 
@@ -23,8 +24,15 @@ export class AsyncEventQueue<T> {
 
   async *events(): AsyncIterable<T> {
     while (true) {
-      const item = this.items.shift();
-      if (item !== undefined) {
+      if (this.head < this.items.length) {
+        const item = this.items[this.head++]!;
+        if (this.head === this.items.length) {
+          this.items.length = 0;
+          this.head = 0;
+        } else if (this.head >= 256 && this.head >= this.items.length / 2) {
+          this.items.splice(0, this.head);
+          this.head = 0;
+        }
         yield item;
         continue;
       }

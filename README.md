@@ -1,3 +1,7 @@
+## Reverse Proxy 5.3.12 — bounded-cost DOM processing and tap queue
+
+The KAP/2 DOM inspector de-duplicates repeated text samples before contract parsing and freshness diagnostics. The CDP tap event queue consumes buffered chunks with a cursor instead of shifting an array on every event; buffers are compacted periodically. No capture source, provenance rule, parsing grammar or host authorization is relaxed. See [release notes](docs/RELEASE_5.3.12.md).
+
 ## Reverse Proxy 5.3.11 — reliable T00 composer submission
 
 On 2026-10-14 the model planner returned successfully, but the next T00
