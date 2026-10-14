@@ -235,7 +235,8 @@ export async function awaitUiResponse(
     // completion evidence than spinner/Stop-button state, which may be stale.
     // Probe the current assistant-owned turn even when the CDP tap is absent
     // or still receiving, and require a stable observation before returning.
-    if (preferRawContract && provider.id === 'chatgpt' && Date.now() >= nextContractScanAt) {
+    if (preferRawContract && (provider.id === 'chatgpt' || provider.id === 'gemini')
+        && Date.now() >= nextContractScanAt) {
       nextContractScanAt = Date.now() + 500;
       const direct = selectCompletedAssistantContract(lastText ? [lastText] : [], baseline, sentPrompt);
       const probe = direct ? undefined : await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
@@ -317,10 +318,22 @@ export async function awaitUiResponse(
 
     if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {
       if (stableSince === 0) stableSince = Date.now();
-      const settleMs = observedStreaming
-        ? Math.max(750, config.uiSettleMs)
-        : Math.max(1_250, config.uiSettleMs);
-      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
+      const contractCapture = preferRawContract && ['chatgpt', 'gemini'].includes(provider.id);
+      const hasCompleteContract = contractCapture
+        ? Boolean(selectCompletedAssistantContract([lastText], baseline, sentPrompt))
+        : false;
+      // Completed KAP frames take the fast, strictly parsed path above.
+      // But INVALID stable answers must still reach the Agent contract repair
+      // loop. Waiting for a strictly valid frame here would turn every
+      // repairable syntax failure into a transport timeout.
+      const settleMs = contractCapture && !hasCompleteContract
+        ? Math.max(3_500, config.uiSettleMs)
+        : observedStreaming
+          ? Math.max(750, config.uiSettleMs)
+          : Math.max(1_250, config.uiSettleMs);
+      if (Date.now() - stableSince >= settleMs) {
+        return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
+      }
     }
 
     if (Date.now() >= nextProgressLogAt) {

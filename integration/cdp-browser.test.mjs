@@ -8,7 +8,7 @@ import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
 import { abortableSleep } from '../dist/runtime/cancellation.js';
 import { UiChatExecutor } from '../dist/runtime/ui-executor.js';
 import { detectProvider } from '../dist/providers/catalog.js';
-import { collectVisibleSnapshots, extractArtifactContents } from '../dist/runtime/ui-dom.js';
+import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline, inspectCompletedAssistantContract } from '../dist/runtime/ui-dom.js';
 import { parseContractJson } from '../dist/util/contract-json.js';
 import { readFileSync } from 'node:fs';
 import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
@@ -55,7 +55,7 @@ test('real Chromium hybrid reader preserves contracts and stops failed delivery'
     await page.locator('#answer').evaluate((element, text) => { element.textContent = text; }, expected);
     let fetchedDone = true;
     let monitorAborted = false;
-    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'auto', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
+    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'tap', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
       const signal = args[6];
       try { while (!fetchedDone) await abortableSleep(10, signal); }
       catch (error) { monitorAborted = Boolean(signal?.aborted); throw error; }
@@ -267,7 +267,7 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
     }};
     const provider = detectProvider('https://gemini.google.com/app');
     const ui = new UiChatExecutor({context:wrappedContext,page,persistent:false},provider,
-      {targetUrl:origin,allowedEndpointHosts:[],readMode:'auto',tapVerifyTurns:1,tapMatchTimeoutMs:250,tapFirstByteMs:5000,tapStallMs:5000,
+      {targetUrl:origin,allowedEndpointHosts:[],readMode:'tap',tapVerifyTurns:1,tapMatchTimeoutMs:250,tapFirstByteMs:5000,tapStallMs:5000,
         manualInterventionTimeoutMs:1000,uiResponseTimeoutMs:5000,uiSettleMs:100,headed:false,toolEnforcement:'off'});
     await ui.initialize();
     locatorPrototype = Object.getPrototypeOf(page.locator('.ql-editor'));
@@ -287,4 +287,52 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemini', {timeout: 30_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  const prior = 'K2 F\nstatus: old\nK2/END';
+  const answer = 'K2 F\nstatus: done\nK2/END';
+  try {
+    for (const [url, markup] of [
+      ['https://chatgpt.com/', '<div class="plain-answer"></div>'],
+      ['https://gemini.google.com/app', '<model-response><message-content class="reply"></message-content></model-response>']
+    ]) {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent('<main><div style="white-space:pre-wrap" id="previous"></div></main>');
+      await page.locator('#previous').evaluate((node, value) => {node.textContent=value;}, prior);
+      const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,
+        text:await visibleContractBaseline(page)}];
+      let cdpSessions = 0;
+      const session = {page,context:{newCDPSession:async()=>{cdpSessions++;throw Error('CDP disabled');}}};
+      const provider = detectProvider(url);
+      const reader = new HybridUiResponseReader(session,provider,{
+        targetUrl:url,readMode:'auto',uiSettleMs:100,uiResponseTimeoutMs:6_000,
+        headed:false,allowedEndpointHosts:[]
+      });
+      await reader.initialize();
+      reader.arm('Different submitted prompt');
+      const pending = reader.read(baseline,'Different submitted prompt',undefined,undefined,true);
+      await delay(180);
+      await page.locator('main').evaluate((node,{markup,text})=>{
+        node.insertAdjacentHTML('beforeend',markup);
+        const added = node.lastElementChild;
+        if (added) {
+          added.setAttribute('style','display:block;white-space:pre-wrap');
+          const target=added.querySelector('message-content')||added;
+          target.textContent=text;
+        }
+      },{markup,text:answer});
+      const probe = await inspectCompletedAssistantContract(page,baseline,'Different submitted prompt');
+      assert.equal(probe.text,answer,
+        JSON.stringify({url,probe,visible:await page.locator('main').innerText()}));
+      const received = await pending;
+      assert.equal(received.text,answer);
+      assert.equal(received.readDiagnostics.source,'dom');
+      assert.equal(received.readDiagnostics.tap_mode,'disabled');
+      assert.equal(cdpSessions,0);
+      await context.close();
+    }
+  } finally {await browser.close();}
 });

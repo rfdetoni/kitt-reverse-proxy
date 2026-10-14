@@ -27,6 +27,13 @@ export class HybridUiResponseReader {
   private readonly tap: CdpStreamTap;
   private pending: TapTurn | undefined;
 
+  /** On ChatGPT Web the DOM is authoritative: CDP network streams can carry
+   * megabytes of unrelated events and never report a usable KAP frame. */
+  private domOnly(): boolean {
+    return this.config.readMode === 'dom'
+      || (['chatgpt', 'gemini'].includes(this.provider?.id ?? '') && this.config.readMode !== 'tap');
+  }
+
   constructor(
     private readonly session: LiveBrowserSession,
     private readonly provider: ProviderPreset,
@@ -37,12 +44,12 @@ export class HybridUiResponseReader {
   }
 
   async initialize(): Promise<void> {
-    await this.tap.initialize();
+    if (!this.domOnly()) await this.tap.initialize();
   }
 
   arm(prompt: string): void {
     this.pending?.cancel();
-    this.pending = this.tap.arm(prompt);
+    if (!this.domOnly()) this.pending = this.tap.arm(prompt);
   }
 
   cancelPending(): void {
@@ -52,12 +59,12 @@ export class HybridUiResponseReader {
 
   async reset(): Promise<void> {
     this.cancelPending();
-    await this.tap.reconnect();
+    if (!this.domOnly()) await this.tap.reconnect();
   }
 
   describe(): JsonObject {
     return {
-      mode: this.config.readMode ?? 'auto',
+      mode: this.domOnly() ? 'dom' : (this.config.readMode ?? 'auto'),
       final_source: 'dom',
       dom_warm_standby: true,
       tap: this.tap.health()
@@ -74,7 +81,8 @@ export class HybridUiResponseReader {
     const turn = this.pending;
     this.pending = undefined;
 
-    if (!turn || turn.mode === 'disabled') {
+    if (this.domOnly() || !turn || turn.mode === 'disabled') {
+      turn?.cancel();
       const dom = await this.monitor(
         this.session,
         this.provider,
@@ -82,12 +90,14 @@ export class HybridUiResponseReader {
         baseline,
         sentPrompt,
         onDelta,
-        signal
+        signal,
+        undefined,
+        preferRawContract
       );
       return {
         ...dom,
         readDiagnostics: {
-          mode: this.config.readMode ?? 'auto',
+          mode: this.domOnly() ? 'dom' : (this.config.readMode ?? 'auto'),
           source: 'dom',
           tap_mode: 'disabled',
           tap_verified: false,
