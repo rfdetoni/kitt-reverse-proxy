@@ -128,6 +128,7 @@ function linesOf(raw: string): string[] {
   if (lines.length > MAX_LINES) fail('Too many lines', 'E_LINES');
   return lines;
 }
+
 function compactJsonFinal(raw: string): KAPMessage | undefined {
   if (!raw.startsWith('K2 F')) return undefined;
   const marker = /^K2 F(?: |\r?\n)@json: /.exec(raw);
