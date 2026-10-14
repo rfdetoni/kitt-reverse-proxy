@@ -37,6 +37,7 @@ jobs:
         run: |
           cmp protocol-source/sdk/typescript/src/kap.ts src/contracts/kap.ts
           cmp protocol-source/sdk/typescript/src/kap2.ts src/contracts/kap2.ts
+          cmp protocol-source/sdk/typescript/src/kap-version.ts src/contracts/kap-version.ts
           cmp protocol-source/sdk/typescript/src/kap-error.ts src/contracts/kap-error.ts
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - name: Typecheck critical surface
