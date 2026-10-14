@@ -289,14 +289,41 @@ function compactFinalCandidates(rendered: string): string[] {
   return [...found];
 }
 
-function strictCompactFinal(candidate: string): boolean {
+function strictCompactFinal(candidate: string): string | undefined {
   const match = /^K2 F(?: |\n)@json: (\{[^\n]*\})[ \t\n]+K2\/END$/.exec(candidate);
-  if (!match) return false;
-  try {
-    const parsed = parseContractJson(match[1]!);
-    return !parsed.repaired && parsed.value !== null
-      && typeof parsed.value === 'object' && !Array.isArray(parsed.value);
-  } catch { return false; }
+  if (!match) return undefined;
+  const original = match[1]!;
+  const valid = (json: string): boolean => {
+    try {
+      const parsed = parseContractJson(json);
+      return !parsed.repaired && parsed.value !== null
+        && typeof parsed.value === 'object' && !Array.isArray(parsed.value);
+    } catch { return false; }
+  };
+  if (valid(original)) return candidate;
+
+  // Some Markdown views add a backslash before "_" and "*" inside JSON
+  // strings. These are NOT legal JSON escapes: undo only those two known
+  // presentation escapes, only inside quotes, and ONLY if the entire result
+  // then passes strict JSON validation. Never rewrite proper backslashes.
+  let quoted = false, corrections = 0, repaired = '';
+  for (let i = 0; i < original.length; i++) {
+    const ch = original[i]!;
+    if (ch === '"') { quoted = !quoted; repaired += ch; continue; }
+    if (quoted && ch === '\\' && i + 1 < original.length) {
+      const next = original[i + 1]!;
+      if (next === '_' || next === '*') {
+        if (++corrections > 32) return undefined;
+        repaired += next;
+      } else repaired += ch + next;
+      i++;
+      continue;
+    }
+    repaired += ch;
+  }
+  if (!corrections || !valid(repaired)) return undefined;
+  return candidate.slice(0, match.index! + match[0].indexOf(original))
+    + repaired + candidate.slice(match.index! + match[0].indexOf(original) + original.length);
 }
 
 export function selectCompletedAssistantContract(
@@ -311,10 +338,11 @@ export function selectCompletedAssistantContract(
     for (const text of candidates) {
       if (previous.has(text) || previousVisible.some(old => old.includes(text))
           || (sentPrompt && sentPrompt.includes(text))) continue;
-      if (strictCompactFinal(text)) {
+      const compact = strictCompactFinal(text);
+      if (compact) {
         // Syntax-only recognition. The host validates the canonical KAP/2
         // frame and the result schema; the proxy grants no tool authority.
-        valid.set('compact:' + sameVisibleWords(text), text);
+        valid.set('compact:' + sameVisibleWords(compact), compact);
         continue;
       }
       try {

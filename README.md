@@ -1,3 +1,9 @@
+The DOM extractor additionally reverses only invalid Markdown presentation
+escapes before underscores/asterisks inside compact JSON strings. It does so
+only when the entire normalized candidate passes the strict JSON syntax
+check; all other invalid escapes and duplicate fields still fail closed.
+KAP tool authorization and host semantic validation are unchanged.
+
 ## Reverse Proxy 5.3.8 — compact KAP/2 DOM capture
 
 The WebChat reader can extract a bounded tagged `K2 F @json: {...} K2/END`

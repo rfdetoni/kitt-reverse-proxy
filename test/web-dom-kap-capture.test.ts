@@ -102,3 +102,15 @@ test('invalid compact JSON is not a completed valid contract', () => {
   const invalid = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_init.py"]}]} K2/END';
   assert.equal(selectCompletedAssistantContract([invalid],[],'new request'),undefined);
 });
+
+
+test('Markdown-escaped underscore/star in compact final is normalized only after strict validation', () => {
+  const slash = String.fromCharCode(92);
+  const raw = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_' + slash + '_init' +
+    slash + '_' + slash + '_.py"],"pattern":"dlls/' + slash + '*.spec"}]} K2/END';
+  const expected = 'K2 F @json: {"items":[{"paths":["src/__init__.py"],"pattern":"dlls/*.spec"}]} K2/END';
+  assert.equal(selectCompletedAssistantContract([raw],[],'new request'),expected);
+  // Do not reinterpret unrelated illegal JSON escapes or competing frames.
+  assert.equal(selectCompletedAssistantContract([raw.replace(slash+'_',slash+'q')],[],'new request'),undefined);
+  assert.equal(selectCompletedAssistantContract(['K2 F @json: {"x":1,"x":2} K2/END'],[],'new request'),undefined);
+});
