@@ -293,13 +293,15 @@ export async function inspectCompletedAssistantContract(
           'model-response, .model-response-text'
         )) as HTMLElement[];
         const newest = roots[roots.length - 1];
+        const responseSamples: string[] = [];
+        let structural = 0;
         if (newest) {
           const nodes = [newest, ...Array.from(newest.querySelectorAll(
             'pre, [class*="prose"], [class*="markdown"], [data-testid*="message-content"]'
           ))].slice(-12) as HTMLElement[];
           const texts = nodes.map(node => (node.innerText || node.textContent || '')
             .trim().slice(0, maxChars)).filter(Boolean);
-          return { count: roots.length, structural: 0, samples: texts };
+          responseSamples.push(...texts);
         }
         // ChatGPT periodically changes role attributes. Only consider the
         // LAST conversation turn with an assistant-style markdown descendant.
@@ -318,7 +320,10 @@ export async function inspectCompletedAssistantContract(
           )) as HTMLElement[];
           const samples = markdown.slice(-8).map(node => (node.innerText || node.textContent || '')
             .trim().slice(0, maxChars)).filter(Boolean);
-          if (samples.length) return { count: 0, structural: turns.length, samples };
+          if (samples.length) {
+            responseSamples.push(...samples);
+            structural = turns.length;
+          }
         }
         // Last-resort structural extraction for ChatGPT UI revisions which
         // no longer expose conversation-turn or assistant role attributes.
@@ -339,7 +344,10 @@ export async function inspectCompletedAssistantContract(
             || Boolean(owner.querySelector('[data-testid*="user-message"]'))));
         if (!notReply) {
           const text = (lastReply.innerText || lastReply.textContent || '').trim().slice(0, maxChars);
-          if (text) return { count: 0, structural: turns.length || replyNodes.length, samples: [text] };
+          if (text) {
+            responseSamples.push(text);
+            structural = Math.max(structural, turns.length || replyNodes.length);
+          }
         }
 
         // Both ChatGPT and Gemini may omit the old assistant role/markdown
@@ -349,8 +357,9 @@ export async function inspectCompletedAssistantContract(
         const root = document.querySelector('main, [role="main"], #thread, [data-testid*="conversation"]')
           ?? document.body;
         const visible = (root as HTMLElement | null)?.innerText || '';
-        return { count: 0, structural: turns.length || replyNodes.length,
-          samples: visible ? [visible.slice(-131_072)] : [] as string[] };
+        if (visible) responseSamples.push(visible.slice(-131_072));
+        return { count: roots.length, structural: structural || turns.length || replyNodes.length,
+          samples: responseSamples };
       }, 65_536);
       assistantNodes += scan.count;
       structuralTurnNodes += scan.structural;
