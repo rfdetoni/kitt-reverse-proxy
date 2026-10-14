@@ -290,7 +290,7 @@ function compactFinalCandidates(rendered: string): string[] {
 }
 
 function strictCompactFinal(candidate: string): boolean {
-  const match = /^K2 F(?: |\n)@json: (\{[^\n]*\})(?: |\n)K2\/END$/.exec(candidate);
+  const match = /^K2 F(?: |\n)@json: (\{[^\n]*\})[ \t\n]+K2\/END$/.exec(candidate);
   if (!match) return false;
   try {
     const parsed = parseContractJson(match[1]!);
