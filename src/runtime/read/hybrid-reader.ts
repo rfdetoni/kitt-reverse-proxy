@@ -1,4 +1,4 @@
-import { selectContractResponseText } from './contract-text.js';
+import { completedRawContract, selectContractResponseText } from './contract-text.js';
 import { UiTimeoutError } from '../ui-errors.js';
 export { selectContractResponseText } from './contract-text.js';
 import type { AppConfig, ChatExecutionOptions, JsonObject, LiveBrowserSession } from '../../types.js';
@@ -204,8 +204,13 @@ export class HybridUiResponseReader {
         await failTap(event.reason);
       }
     })();
-    // Observe failures immediately, even if the monitor throws synchronously.
-    void tapTask.catch(() => undefined);
+    // Propagate consumer failures immediately: a rejected downstream write
+    // must cancel the DOM observer, not wait for a coincidental DOM timeout.
+    let rejectTapTask!: (error: unknown) => void;
+    const tapTaskFailed = new Promise<never>((_resolve, reject) => {
+      rejectTapTask = reject;
+    });
+    void tapTask.catch(rejectTapTask);
 
     const monitoring = new AbortController();
     let dom: UiResponseResult;
@@ -228,7 +233,8 @@ export class HybridUiResponseReader {
       // alive. Once a winner is selected we cancel only observation.
       const ready = await Promise.race([
         domTask.then(value => ({ source: 'dom' as const, value })),
-        tapWinner
+        tapWinner,
+        tapTaskFailed
       ]);
       winnerSource = ready.source;
       if (ready.source === 'tap') {
@@ -247,8 +253,14 @@ export class HybridUiResponseReader {
       await tapTask.catch(() => undefined);
       // A DOM timeout must not silently manufacture a response, but a
       // strictly complete and correlated tap body survives DOM failure.
+      const eligibleLegacy = preferRawContract && trustedBeforeRead
+        && Boolean(turn.profile?.textMode) && turn.mode === 'active'
+        && matched && adapterEnded && !tapFailure;
       const recovered = error instanceof UiTimeoutError && !signal?.aborted && !deliveryFailed && matched && !tapFailure
-        ? adapter.completedKAP2() : undefined;
+        ? (eligibleLegacy
+          ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(), true)
+          : adapter.completedKAP2())
+        : undefined;
       if (recovered === undefined) throw error;
       winnerSource = 'tap';
       dom = { text: recovered, deltas: [], firstDeltaMs: firstByteAt === undefined
