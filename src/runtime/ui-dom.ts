@@ -211,6 +211,9 @@ export interface AssistantContractProbe {
   /** Untrusted, fresh but malformed model frame; repair loop must validate. */
   repairText?: string;
   freshVisibleChars?: number;
+  compactCandidates?: number;
+  freshCompactCandidates?: number;
+  maxSampleChars?: number;
 }
 
 /**
@@ -600,6 +603,9 @@ export async function inspectCompletedAssistantContract(
         const rawText = (root as HTMLElement | null)?.textContent || '';
         if (rawText && rawText !== visible && rawText.includes('K2/END'))
           responseSamples.push(rawText.slice(-131_072));
+        const rawBody = document.body?.textContent || '';
+        if (rawBody && rawBody !== body && rawBody !== rawText && rawBody.includes('K2/END'))
+          responseSamples.push(rawBody.slice(-131_072));
         return { count: roots.length, structural: structural || turns.length || replyNodes.length,
           samples: responseSamples };
       }, 65_536);
@@ -612,6 +618,11 @@ export async function inspectCompletedAssistantContract(
   }
   const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
   const repairText = text ? undefined : selectFreshRenderedFrameForRepair(samples, baseline, sentPrompt);
+  const compact = new Set(samples.flatMap(compactFinalCandidates));
+  const beforeText = baseline.map(item => sameVisibleWords(item.text));
+  const freshCompactCandidates = [...compact].filter(candidate =>
+    !sameVisibleWords(sentPrompt).includes(sameVisibleWords(candidate))
+    && beforeText.every(prior => !prior.includes(sameVisibleWords(candidate)))).length;
   const oldVisible = baseline.find(item => item.selector === '[pre-submit-visible-text]')?.text ?? '';
   let freshVisibleChars = 0;
   if (oldVisible) {
@@ -623,7 +634,8 @@ export async function inspectCompletedAssistantContract(
   }
   return { ...(text ? { text } : {}), ...(repairText ? { repairText } : {}),
     assistantNodes, textSamples, visibleEndMarkers, structuralTurnNodes,
-    freshVisibleChars };
+    freshVisibleChars, compactCandidates: compact.size, freshCompactCandidates,
+    maxSampleChars: Math.max(0, ...samples.map(sample => sample.length)) };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {

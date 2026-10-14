@@ -180,7 +180,8 @@ export async function awaitUiResponse(
   let malformedReplyCandidate = '';
   let malformedReplySince = 0;
   let nextContractScanAt = startedAt;
-  let lastDomProbe: { textSamples: number; visibleEndMarkers: number; freshVisibleChars?: number } | undefined;
+  let lastDomProbe: { textSamples: number; visibleEndMarkers: number; freshVisibleChars?: number;
+    compactCandidates?: number; freshCompactCandidates?: number; maxSampleChars?: number } | undefined;
 
   await abortableSleep(250, signal);
 
@@ -330,7 +331,10 @@ export async function awaitUiResponse(
             provider_id: provider.id, assistant_nodes: probe.assistantNodes, structural_turn_nodes: probe.structuralTurnNodes,
             text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers,
             fresh_visible_chars: probe.freshVisibleChars ?? 0,
-            unparsed_fresh_candidate: Boolean(probe.repairText)
+            unparsed_fresh_candidate: Boolean(probe.repairText),
+            compact_candidates: probe.compactCandidates ?? 0,
+            fresh_compact_candidates: probe.freshCompactCandidates ?? 0,
+            max_sample_chars: probe.maxSampleChars ?? 0
           });
         }
       }
@@ -370,7 +374,9 @@ export async function awaitUiResponse(
         tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null,
         dom_samples: lastDomProbe?.textSamples ?? 0,
         dom_end_markers: lastDomProbe?.visibleEndMarkers ?? 0,
-        dom_fresh_visible_chars: lastDomProbe?.freshVisibleChars ?? 0
+        dom_fresh_visible_chars: lastDomProbe?.freshVisibleChars ?? 0,
+        dom_compact_candidates: lastDomProbe?.compactCandidates ?? 0,
+        dom_fresh_compact_candidates: lastDomProbe?.freshCompactCandidates ?? 0
       });
       nextProgressLogAt = Date.now() + 30_000;
     }
