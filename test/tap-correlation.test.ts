@@ -430,3 +430,52 @@ test('long composer prompts split into adjacent request content parts still corr
     assert.equal(adapter.accumulatedText(), 'OK');
   } finally { turn.cancel(); await tap.detach(); }
 });
+
+
+test('a single segmented long-prompt anchor can correlate a uniquely scoped provider request', async () => {
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta:'K2 F\nstatus: done\nK2/END'}) + '\n\n').toString('base64')}
+    : {});
+  const {tap} = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const prompt = 'CURRENT_20261014_' + 'head'.repeat(100) + 'middle'.repeat(110) + 'end'.repeat(110);
+  const turn = tap.arm(prompt);
+  try {
+    const url = 'https://chatgpt.com/backend-api/conversation';
+    // The WebChat transport carries only the first of three anchors after
+    // segmentation, but a competing request never supplies that same anchor.
+    cdp.emit('Network.requestWillBeSent', {requestId:'unique', type:'fetch',
+      request:{url, method:'POST', headers:{'content-type':'application/json'},
+        postData:JSON.stringify({messages:[{role:'user', content:prompt.slice(0, 192)}]})}});
+    cdp.emit('Network.responseReceived', {requestId:'unique', response:{url,status:200,
+      mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
+    cdp.emit('Network.loadingFinished', {requestId:'unique'});
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.ok(events.some(event => event.type === 'matched' && event.requestId === 'unique'));
+    assert.ok(events.some(event => event.type === 'end'));
+  } finally { turn.cancel(); await tap.detach(); }
+});
+
+test('competing partially matched requests fail closed instead of racing the wrong answer', async () => {
+  const cdp = fakeCdp();
+  const {tap} = fixtureTap(async () => cdp);
+  await tap.initialize();
+  const prompt = 'CURRENT_20261014_' + 'head'.repeat(100) + 'middle'.repeat(110) + 'end'.repeat(110);
+  const turn = tap.arm(prompt);
+  const url = 'https://chatgpt.com/backend-api/conversation';
+  try {
+    for (const requestId of ['left', 'right']) {
+      cdp.emit('Network.requestWillBeSent', {requestId, type:'fetch',
+        request:{url,method:'POST',headers:{'content-type':'application/json'},
+          postData: JSON.stringify({messages:[{role:'user',content:prompt.slice(0,192)}]})}});
+      cdp.emit('Network.responseReceived', {requestId, response:{url,status:200,
+        mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
+    }
+    await new Promise(resolve => setTimeout(resolve, 620));
+    turn.cancel();
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.equal(events.some(event => event.type === 'matched'), false);
+  } finally { turn.cancel(); await tap.detach(); }
+});
