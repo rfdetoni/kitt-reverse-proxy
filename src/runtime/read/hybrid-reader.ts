@@ -31,7 +31,7 @@ export class HybridUiResponseReader {
    * megabytes of unrelated events and never report a usable KAP frame. */
   private domOnly(): boolean {
     return this.config.readMode === 'dom'
-      || (this.provider.id === 'chatgpt' && this.config.readMode !== 'tap');
+      || (['chatgpt', 'gemini'].includes(this.provider.id) && this.config.readMode !== 'tap');
   }
 
   constructor(
