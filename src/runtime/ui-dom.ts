@@ -445,8 +445,18 @@ export async function inspectCompletedAssistantContract(
   }
   const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
   const repairText = text ? undefined : selectFreshRenderedFrameForRepair(samples, baseline, sentPrompt);
+  const oldVisible = baseline.find(item => item.selector === '[pre-submit-visible-text]')?.text ?? '';
+  let freshVisibleChars = 0;
+  if (oldVisible) {
+    const anchor = oldVisible.slice(-Math.min(oldVisible.length, 512));
+    for (const value of samples) {
+      const pos = anchor ? value.lastIndexOf(anchor) : -1;
+      if (pos >= 0) freshVisibleChars = Math.max(freshVisibleChars, value.length - pos - anchor.length);
+    }
+  }
   return { ...(text ? { text } : {}), ...(repairText ? { repairText } : {}),
-    assistantNodes, textSamples, visibleEndMarkers, structuralTurnNodes };
+    assistantNodes, textSamples, visibleEndMarkers, structuralTurnNodes,
+    freshVisibleChars };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {
