@@ -16,8 +16,19 @@ import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
 import { sameContractText } from './read/contract-text.js';
+import { parseKAP2 } from '../contracts/kap2.js';
 
 /** Progress from a matched CDP response, not arbitrary page mutations. */
+/** Strict model-frame validation is necessary but DOM provenance is still required. */
+export function verifiedLogicalCompletion(assistantText: string, correlatedFrame: string): boolean {
+  if (!assistantText || !correlatedFrame || !correlatedFrame.trimStart().startsWith('K2 ')) return false;
+  try {
+    parseKAP2(correlatedFrame);
+    parseKAP2(assistantText);
+    return sameContractText(assistantText, correlatedFrame);
+  } catch { return false; }
+}
+
 export interface UiTransportActivity {
   lastByteAt?: number;
   receiving: boolean;
@@ -235,7 +246,7 @@ export async function awaitUiResponse(
       if (!generationStoppedAt) generationStoppedAt = Date.now();
       if (Date.now() - generationStoppedAt >= Math.max(750, config.uiSettleMs)) {
         const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
-        if (probe.text && sameContractText(probe.text, tap.completedContract)) {
+        if (verifiedLogicalCompletion(probe.text, tap.completedContract)) {
           logger.debug('ui.response.verified_logical_completion', {
             provider_id: provider.id, response_chars: probe.text.length,
             stopped_for_ms: Date.now() - generationStoppedAt
