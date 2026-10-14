@@ -22,6 +22,8 @@ interface Candidate {
   url: string;
   method: string;
   score: number;
+  /** Only one long composer anchor survived WebChat prompt segmentation. */
+  partial: boolean;
   responseContentType?: string;
   finished: boolean;
   streamReady: boolean;
@@ -343,18 +345,29 @@ export class CdpStreamTap {
     if (!decoded || !turn.needles.length) return;
     turn.decodedBodies++;
     const matchedMask = jsonContainsNeedles(decoded.body, turn.needles);
-    if (matchedMask !== (1 << turn.needles.length) - 1) {
-      if (matchedMask) turn.partialMatches++;
-      return;
-    }
+    const allAnchors = matchedMask === (1 << turn.needles.length) - 1;
+    const anchorHits = turn.needles.filter((_, index) => Boolean(matchedMask & (1 << index))).length;
+    if (!allAnchors && matchedMask) turn.partialMatches++;
     const { url, method, resourceType } = pending;
-    const score = scoreRequestCandidate(url, decoded.body, resourceType, this.provider.id) + 50;
+    const baseScore = scoreRequestCandidate(url, decoded.body, resourceType, this.provider.id);
+    // ChatGPT may segment, trim or rewrite a very large composed prompt in
+    // its request. Accept one 192-char unique anchor ONLY for a high-scoring,
+    // provider-scoped request, and ONLY if no competing response candidate
+    // exists when the delayed selector runs. This does not relax short turns.
+    const partial = !allAnchors
+      && turn.needles.length >= 3
+      && anchorHits >= 1
+      && turn.needles.some((needle, index) => Boolean(matchedMask & (1 << index)) && needle.length >= 160)
+      && baseScore >= 100;
+    if (!allAnchors && !partial) return;
+    const score = baseScore + (allAnchors ? 100 : 0);
     if (score < 70) return;
     turn.candidates.set(requestId, {
       requestId,
       url,
       method,
       score,
+      partial,
       finished: false,
       streamReady: false,
       failed: false,
@@ -401,7 +414,7 @@ export class CdpStreamTap {
     }
     candidate.responseContentType = contentType;
 
-    if (turn.profile) {
+    if (turn.profile && !candidate.partial) {
       void this.selectCandidate(turn, candidate);
       return;
     }
@@ -412,8 +425,14 @@ export class CdpStreamTap {
         .filter((item) => Boolean(item.responseContentType))
         .sort((left, right) => right.score - left.score);
       const best = ready[0];
-      if (best) void this.selectCandidate(turn, best);
-    }, 75);
+      // Never guess between two partially correlated requests. A full
+      // anchor match wins over weaker candidates; one partial match is
+      // accepted only if there is no other eligible response.
+      const tied = ready.some((item, index) => index > 0 && item.score === best?.score);
+      if (best && !tied && (!best.partial || ready.length === 1)) {
+        void this.selectCandidate(turn, best);
+      }
+    }, candidate.partial ? 500 : 75);
     turn.selectTimer.unref?.();
   };
 
