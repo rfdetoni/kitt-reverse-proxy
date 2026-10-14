@@ -43,7 +43,7 @@ export function strictJson(raw: string | Uint8Array): unknown {
     } else if (text[cursor] === '"') string();
     else {
       const start = cursor;
-      while (cursor < text.length && !/[\s,}\]]/.test(text[cursor])) cursor++;
+      while (cursor < text.length && !/[\s,}\]]/.test(text[cursor]!)) cursor++;
       const token: unknown = JSON.parse(text.slice(start, cursor));
       if (typeof token === 'number' && !Number.isFinite(token)) throw new Error('non-finite JSON number');
       if (['version', 'envelope.version'].includes(path.join('.')) && typeof token === 'number' && !/^-?\d+$/.test(text.slice(start, cursor))) throw new Error('protocol version must be an integer token');
