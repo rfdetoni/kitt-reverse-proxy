@@ -300,24 +300,24 @@ function afterSubmittedPrompt(current: string, sentPrompt: string): string | und
  * In particular, prompt examples and already-visible answers are not fresh.
  */
 function collapsedKapCandidates(rendered: string): string[] {
-  const text = rendered.replace(/\\r\\n?/g, '\\n');
+  const text = rendered.replace(/\r\n?/g, '\n');
   const candidates = new Set<string>();
-  const starts = [...text.matchAll(/(?:^|\\s)K2 [TFWQ](?=\\s)/g)].slice(-32);
+  const starts = [...text.matchAll(/(?:^|\s)K2 [TFWQ](?=\s)/g)].slice(-32);
   for (const start of starts) {
     const at = (start.index ?? 0) + (start[0]!.startsWith('K2') ? 0 : 1);
     const end = text.indexOf('K2/END', at);
     if (end < 0) continue;
     const candidate = text.slice(at, end + 'K2/END'.length).trim();
-    if (candidate.length < 40 || candidate.length > 65_536 || candidate.includes('\\n')) continue;
-    if ((candidate.match(/\\bK2 [TFWQ](?=\\s)/g) ?? []).length !== 1
-      || (candidate.match(/K2\\/END/g) ?? []).length !== 1) continue;
+    if (candidate.length < 40 || candidate.length > 65_536 || candidate.includes('\n')) continue;
+    if ((candidate.match(/\bK2 [TFWQ](?=\s)/g) ?? []).length !== 1
+      || candidate.split('K2/END').length !== 2) continue;
     candidates.add(candidate);
   }
   return [...candidates];
 }
 
 function sameVisibleWords(value: string): string {
-  return value.replace(/\\s+/g, ' ').trim();
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 /**

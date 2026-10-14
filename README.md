@@ -1,3 +1,20 @@
+# Reverse Proxy 5.3.7 — KAP/2 flattened DOM response capture
+
+WebChat sometimes renders a complete KAP/2 answer on one physical line and
+without role-labeled assistant nodes. The DOM reader recognizes only a unique,
+bounded, delimited candidate absent from the submitted prompt and pre-submit
+snapshot. It passes malformed text **only as untrusted content to the existing
+strict protocol/repair path**, never as a validated tool action. The proxy does
+not infer field boundaries, insert indentation or authorize host tools.
+
+Regression tests cover a large prompt containing an earlier KAP example,
+flattened assistant reply, duplicated visual snapshots, prior answer replay
+and competing frames. DOM-only capture is unchanged.
+
+KAP/2 structural parsing, maximum frame size and host capability checks
+remain strict; the browser cannot restore original line breaks after they have
+actually been discarded. See [KAP/2 capture limitations](docs/KAP2_DOM_CAPTURE_LIMITS.md).
+
 # Reverse Proxy 5.3.6 — DOM capture after transcript virtualization
 
 When the ChatGPT Web UI replaces earlier conversation DOM and loses the previous visible baseline, the reader can use the just-submitted prompt tail to locate a fresh single rendered KAP/2 reply. A response whose line breaks were collapsed is forwarded only to the host-owned contract-repair loop; no malformed KAP is authorized as a tool action. Strict completion, prompt-echo guards, and DOM-only defaults remain in effect. See [release 5.3.6](docs/RELEASE_5.3.6.md).

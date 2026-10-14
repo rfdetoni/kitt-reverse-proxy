@@ -35,20 +35,24 @@ test('fresh prompt-anchored malformed multiline KAP goes to host repair, not a s
   assert.equal(selectFreshRenderedFrameForRepair(['Page changed\n'+prompt+'\n'+invalid+'\n'+invalid],before,prompt),undefined);
 });
 
-test('single-line reply in body is passed to host repair even without assistant DOM nodes or prompt-tail anchor', () => {
-  const prompt = 'Please enumerate exact dependencies in a long structured plan, and include an example:\\nK2 F\\nitems[1]:\\n  -\\n    local_id: EXAMPLE\\nK2/END';
-  const before = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old reply that disappeared due to virtualization'}];
+test('single-line reply in body is passed to host repair without assistant DOM nodes', () => {
+  const nl = String.fromCharCode(10);
+  const prompt = [
+    'Please enumerate exact dependencies in a long structured plan, example:',
+    'K2 F', 'items[1]:', '  -', '    local_id: EXAMPLE', 'K2/END'
+  ].join(nl);
+  const before = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old reply virtualized'}];
   const flat = 'K2 F items[2]:   -     local_id: T00     kind: task     prompt: Inspect environment     success_criteria[1]:       - Works   -     local_id: FINAL     kind: final K2/END';
-  assert.equal(selectFreshRenderedFrameForRepair(['Page\\n' + prompt + '\\n' + flat],before,prompt),flat);
-  // Another visible sample of the same body must not count as a second frame.
-  assert.equal(selectFreshRenderedFrameForRepair([flat,'Sidebar\\n' + flat],before,prompt),flat);
+  assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+prompt+nl+flat],before,prompt),flat);
+  assert.equal(selectFreshRenderedFrameForRepair([flat,'Sidebar'+nl+flat],before,prompt),flat);
 });
 
-test('single-line fallback never trusts echoed user examples, prior replies or competing frames', () => {
+test('single-line fallback denies echoes, prior replies and competing frames', () => {
+  const nl = String.fromCharCode(10);
   const flat = 'K2 F items[1]:   -     local_id: T01     prompt: Read README     success_criteria[1]:       - Checks pass K2/END';
-  const previous = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old DOM\\n' + flat.replace(/\\s+/g,' ')}];
-  assert.equal(selectFreshRenderedFrameForRepair(['Page\\n' + flat],previous,'new request'),undefined);
-  assert.equal(selectFreshRenderedFrameForRepair(['Page\\n' + flat],[],'User quoted: ' + flat.replace(/ {2,}/g,' ')),undefined);
-  assert.equal(selectFreshRenderedFrameForRepair(['Page\\n' + flat + '\\n' + flat.replace('T01','T02')],[],'new request'),undefined);
-  assert.equal(selectFreshRenderedFrameForRepair(['Page\\nK2 F items[1]: - missing terminator'],[],'new request'),undefined);
+  const previous = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old DOM'+nl+flat.replace(/\s+/g,' ')}];
+  assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+flat],previous,'new request'),undefined);
+  assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+flat],[],'User quoted: ' + flat.replace(/ {2,}/g,' ')),undefined);
+  assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+flat+nl+flat.replace('T01','T02')],[],'new request'),undefined);
+  assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+'K2 F items[1]: - missing terminator'],[],'new request'),undefined);
 });
