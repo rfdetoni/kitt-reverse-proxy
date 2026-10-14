@@ -7,6 +7,7 @@ import {
   inspectCompletedAssistantContract,
   readVisibleSnapshotSlot,
   selectChangedSnapshot,
+  selectCompletedAssistantContract,
   type UiTextSnapshot
 } from './ui-dom.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
@@ -147,7 +148,8 @@ export async function awaitUiResponse(
   sentPrompt: string,
   onDelta?: ChatExecutionOptions['onDelta'],
   signal?: AbortSignal,
-  tapActivity?: () => UiTransportActivity | undefined
+  tapActivity?: () => UiTransportActivity | undefined,
+  preferRawContract = false
 ): Promise<UiResponseResult> {
   const startedAt = Date.now();
   const watchdog = uiResponseWatchdogBudget(config.uiResponseTimeoutMs);
@@ -173,6 +175,9 @@ export async function awaitUiResponse(
   let generationStoppedAt = 0;
   let nextAssistantProbeAt = 0;
   let assistantProbeLogged = false;
+  let completedAssistantCandidate = '';
+  let completedAssistantSince = 0;
+  let nextContractScanAt = startedAt;
 
   await abortableSleep(250, signal);
 
@@ -223,6 +228,27 @@ export async function awaitUiResponse(
             retainedDeltaChars += delta.length;
           }
         }
+      }
+    }
+
+    // Independent DOM observer. A complete fresh KAP/2 frame is stronger
+    // completion evidence than spinner/Stop-button state, which may be stale.
+    // Probe the current assistant-owned turn even when the CDP tap is absent
+    // or still receiving, and require a stable observation before returning.
+    if (preferRawContract && provider.id === 'chatgpt' && Date.now() >= nextContractScanAt) {
+      nextContractScanAt = Date.now() + 500;
+      const direct = selectCompletedAssistantContract(lastText ? [lastText] : [], baseline, sentPrompt);
+      const probe = direct ? undefined : await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
+      const found = direct ?? probe?.text ?? '';
+      if (found !== completedAssistantCandidate) {
+        completedAssistantCandidate = found;
+        completedAssistantSince = Date.now();
+      }
+      if (found && Date.now() - completedAssistantSince >= Math.max(750, config.uiSettleMs)) {
+        logger.debug('ui.response.dom_contract_complete', { provider_id: provider.id,
+          response_chars: found.length, streaming });
+        return { text: found, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+          durationMs: Date.now() - startedAt };
       }
     }
 

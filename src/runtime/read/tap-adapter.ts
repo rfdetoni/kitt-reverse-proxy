@@ -1,4 +1,5 @@
 import { sameContractText } from './contract-text.js';
+import { parseKAP2 } from '../../contracts/kap2.js';
 import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { copyProfile } from './tap-health.js';
@@ -144,6 +145,29 @@ export class TapStreamAdapter {
       },
       text: best[1].text
     };
+  }
+
+  /**
+   * Independent tap completion: never infer the answer from a delimiter
+   * or a single unverified JSON leaf. Only one complete, unambiguous KAP/2
+   * action extracted from an answer-shaped response field can win.
+   */
+  completedKAP2(): string | undefined {
+    const sources = this.profile
+      ? [{ text: this.learnedText, score: 125, samples: this.learnedSamples, invalid: this.learnedInvalid }]
+      : [...this.candidates.values()];
+    const valid = new Map<string, string>();
+    for (const source of sources) {
+      if (source.invalid || !source.samples || source.score < 80) continue;
+      const value = source.text.trim();
+      if (!value.startsWith('K2 ')) continue;
+      try {
+        const parsed = parseKAP2(value);
+        const identity = JSON.stringify(parsed);
+        valid.set(identity, value);
+      } catch { /* Incomplete frame or marker in a literal is not completion. */ }
+    }
+    return valid.size === 1 ? [...valid.values()][0] : undefined;
   }
 
   accumulatedText(): string {

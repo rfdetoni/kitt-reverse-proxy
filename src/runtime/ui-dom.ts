@@ -260,16 +260,37 @@ export async function inspectCompletedAssistantContract(
           'main [data-testid^="conversation-turn-"]'
         )) as HTMLElement[];
         const latest = turns[turns.length - 1];
-        if (!latest || latest.matches('[data-message-author-role="user"], [data-role="user"]')
-            || latest.querySelector('[data-message-author-role="user"], [data-role="user"], [data-testid="user-message"]')) {
-          return { count: 0, structural: turns.length, samples: [] as string[] };
+        const userOwned = (node: HTMLElement): boolean =>
+          Boolean(node.matches('[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]')
+            || node.querySelector('[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]'));
+        if (latest && !userOwned(latest)) {
+          const markdown = Array.from(latest.querySelectorAll(
+            '.markdown, .prose, [data-testid="message-content"], pre'
+          )) as HTMLElement[];
+          const samples = markdown.slice(-8).map(node => (node.innerText || node.textContent || '')
+            .trim().slice(0, maxChars)).filter(Boolean);
+          if (samples.length) return { count: 0, structural: turns.length, samples };
         }
-        const markdown = Array.from(latest.querySelectorAll(
-          '.markdown, .prose, [data-testid="message-content"]'
+        // Last-resort structural extraction for ChatGPT UI revisions which
+        // no longer expose conversation-turn or assistant role attributes.
+        // Stay under main, require a reply-format descendant and exclude
+        // composers, forms and explicitly user-owned containers. The host
+        // subsequently rejects baseline answers, prompt echoes, truncated
+        // envelopes and competing KAP frames.
+        const replyNodes = Array.from(document.querySelectorAll(
+          'main .markdown, main .prose, main [data-testid="message-content"], main article pre'
         )) as HTMLElement[];
-        const samples = markdown.slice(-8).map(node => (node.innerText || node.textContent || '')
-          .trim().slice(0, maxChars)).filter(Boolean);
-        return { count: 0, structural: turns.length, samples };
+        const lastReply = replyNodes[replyNodes.length - 1];
+        const owner = lastReply?.closest(
+          '[data-message-author-role], [data-role], [data-testid*="user-message"], [data-testid*="conversation-turn"], article'
+        ) as HTMLElement | null;
+        const notReply = !lastReply
+          || Boolean(lastReply.closest('form, [contenteditable="true"], [role="textbox"]'))
+          || (owner && (owner.matches('[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]')
+            || Boolean(owner.querySelector('[data-testid*="user-message"]'))));
+        if (notReply) return { count: 0, structural: turns.length, samples: [] as string[] };
+        const text = (lastReply.innerText || lastReply.textContent || '').trim().slice(0, maxChars);
+        return { count: 0, structural: turns.length || replyNodes.length, samples: text ? [text] : [] };
       }, 65_536);
       assistantNodes += scan.count;
       structuralTurnNodes += scan.structural;

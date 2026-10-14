@@ -9,7 +9,6 @@ import {
 } from '../ui-response-monitor.js';
 import type { UiTextSnapshot } from '../ui-dom.js';
 import { logger } from '../../logger.js';
-import { abortableSleep } from '../cancellation.js';
 import { CdpStreamTap } from './tap-cdp.js';
 import { TapStreamAdapter } from './tap-adapter.js';
 import { ResponseReconciler } from './reconciler.js';
@@ -118,6 +117,37 @@ export class HybridUiResponseReader {
     let adapterEnded = false;
     let tapLastByteAt: number | undefined;
     let tapBytes = 0;
+    // Independent completion channel. A valid correlated K2 frame may win
+    // while the DOM observer is still polling (or while the CDP HTTP request
+    // remains open). The DOM observer may also win when tap matching fails.
+    let resolveTapWinner!: (value: { source: 'tap'; raw: string }) => void;
+    const tapWinner = new Promise<{ source: 'tap'; raw: string }>((resolve) => {
+      resolveTapWinner = resolve;
+    });
+    let tapSettleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTapSettle = (): void => {
+      if (tapSettleTimer) clearTimeout(tapSettleTimer);
+      tapSettleTimer = undefined;
+    };
+    const considerTapCompletion = (ended: boolean): void => {
+      if (!preferRawContract || !matched || tapFailure || deliveryFailed || signal?.aborted) return;
+      const raw = adapter.completedKAP2();
+      if (!raw) return;
+      clearTapSettle();
+      if (ended) {
+        resolveTapWinner({ source: 'tap', raw });
+        return;
+      }
+      const lastByte = tapLastByteAt;
+      const settleMs = Math.max(750, this.config.uiSettleMs);
+      tapSettleTimer = setTimeout(() => {
+        // No early completion from an intermediate K2/END token.
+        if (signal?.aborted || tapFailure || !lastByte || tapLastByteAt !== lastByte
+            || Date.now() - lastByte < settleMs) return;
+        if (adapter.completedKAP2() === raw) resolveTapWinner({ source: 'tap', raw });
+      }, settleMs);
+      tapSettleTimer.unref?.();
+    };
 
     const failTap = async (reason: TapFailureReason): Promise<void> => {
       if (!tapFailure) {
@@ -149,6 +179,7 @@ export class HybridUiResponseReader {
             continue;
           }
           for (const delta of deltas) await reconciler.tapDelta(delta);
+          considerTapCompletion(false);
           continue;
         }
         if (event.type === 'end') {
@@ -166,17 +197,24 @@ export class HybridUiResponseReader {
           adapterEnded = true;
           logger.debug('ui.tap.complete', { provider_id: this.provider?.id ?? 'unknown', bytes: tapBytes, text_chars: adapter.accumulatedText().length });
           for (const delta of deltas) await reconciler.tapDelta(delta);
+          considerTapCompletion(true);
           continue;
         }
         logger.debug('ui.tap.fallback', { provider_id: this.provider?.id ?? 'unknown', reason: event.reason, bytes: tapBytes });
         await failTap(event.reason);
       }
     })();
-    // Observe failures immediately, even if the monitor throws synchronously.
-    void tapTask.catch(() => undefined);
+    // Propagate consumer failures immediately: a rejected downstream write
+    // must cancel the DOM observer, not wait for a coincidental DOM timeout.
+    let rejectTapTask!: (error: unknown) => void;
+    const tapTaskFailed = new Promise<never>((_resolve, reject) => {
+      rejectTapTask = reject;
+    });
+    void tapTask.catch(rejectTapTask);
 
     const monitoring = new AbortController();
     let dom: UiResponseResult;
+    let winnerSource: 'dom' | 'tap' = 'dom';
     try {
       const domTask = this.monitor(
         this.session,
@@ -186,70 +224,55 @@ export class HybridUiResponseReader {
         sentPrompt,
         (delta) => reconciler.domDelta(delta),
         signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal,
-        () => {
-          const eligible = preferRawContract && trustedBeforeRead
-            && Boolean(turn.profile?.textMode) && turn.mode === 'active'
-            && matched && !tapFailure;
-          const text = adapter.accumulatedText();
-          const completedContract = eligible && text.trimStart().startsWith('K2 ')
-            ? completedRawContract(text, adapter.accumulatedAlternativeText(), true)
-            : undefined;
-          return {
-            ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }),
-            receiving: matched && !adapterEnded && !tapFailure,
-            ...(completedContract === undefined ? {} : { completedContract })
-          };
-        }
+        () => ({ ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }),
+          receiving: matched && !adapterEnded && !tapFailure }),
+        preferRawContract
       );
-      // Once the CDP request has completed, a previously trusted, strictly
-      // validated KAP/1 stream can finish without waiting for a broken DOM
-      // assistant selector. Cold/unverified taps still require DOM evidence.
-      const tapCompleted = tapTask.then(() => completedRawContract(
-        adapter.accumulatedText(),
-        adapter.accumulatedAlternativeText(),
-        preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode)
-          && turn.mode === 'active' && matched && adapterEnded && !tapFailure
-      ));
-      const tapReady = (async (): Promise<
-        { source: 'dom'; value: UiResponseResult } | { source: 'tap'; raw: string }
-      > => {
-        const raw = await tapCompleted;
-        if (raw === undefined) return { source: 'dom', value: await domTask };
-        // Allow DOM to settle and surface intervention/consumer errors before
-        // choosing the already validated CDP completion. No blind replay.
-        return await Promise.race([
-          domTask.then(value => ({ source: 'dom' as const, value })),
-          abortableSleep(1_500, signal).then(() => ({ source: 'tap' as const, raw }))
-        ]);
-      })();
+      // Race valid completions, not network transports. Neither observer
+      // waits for the other to signal end; a failed tap simply leaves DOM
+      // alive. Once a winner is selected we cancel only observation.
       const ready = await Promise.race([
         domTask.then(value => ({ source: 'dom' as const, value })),
-        tapReady
+        tapWinner,
+        tapTaskFailed
       ]);
+      winnerSource = ready.source;
       if (ready.source === 'tap') {
-        logger.debug('ui.tap.raw_contract_recovered', {
-          provider_id: this.provider?.id ?? 'unknown', text_chars: ready.raw.length
+        logger.debug('ui.tap.independent_contract_complete', {
+          provider_id: this.provider?.id ?? 'unknown', text_chars: ready.raw.length,
+          trusted_before_read: trustedBeforeRead
         });
-        dom = { text: ready.raw, deltas: [], firstDeltaMs: firstByteAt === undefined
-          ? undefined : firstByteAt - startedAt, durationMs: Date.now() - startedAt };
+        dom = { text: ready.raw, deltas: [],
+          firstDeltaMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
+          durationMs: Date.now() - startedAt };
       } else dom = ready.value;
     } catch (error) {
       monitoring.abort();
       turn.cancel();
+      clearTapSettle();
       await tapTask.catch(() => undefined);
-      const recovered = error instanceof UiTimeoutError && !signal?.aborted && !deliveryFailed
-        ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(),
-          preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode) && turn.mode === 'active' && matched && adapterEnded && !tapFailure)
+      // A DOM timeout must not silently manufacture a response, but a
+      // strictly complete and correlated tap body survives DOM failure.
+      const eligibleLegacy = preferRawContract && trustedBeforeRead
+        && Boolean(turn.profile?.textMode) && turn.mode === 'active'
+        && matched && adapterEnded && !tapFailure;
+      const recovered = error instanceof UiTimeoutError && !signal?.aborted && !deliveryFailed && matched && !tapFailure
+        ? (eligibleLegacy
+          ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(), true)
+          : adapter.completedKAP2())
         : undefined;
       if (recovered === undefined) throw error;
-      dom = { text: '', deltas: [], firstDeltaMs: undefined, durationMs: Math.max(0, Date.now() - startedAt) };
+      winnerSource = 'tap';
+      dom = { text: recovered, deltas: [], firstDeltaMs: firstByteAt === undefined
+        ? undefined : firstByteAt - startedAt, durationMs: Date.now() - startedAt };
     } finally {
       monitoring.abort();
+      clearTapSettle();
     }
 
     turn.cancel();
     await tapTask;
-    if (!adapterEnded) {
+    if (!adapterEnded && winnerSource !== 'tap') {
       let deltas: string[] = [];
       try {
         deltas = adapter.end();
@@ -261,7 +284,7 @@ export class HybridUiResponseReader {
 
     let canonicalText: string;
     try {
-      canonicalText = selectContractResponseText(dom.text, adapter.accumulatedText(),
+      canonicalText = winnerSource === 'tap' ? dom.text : selectContractResponseText(dom.text, adapter.accumulatedText(),
         preferRawContract && trustedBeforeRead && Boolean(turn.profile?.textMode) && turn.mode === 'active' && matched && adapterEnded && !tapFailure,
         adapter.accumulatedAlternativeText());
     } catch (error) {
@@ -270,7 +293,7 @@ export class HybridUiResponseReader {
     }
     const rawSelected = canonicalText !== dom.text;
     let verified = false;
-    if (matched && !tapFailure) {
+    if (matched && adapterEnded && !tapFailure && winnerSource === 'dom') {
       const candidate = adapter.verification(dom.text);
       if (candidate) {
         this.tap.recordVerified(candidate.profile);
@@ -290,6 +313,7 @@ export class HybridUiResponseReader {
     );
     const readDiagnostics: ReadDiagnostics = {
       ...result.diagnostics,
+      source: winnerSource,
       ...(matchedAt !== undefined ? { tap_matched_ms: Math.max(0, matchedAt - startedAt) } : {}),
       ...(firstByteAt !== undefined ? { tap_first_byte_ms: Math.max(0, firstByteAt - startedAt) } : {})
     };
