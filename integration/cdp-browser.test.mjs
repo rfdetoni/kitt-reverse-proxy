@@ -336,3 +336,49 @@ test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemin
     }
   } finally {await browser.close();}
 });
+
+
+test('real Chromium recovers portal DOM answer outside main with pre-submit replay exclusion', {timeout: 20_000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<main><div id="old" style="white-space:pre-wrap"></div></main>');
+    const old = 'K2 F\nstatus: previous\nK2/END';
+    await page.locator('#old').evaluate((node, text) => { node.textContent = text; }, old);
+    const baseline = [{selector: '[pre-submit-visible-text]', frameIndex: -1, count: 1,
+      text: await visibleContractBaseline(page)}];
+    const newReply = 'K2 F\nstatus: new\nK2/END';
+    await page.evaluate((text) => {
+      const node = document.createElement('div');
+      node.id = 'portal-reply';
+      node.style.whiteSpace = 'pre-wrap';
+      node.textContent = text;
+      document.body.appendChild(node);
+    }, newReply);
+    const result = await inspectCompletedAssistantContract(page, baseline, 'A distinct current request');
+    assert.equal(result.text, newReply);
+    assert.ok(result.freshVisibleChars > 0);
+    await browser.close();
+  } finally { if (browser.isConnected()) await browser.close(); }
+});
+
+
+test('real Chromium preserves indented KAP from a roleless code block outside main', {timeout: 20_000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<main><p>Previous conversation</p></main>');
+    const baseline = [{selector: '[pre-submit-visible-text]', frameIndex: -1, count: 1,
+      text: await visibleContractBaseline(page)}];
+    const reply = 'K2 F\nitems[1]:\n  - updated\nK2/END';
+    await page.evaluate((value) => {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = value;
+      pre.appendChild(code);
+      document.body.appendChild(pre);
+    }, reply);
+    const probe = await inspectCompletedAssistantContract(page, baseline, 'New user prompt');
+    assert.equal(probe.text, reply);
+  } finally { await browser.close(); }
+});

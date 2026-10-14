@@ -1,3 +1,7 @@
+# Reverse Proxy 5.3.5 — DOM final response recovery
+
+The authenticated ChatGPT Web incident on 5.3.4 showed a complete browser response but `response_chars=0`, with two visible DOM text samples and a terminal marker. This release broadens the DOM reader to include portal-rendered body replies; records consistent pre-submit snapshots before both initial and repair requests; returns only fresh, stable, structurally delimited but malformed model text to the existing host contract repair flow (not as a valid response); and adds counts-only diagnostics. CDP stays disabled for ChatGPT/Gemini auto mode. See [release 5.3.5](docs/RELEASE_5.3.5.md).
+
 # Reverse Proxy 5.3.4 — DOM-only default for ChatGPT and Gemini Web
 
 After authenticated browser incidents where the model displayed a complete `K2/END` frame but the proxy timed out, UI `readMode=auto` uses only the DOM for ChatGPT and Gemini; the CDP tap is not connected, armed or polled. `--read-mode tap` remains explicit opt-in for diagnostics. DOM KAP capture now handles model-response elements, markdown wrappers and a bounded rendered conversation fallback for both providers, with strict KAP parsing and a pre-submit baseline so stale frames and prompt examples cannot be replayed. See [5.3.4 release notes](docs/RELEASE_5.3.4.md).

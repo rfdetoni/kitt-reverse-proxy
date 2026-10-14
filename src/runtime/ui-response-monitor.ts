@@ -177,7 +177,10 @@ export async function awaitUiResponse(
   let assistantProbeLogged = false;
   let completedAssistantCandidate = '';
   let completedAssistantSince = 0;
+  let malformedReplyCandidate = '';
+  let malformedReplySince = 0;
   let nextContractScanAt = startedAt;
+  let lastDomProbe: { textSamples: number; visibleEndMarkers: number; freshVisibleChars?: number } | undefined;
 
   await abortableSleep(250, signal);
 
@@ -240,6 +243,7 @@ export async function awaitUiResponse(
       nextContractScanAt = Date.now() + 500;
       const direct = selectCompletedAssistantContract(lastText ? [lastText] : [], baseline, sentPrompt);
       const probe = direct ? undefined : await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
+      if (probe) lastDomProbe = probe;
       const found = direct ?? probe?.text ?? '';
       if (found !== completedAssistantCandidate) {
         completedAssistantCandidate = found;
@@ -249,6 +253,25 @@ export async function awaitUiResponse(
         logger.debug('ui.response.dom_contract_complete', { provider_id: provider.id,
           response_chars: found.length, streaming });
         return { text: found, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+          durationMs: Date.now() - startedAt };
+      }
+      // If WebChat rendered the model reply but changed whitespace or broke
+      // KAP syntax, return only a proven FRESH, stable, delimited reply to
+      // the existing host-owned contract repair path. This is never a parsed
+      // or authorized tool action, and never an upstream replay.
+      const malformed = probe?.repairText ?? '';
+      if (malformed !== malformedReplyCandidate) {
+        malformedReplyCandidate = malformed;
+        malformedReplySince = Date.now();
+      }
+      if (malformed && !streaming
+          && Date.now() - malformedReplySince >= Math.max(3_500, config.uiSettleMs)) {
+        logger.event('warn', 'ui.response.dom_unparsed_for_repair', {
+          provider_id: provider.id, response_chars: malformed.length,
+          stopped_generating: observedStreaming && !streaming
+        });
+        return { text: malformed, deltas: [],
+          firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
           durationMs: Date.now() - startedAt };
       }
     }
@@ -305,7 +328,9 @@ export async function awaitUiResponse(
           assistantProbeLogged = true;
           logger.event('warn', 'ui.response.capture_missing', {
             provider_id: provider.id, assistant_nodes: probe.assistantNodes, structural_turn_nodes: probe.structuralTurnNodes,
-            text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers
+            text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers,
+            fresh_visible_chars: probe.freshVisibleChars ?? 0,
+            unparsed_fresh_candidate: Boolean(probe.repairText)
           });
         }
       }
@@ -342,7 +367,10 @@ export async function awaitUiResponse(
         idle_ms: Date.now() - lastActivityAt, response_chars: lastText.length,
         observed_streaming: observedStreaming, streaming, observed_tap: observedTap,
         tap_receiving: tap?.receiving ?? false,
-        tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null
+        tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null,
+        dom_samples: lastDomProbe?.textSamples ?? 0,
+        dom_end_markers: lastDomProbe?.visibleEndMarkers ?? 0,
+        dom_fresh_visible_chars: lastDomProbe?.freshVisibleChars ?? 0
       });
       nextProgressLogAt = Date.now() + 30_000;
     }

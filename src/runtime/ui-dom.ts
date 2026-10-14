@@ -207,6 +207,9 @@ export interface AssistantContractProbe {
   textSamples: number;
   visibleEndMarkers: number;
   structuralTurnNodes: number;
+  /** Untrusted, fresh but malformed model frame; repair loop must validate. */
+  repairText?: string;
+  freshVisibleChars?: number;
 }
 
 /**
@@ -265,13 +268,75 @@ export function selectCompletedAssistantContract(
   return valid.size === 1 ? [...valid.values()][0] : undefined;
 }
 
+/**
+ * A stable malformed response must reach the existing contract repair loop
+ * instead of turning into a transport timeout. This is NEVER an accepted KAP
+ * frame, tool authorization or a provider-side retry.
+ *
+ * Only the strictly appended part of the visible pre-submit DOM is eligible.
+ * The same malformed frame in the prompt, old chat or a competing response
+ * fails closed.
+ */
+export function selectFreshRenderedFrameForRepair(
+  samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
+): string | undefined {
+  const before = baseline.filter(s => s.selector === '[pre-submit-visible-text]')
+    .map(s => s.text.replace(/\r\n?/g, '\n').trim()).filter(Boolean);
+  if (!before.length) return undefined;
+  const found = new Set<string>();
+  for (const value of samples) {
+    const current = value.replace(/\r\n?/g, '\n').trim();
+    for (const old of before) {
+      // A stable suffix of the previously seen page is sufficient when
+      // navigation/sidebar text shifts; still require a >=128-character
+      // overlap to avoid treating a prompt example as a new model turn.
+      let at = current.startsWith(old) ? old.length : -1;
+      if (at < 0 && old.length >= 128) {
+        const anchor = old.slice(-Math.min(old.length, 512));
+        const pos = current.lastIndexOf(anchor);
+        if (pos >= 0) at = pos + anchor.length;
+      }
+      if (at < 0) continue;
+      let fresh = current.slice(at).trim();
+      if (!fresh || sentPrompt.includes(fresh)) continue;
+      // The submitted user prompt can itself contain complete KAP examples.
+      // Exclude the entire *new* user message when it is visible, so old
+      // in-prompt delimiters cannot compete with the actual assistant reply.
+      if (sentPrompt && fresh.includes(sentPrompt)) {
+        fresh = fresh.slice(fresh.lastIndexOf(sentPrompt) + sentPrompt.length).trim();
+      } else if (sentPrompt.length >= 256) {
+        const promptTail = sentPrompt.slice(-256).trim();
+        const marker = promptTail && fresh.lastIndexOf(promptTail);
+        if (typeof marker === 'number' && marker >= 0) {
+          fresh = fresh.slice(marker + promptTail.length).trim();
+        }
+      }
+      if (!fresh || sentPrompt.includes(fresh)) continue;
+      const starts = [...fresh.matchAll(/(?:^|\n)(K2 [TFWQ](?: [^\r\n]+)?|KITT\/1)(?=\r?\n)/g)];
+      const ends = [...fresh.matchAll(/(?:^|\n)(K2\/END|KITT\/END)(?=\r?\n|$)/g)];
+      if (starts.length !== 1 || ends.length !== 1) continue;
+      const begin = starts[0]!.index! + (starts[0]![0]!.startsWith('\n') ? 1 : 0);
+      const finish = ends[0]!.index! + ends[0]![0]!.length;
+      if (finish <= begin) continue;
+      const candidate = fresh.slice(begin, finish).trim();
+      if (!candidate || new TextEncoder().encode(candidate).length > 65_536 || sentPrompt.includes(candidate)) continue;
+      try {
+        parseKAP(candidate); // A valid frame belongs to the normal completion path.
+      } catch {
+        found.add(candidate);
+      }
+    }
+  }
+  return found.size === 1 ? [...found][0] : undefined;
+}
+
 /** Snapshot the visible pre-submit conversation so old frames cannot be replayed. */
 export async function visibleContractBaseline(page: Page): Promise<string> {
   const pieces: string[] = [];
   for (const frame of frames(page)) {
     try {
       const value = await frame.evaluate(() => {
-        const root = document.querySelector('main, [role="main"], model-response') || document.body;
+        const root = document.body || document.querySelector('main, [role="main"], model-response');
         const text = (root as HTMLElement | null)?.innerText || '';
         return text.slice(-131_072);
       });
@@ -356,6 +421,16 @@ export async function inspectCompletedAssistantContract(
           }
         }
 
+        // The WebChat reply may be rendered in a code block outside the
+        // legacy main/assistant nodes. textContent retains the indentation
+        // required by KAP/2 structured arrays even when CSS changes innerText.
+        for (const code of Array.from(document.querySelectorAll('pre, [role="code"]')).slice(-12)) {
+          if (code.closest('form, [contenteditable="true"], [role="textbox"], [data-message-author-role="user"], [data-role="user"]')) continue;
+          const text = (code.textContent || '').trim();
+          if (text.includes('K2/END') || text.includes('KITT/END')) {
+            responseSamples.push(text.slice(-maxChars));
+          }
+        }
         // Both ChatGPT and Gemini may omit the old assistant role/markdown
         // attributes. A bounded visible snapshot is untrusted evidence;
         // the host extracts a strict frame, excludes the prompt and baseline
@@ -364,6 +439,10 @@ export async function inspectCompletedAssistantContract(
           ?? document.body;
         const visible = (root as HTMLElement | null)?.innerText || '';
         if (visible) responseSamples.push(visible.slice(-131_072));
+        // Main and body can differ after UI revisions: a valid assistant
+        // response may be portaled outside main while the prompt stays inside.
+        const body = document.body?.innerText || '';
+        if (body && body !== visible) responseSamples.push(body.slice(-131_072));
         return { count: roots.length, structural: structural || turns.length || replyNodes.length,
           samples: responseSamples };
       }, 65_536);
@@ -375,8 +454,19 @@ export async function inspectCompletedAssistantContract(
     } catch { /* Page changes while rendering; next pass can inspect it. */ }
   }
   const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
-  return { ...(text ? { text } : {}), assistantNodes, textSamples,
-    visibleEndMarkers, structuralTurnNodes };
+  const repairText = text ? undefined : selectFreshRenderedFrameForRepair(samples, baseline, sentPrompt);
+  const oldVisible = baseline.find(item => item.selector === '[pre-submit-visible-text]')?.text ?? '';
+  let freshVisibleChars = 0;
+  if (oldVisible) {
+    const anchor = oldVisible.slice(-Math.min(oldVisible.length, 512));
+    for (const value of samples) {
+      const pos = anchor ? value.lastIndexOf(anchor) : -1;
+      if (pos >= 0) freshVisibleChars = Math.max(freshVisibleChars, value.length - pos - anchor.length);
+    }
+  }
+  return { ...(text ? { text } : {}), ...(repairText ? { repairText } : {}),
+    assistantNodes, textSamples, visibleEndMarkers, structuralTurnNodes,
+    freshVisibleChars };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {
