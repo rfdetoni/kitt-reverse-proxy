@@ -209,22 +209,70 @@ export interface AssistantContractProbe {
   structuralTurnNodes: number;
 }
 
+/**
+ * Extract only complete candidate frames. Rendered code blocks may prepend
+ * labels, copy controls or fences; a loose K2/END is never sufficient.
+ * A frame embedded in the submitted prompt or pre-submit page is not a reply.
+ */
+export function kapCandidatesFromRenderedText(rendered: string): string[] {
+  const text = rendered.replace(/\r\n?/g, '\n').trim();
+  if (!text) return [];
+  const lines = text.split('\n');
+  const start = /^(?:K2 [TFWQ](?: [A-Za-z0-9_.:-]{1,64})?|KITT\/1)$/;
+  const finish = /^(?:K2\/END|KITT\/END)$/;
+  const candidates: string[] = [];
+  if (start.test(lines[0] ?? '') && finish.test(lines.at(-1) ?? '')) candidates.push(text);
+  // Scan at most the most recent 24 starts to bound work in long conversations.
+  const beginnings: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (start.test(lines[i]!.trim())) beginnings.push(i);
+  }
+  for (const i of beginnings.slice(-24)) {
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!finish.test(lines[j]!.trim())) continue;
+      const block = lines.slice(i, j + 1).join('\n').trim();
+      if (block.length <= 65_536 && !candidates.includes(block)) candidates.push(block);
+      break;
+    }
+  }
+  return candidates;
+}
+
 export function selectCompletedAssistantContract(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
   const previous = new Set(baseline.map(item => item.text.trim()));
+  const previousVisible = baseline.filter(item => item.selector === '[pre-submit-visible-text]')
+    .map(item => item.text);
   const valid = new Map<string, string>();
   for (const value of samples) {
-    const text = value.trim();
-    if (!text || previous.has(text) || (sentPrompt && sentPrompt.includes(text)) ||
-        !(text.startsWith('KITT/1') || text.startsWith('K2 '))) continue;
-    try {
-      const parsed = parseKAP(text);
-      const canonical = JSON.stringify(parsed);
-      if (!valid.has(canonical)) valid.set(canonical, text);
-    } catch { /* Incomplete or UI-transformed text cannot execute as a contract. */ }
+    for (const text of kapCandidatesFromRenderedText(value)) {
+      if (previous.has(text) || previousVisible.some(old => old.includes(text))
+          || (sentPrompt && sentPrompt.includes(text))) continue;
+      try {
+        const parsed = parseKAP(text);
+        const canonical = JSON.stringify(parsed);
+        if (!valid.has(canonical)) valid.set(canonical, text);
+      } catch { /* Do not accept partial, ambiguous or malformed envelopes. */ }
+    }
   }
   return valid.size === 1 ? [...valid.values()][0] : undefined;
+}
+
+/** Snapshot the visible pre-submit conversation so old frames cannot be replayed. */
+export async function visibleContractBaseline(page: Page): Promise<string> {
+  const pieces: string[] = [];
+  for (const frame of frames(page)) {
+    try {
+      const value = await frame.evaluate(() => {
+        const root = document.querySelector('main, [role="main"], model-response') || document.body;
+        const text = (root as HTMLElement | null)?.innerText || '';
+        return text.slice(-131_072);
+      });
+      if (value) pieces.push(value);
+    } catch { /* The frame may be navigating. */ }
+  }
+  return pieces.join('\n');
 }
 
 export async function inspectCompletedAssistantContract(
@@ -241,7 +289,8 @@ export async function inspectCompletedAssistantContract(
         const roots = Array.from(document.querySelectorAll(
           '[data-message-author-role="assistant"], ' +
           '[data-role="assistant"], [data-testid*="assistant-message"], ' +
-          'article[aria-label*="assistant" i], article[aria-label*="chatgpt" i]'
+          'article[aria-label*="assistant" i], article[aria-label*="chatgpt" i], ' +
+          'model-response, .model-response-text'
         )) as HTMLElement[];
         const newest = roots[roots.length - 1];
         if (newest) {
@@ -293,40 +342,15 @@ export async function inspectCompletedAssistantContract(
           if (text) return { count: 0, structural: turns.length || replyNodes.length, samples: [text] };
         }
 
-        // ChatGPT Web can render responses outside the former main/role-based
-        // conversation containers (including plain text nodes with no markdown
-        // class). Find only *delimited* KAP frames in visible DOM text, not
-        // arbitrary page contents, hidden input values, or a loose K2/END.
-        // The host still validates the complete frame against the original
-        // prompt and pre-submit baseline before using it.
+        // Both ChatGPT and Gemini may omit the old assistant role/markdown
+        // attributes. A bounded visible snapshot is untrusted evidence;
+        // the host extracts a strict frame, excludes the prompt and baseline
+        // and rejects multiple distinct valid frames before returning.
         const root = document.querySelector('main, [role="main"], #thread, [data-testid*="conversation"]')
           ?? document.body;
-        if (!root) return { count: 0, structural: turns.length, samples: [] as string[] };
-        const scope = root as HTMLElement;
-        const visible = (scope.innerText || '').slice(-2 * 1024 * 1024);
-        const closing = /(?:^|\\n)(K2\\/END|KITT\\/END)(?=\\r?\\n|$)/g;
-        let lastEnd = -1;
-        let endMatch: RegExpExecArray | null;
-        while ((endMatch = closing.exec(visible)) !== null) {
-          lastEnd = endMatch.index + endMatch[0].length;
-        }
-        if (lastEnd < 0) return { count: 0, structural: turns.length, samples: [] as string[] };
-        const beforeEnd = visible.slice(0, lastEnd);
-        const headings = /(?:^|\\n)(K2 [TFWQ](?: [^\\r\\n]+)?|KITT\\/1)(?=\\r?\\n)/g;
-        const starts: number[] = [];
-        let headMatch: RegExpExecArray | null;
-        while ((headMatch = headings.exec(beforeEnd)) !== null) {
-          starts.push(headMatch.index + (headMatch[0].startsWith('\\n') ? 1 : 0));
-        }
-        // Try only a bounded number of candidate frames at the tail. Each
-        // candidate must independently pass the strict host KAP parser.
-        const samples: string[] = [];
-        for (const start of starts.slice(-6).reverse()) {
-          const text = beforeEnd.slice(start).trim();
-          if (text.length > 0 && text.length <= maxChars) samples.push(text);
-        }
+        const visible = (root as HTMLElement | null)?.innerText || '';
         return { count: 0, structural: turns.length || replyNodes.length,
-          samples };
+          samples: visible ? [visible.slice(-131_072)] : [] as string[] };
       }, 65_536);
       assistantNodes += scan.count;
       structuralTurnNodes += scan.structural;
