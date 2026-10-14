@@ -294,6 +294,33 @@ function afterSubmittedPrompt(current: string, sentPrompt: string): string | und
 }
 
 /**
+ * A Markdown renderer can replace all line breaks in a generated KAP reply
+ * with spaces while retaining its indentation. Extract these delimited,
+ * single-line frames only as UNTRUSTED repair input, never as parsed actions.
+ * In particular, prompt examples and already-visible answers are not fresh.
+ */
+function collapsedKapCandidates(rendered: string): string[] {
+  const text = rendered.replace(/\\r\\n?/g, '\\n');
+  const candidates = new Set<string>();
+  const starts = [...text.matchAll(/(?:^|\\s)K2 [TFWQ](?=\\s)/g)].slice(-32);
+  for (const start of starts) {
+    const at = (start.index ?? 0) + (start[0]!.startsWith('K2') ? 0 : 1);
+    const end = text.indexOf('K2/END', at);
+    if (end < 0) continue;
+    const candidate = text.slice(at, end + 'K2/END'.length).trim();
+    if (candidate.length < 40 || candidate.length > 65_536 || candidate.includes('\\n')) continue;
+    if ((candidate.match(/\\bK2 [TFWQ](?=\\s)/g) ?? []).length !== 1
+      || (candidate.match(/K2\\/END/g) ?? []).length !== 1) continue;
+    candidates.add(candidate);
+  }
+  return [...candidates];
+}
+
+function sameVisibleWords(value: string): string {
+  return value.replace(/\\s+/g, ' ').trim();
+}
+
+/**
  * Recover only a fresh, delimited but INVALID envelope for the host-owned
  * repair flow. Never accept malformed text as an authorized tool action.
  */
@@ -349,6 +376,20 @@ export function selectFreshRenderedFrameForRepair(
       } catch {
         found.add(candidate);
       }
+    }
+  }
+  // Some WebChat versions render assistant text as one flat line in main/body,
+  // without role-marked nodes, a retained pre-submit baseline, or a matching
+  // last-prompt tail. We can still deliver a unique new frame for HOST REPAIR,
+  // provided its whitespace-normalized form is absent from the supplied prompt
+  // and all pre-submit snapshots. Do not authorize it as a KAP action here.
+  const echoed = sameVisibleWords(sentPrompt);
+  const oldViews = previous.map(sameVisibleWords);
+  for (const sample of samples) {
+    for (const candidate of collapsedKapCandidates(sample)) {
+      const normalized = sameVisibleWords(candidate);
+      if (echoed.includes(normalized) || oldViews.some(old => old.includes(normalized))) continue;
+      found.add(candidate);
     }
   }
   return found.size === 1 ? [...found][0] : undefined;
