@@ -200,7 +200,7 @@ export async function readVisibleSnapshotSlot(
 }
 
 /** Fallback for a completed ChatGPT response when markdown selectors are stale.
- * Only inspect assistant-owned containers, never body text or user turns. */
+ * Fallback page text is untrusted; prompt and pre-submit baselines are excluded. */
 export interface AssistantContractProbe {
   text?: string;
   assistantNodes: number;
@@ -226,6 +226,12 @@ export function kapCandidatesFromRenderedText(rendered: string): string[] {
   const beginnings: number[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (start.test(lines[i]!.trim())) beginnings.push(i);
+  }
+  // A newer unfinished frame invalidates an older complete one in the same
+  // rendered message: never prematurely accept the first K2/END.
+  const latestStart = beginnings.at(-1);
+  if (latestStart !== undefined && !lines.slice(latestStart + 1).some(line => finish.test(line.trim()))) {
+    return [];
   }
   for (const i of beginnings.slice(-24)) {
     for (let j = i + 1; j < lines.length; j++) {
