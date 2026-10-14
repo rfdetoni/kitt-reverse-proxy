@@ -246,7 +246,7 @@ export async function awaitUiResponse(
       if (!generationStoppedAt) generationStoppedAt = Date.now();
       if (Date.now() - generationStoppedAt >= Math.max(750, config.uiSettleMs)) {
         const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
-        if (verifiedLogicalCompletion(probe.text, tap.completedContract)) {
+        if (probe.text && verifiedLogicalCompletion(probe.text, tap.completedContract)) {
           logger.debug('ui.response.verified_logical_completion', {
             provider_id: provider.id, response_chars: probe.text.length,
             stopped_for_ms: Date.now() - generationStoppedAt
