@@ -1,3 +1,7 @@
+# Reverse Proxy 5.3.6 — DOM capture after transcript virtualization
+
+When the ChatGPT Web UI replaces earlier conversation DOM and loses the previous visible baseline, the reader can use the just-submitted prompt tail to locate a fresh single rendered KAP/2 reply. A response whose line breaks were collapsed is forwarded only to the host-owned contract-repair loop; no malformed KAP is authorized as a tool action. Strict completion, prompt-echo guards, and DOM-only defaults remain in effect. See [release 5.3.6](docs/RELEASE_5.3.6.md).
+
 # Reverse Proxy 5.3.5 — DOM final response recovery
 
 The authenticated ChatGPT Web incident on 5.3.4 showed a complete browser response but `response_chars=0`, with two visible DOM text samples and a terminal marker. This release broadens the DOM reader to include portal-rendered body replies; records consistent pre-submit snapshots before both initial and repair requests; returns only fresh, stable, structurally delimited but malformed model text to the existing host contract repair flow (not as a valid response); and adds counts-only diagnostics. CDP stays disabled for ChatGPT/Gemini auto mode. See [release 5.3.5](docs/RELEASE_5.3.5.md).
