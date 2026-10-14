@@ -186,7 +186,20 @@ export class HybridUiResponseReader {
         sentPrompt,
         (delta) => reconciler.domDelta(delta),
         signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal,
-        () => ({ ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }), receiving: matched && !adapterEnded && !tapFailure })
+        () => {
+          const eligible = preferRawContract && trustedBeforeRead
+            && Boolean(turn.profile?.textMode) && turn.mode === 'active'
+            && matched && !tapFailure;
+          const text = adapter.accumulatedText();
+          const completedContract = eligible && text.trimStart().startsWith('K2 ')
+            ? completedRawContract(text, adapter.accumulatedAlternativeText(), true)
+            : undefined;
+          return {
+            ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }),
+            receiving: matched && !adapterEnded && !tapFailure,
+            ...(completedContract === undefined ? {} : { completedContract })
+          };
+        }
       );
       // Once the CDP request has completed, a previously trusted, strictly
       // validated KAP/1 stream can finish without waiting for a broken DOM

@@ -15,11 +15,25 @@ import { ManualInterventionRequiredError, UiTimeoutError } from './ui-errors.js'
 import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
+import { sameContractText } from './read/contract-text.js';
+import { parseKAP2 } from '../contracts/kap2.js';
 
 /** Progress from a matched CDP response, not arbitrary page mutations. */
+/** Strict model-frame validation is necessary but DOM provenance is still required. */
+export function verifiedLogicalCompletion(assistantText: string, correlatedFrame: string): boolean {
+  if (!assistantText || !correlatedFrame || !correlatedFrame.trimStart().startsWith('K2 ')) return false;
+  try {
+    parseKAP2(correlatedFrame);
+    parseKAP2(assistantText);
+    return sameContractText(assistantText, correlatedFrame);
+  } catch { return false; }
+}
+
 export interface UiTransportActivity {
   lastByteAt?: number;
   receiving: boolean;
+  /** Strictly parsed current-turn K2 frame from a pretrusted, correlated CDP tap. */
+  completedContract?: string;
 }
 
 export interface UiResponseResult {
@@ -221,6 +235,31 @@ export async function awaitUiResponse(
     }
 
     if (streaming) generationStoppedAt = 0;
+
+    // A correlated HTTP response may remain open after the browser stops
+    // generating. A delimiter alone is not proof: require a complete
+    // schema-valid K2 frame, prior CDP trust and the current assistant-owned
+    // DOM turn to agree semantically before ending the *logical* wait.
+    // This does not abort the web provider or replay the request.
+    if (provider.id === 'chatgpt' && observedStreaming && !streaming
+        && tap?.receiving && tap.completedContract) {
+      if (!generationStoppedAt) generationStoppedAt = Date.now();
+      const settleMs = Math.max(750, config.uiSettleMs);
+      // Do not mistake a transient K2/END during an actively arriving stream
+      // for stable completion. Require both UI and CDP-byte quiet periods.
+      if (tap.lastByteAt && Date.now() - tap.lastByteAt >= settleMs
+          && Date.now() - generationStoppedAt >= settleMs) {
+        const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
+        if (probe.text && verifiedLogicalCompletion(probe.text, tap.completedContract)) {
+          logger.debug('ui.response.verified_logical_completion', {
+            provider_id: provider.id, response_chars: probe.text.length,
+            stopped_for_ms: Date.now() - generationStoppedAt
+          });
+          return { text: probe.text, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+            durationMs: Date.now() - startedAt };
+        }
+      }
+    }
     if (provider.id === 'chatgpt' && observedStreaming && !streaming
         && !tap?.receiving && !lastText) {
       if (!generationStoppedAt) generationStoppedAt = Date.now();
