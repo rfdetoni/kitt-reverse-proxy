@@ -244,7 +244,11 @@ export async function awaitUiResponse(
     if (provider.id === 'chatgpt' && observedStreaming && !streaming
         && tap?.receiving && tap.completedContract) {
       if (!generationStoppedAt) generationStoppedAt = Date.now();
-      if (Date.now() - generationStoppedAt >= Math.max(750, config.uiSettleMs)) {
+      const settleMs = Math.max(750, config.uiSettleMs);
+      // Do not mistake a transient K2/END during an actively arriving stream
+      // for stable completion. Require both UI and CDP-byte quiet periods.
+      if (tap.lastByteAt && Date.now() - tap.lastByteAt >= settleMs
+          && Date.now() - generationStoppedAt >= settleMs) {
         const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
         if (probe.text && verifiedLogicalCompletion(probe.text, tap.completedContract)) {
           logger.debug('ui.response.verified_logical_completion', {
