@@ -235,7 +235,8 @@ export async function awaitUiResponse(
     // completion evidence than spinner/Stop-button state, which may be stale.
     // Probe the current assistant-owned turn even when the CDP tap is absent
     // or still receiving, and require a stable observation before returning.
-    if (preferRawContract && provider.id === 'chatgpt' && Date.now() >= nextContractScanAt) {
+    if (preferRawContract && (provider.id === 'chatgpt' || provider.id === 'gemini')
+        && Date.now() >= nextContractScanAt) {
       nextContractScanAt = Date.now() + 500;
       const direct = selectCompletedAssistantContract(lastText ? [lastText] : [], baseline, sentPrompt);
       const probe = direct ? undefined : await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
@@ -316,11 +317,22 @@ export async function awaitUiResponse(
     }
 
     if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {
+      // KAP/2 must be complete before the DOM's generic stable-text shortcut
+      // can release the Agent. A truncated / invalid frame should remain
+      // observable until the bounded timeout or a valid repaired reply arrives.
+      if (preferRawContract && (provider.id === 'chatgpt' || provider.id === 'gemini')
+          && !selectCompletedAssistantContract([lastText], baseline, sentPrompt)) {
+        stableSince = Date.now();
+      }
       if (stableSince === 0) stableSince = Date.now();
       const settleMs = observedStreaming
         ? Math.max(750, config.uiSettleMs)
         : Math.max(1_250, config.uiSettleMs);
-      if (Date.now() - stableSince >= settleMs) return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
+      if (Date.now() - stableSince >= settleMs
+          && (!preferRawContract || !['chatgpt', 'gemini'].includes(provider.id)
+            || Boolean(selectCompletedAssistantContract([lastText], baseline, sentPrompt)))) {
+        return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
+      }
     }
 
     if (Date.now() >= nextProgressLogAt) {
