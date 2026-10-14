@@ -180,6 +180,7 @@ export async function awaitUiResponse(
   let malformedReplyCandidate = '';
   let malformedReplySince = 0;
   let nextContractScanAt = startedAt;
+  let lastDomProbe: { textSamples: number; visibleEndMarkers: number; freshVisibleChars?: number } | undefined;
 
   await abortableSleep(250, signal);
 
@@ -242,6 +243,7 @@ export async function awaitUiResponse(
       nextContractScanAt = Date.now() + 500;
       const direct = selectCompletedAssistantContract(lastText ? [lastText] : [], baseline, sentPrompt);
       const probe = direct ? undefined : await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
+      if (probe) lastDomProbe = probe;
       const found = direct ?? probe?.text ?? '';
       if (found !== completedAssistantCandidate) {
         completedAssistantCandidate = found;
@@ -327,6 +329,7 @@ export async function awaitUiResponse(
           logger.event('warn', 'ui.response.capture_missing', {
             provider_id: provider.id, assistant_nodes: probe.assistantNodes, structural_turn_nodes: probe.structuralTurnNodes,
             text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers,
+            fresh_visible_chars: probe.freshVisibleChars ?? 0,
             unparsed_fresh_candidate: Boolean(probe.repairText)
           });
         }
@@ -364,7 +367,10 @@ export async function awaitUiResponse(
         idle_ms: Date.now() - lastActivityAt, response_chars: lastText.length,
         observed_streaming: observedStreaming, streaming, observed_tap: observedTap,
         tap_receiving: tap?.receiving ?? false,
-        tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null
+        tap_last_byte_ago_ms: tap?.lastByteAt ? Date.now() - tap.lastByteAt : null,
+        dom_samples: lastDomProbe?.textSamples ?? 0,
+        dom_end_markers: lastDomProbe?.visibleEndMarkers ?? 0,
+        dom_fresh_visible_chars: lastDomProbe?.freshVisibleChars ?? 0
       });
       nextProgressLogAt = Date.now() + 30_000;
     }
