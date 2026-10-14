@@ -15,11 +15,14 @@ import { ManualInterventionRequiredError, UiTimeoutError } from './ui-errors.js'
 import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
+import { sameContractText } from './read/contract-text.js';
 
 /** Progress from a matched CDP response, not arbitrary page mutations. */
 export interface UiTransportActivity {
   lastByteAt?: number;
   receiving: boolean;
+  /** Strictly parsed current-turn K2 frame from a pretrusted, correlated CDP tap. */
+  completedContract?: string;
 }
 
 export interface UiResponseResult {
@@ -221,6 +224,27 @@ export async function awaitUiResponse(
     }
 
     if (streaming) generationStoppedAt = 0;
+
+    // A correlated HTTP response may remain open after the browser stops
+    // generating. A delimiter alone is not proof: require a complete
+    // schema-valid K2 frame, prior CDP trust and the current assistant-owned
+    // DOM turn to agree semantically before ending the *logical* wait.
+    // This does not abort the web provider or replay the request.
+    if (provider.id === 'chatgpt' && observedStreaming && !streaming
+        && tap?.receiving && tap.completedContract) {
+      if (!generationStoppedAt) generationStoppedAt = Date.now();
+      if (Date.now() - generationStoppedAt >= Math.max(750, config.uiSettleMs)) {
+        const probe = await inspectCompletedAssistantContract(session.page, baseline, sentPrompt);
+        if (probe.text && sameContractText(probe.text, tap.completedContract)) {
+          logger.debug('ui.response.verified_logical_completion', {
+            provider_id: provider.id, response_chars: probe.text.length,
+            stopped_for_ms: Date.now() - generationStoppedAt
+          });
+          return { text: probe.text, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+            durationMs: Date.now() - startedAt };
+        }
+      }
+    }
     if (provider.id === 'chatgpt' && observedStreaming && !streaming
         && !tap?.receiving && !lastText) {
       if (!generationStoppedAt) generationStoppedAt = Date.now();
