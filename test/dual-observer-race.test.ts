@@ -9,7 +9,7 @@ import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 const answer = 'K2 F\nstate: done\nK2/END';
 const prompt = 'CURRENT UNIQUE WORKSPACE TASK';
 
-function harness(dom: typeof awaitUiResponse, wire = answer) {
+function harness(dom: typeof awaitUiResponse, wire = answer, mode: 'auto' | 'tap' = 'tap') {
   const cdp = new EventEmitter() as EventEmitter & {
     send: (method: string) => Promise<unknown>;
     detach: () => Promise<void>;
@@ -23,7 +23,7 @@ function harness(dom: typeof awaitUiResponse, wire = answer) {
     page: { frames: () => [] },
     context: { newCDPSession: async () => cdp }
   } as unknown as LiveBrowserSession;
-  const config = { targetUrl: 'https://chatgpt.com', readMode: 'auto',
+  const config = { targetUrl: 'https://chatgpt.com', readMode: mode,
     uiSettleMs: 750, tapVerifyTurns: 3, tapMatchTimeoutMs: 2000,
     allowedEndpointHosts: [] } as unknown as AppConfig;
   const reader = new HybridUiResponseReader(
@@ -68,7 +68,7 @@ test('independent CDP winner returns a complete K2 even when DOM never resolves'
 
 test('independent DOM winner returns without waiting for any CDP match', async () => {
   const dom = (async () => ({text:answer, deltas:[], firstDeltaMs:2, durationMs:4})) as typeof awaitUiResponse;
-  const {reader} = harness(dom);
+  const {reader} = harness(dom, answer, 'auto');
   await reader.initialize();
   reader.arm(prompt);
   const result = await bounded(reader.read([], prompt, undefined, undefined, true), 750);
