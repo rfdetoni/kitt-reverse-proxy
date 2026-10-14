@@ -421,6 +421,16 @@ export async function inspectCompletedAssistantContract(
           }
         }
 
+        // The WebChat reply may be rendered in a code block outside the
+        // legacy main/assistant nodes. textContent retains the indentation
+        // required by KAP/2 structured arrays even when CSS changes innerText.
+        for (const code of Array.from(document.querySelectorAll('pre, [role="code"]')).slice(-12)) {
+          if (code.closest('form, [contenteditable="true"], [role="textbox"], [data-message-author-role="user"], [data-role="user"]')) continue;
+          const text = (code.textContent || '').trim();
+          if (text.includes('K2/END') || text.includes('KITT/END')) {
+            responseSamples.push(text.slice(-maxChars));
+          }
+        }
         // Both ChatGPT and Gemini may omit the old assistant role/markdown
         // attributes. A bounded visible snapshot is untrusted evidence;
         // the host extracts a strict frame, excludes the prompt and baseline
