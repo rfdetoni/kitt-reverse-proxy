@@ -1,3 +1,7 @@
+# Reverse Proxy 5.3.2 — KAP/2 negotiation and verified logical completion
+
+Agent HTTP routes negotiate exact `X-Kitt-KAP: KAP/2` and advertise supported versions via capabilities; unknown/ambiguous versions are rejected before submission. When a pretrusted, correlated CDP stream contains a complete strict K2 frame, the browser has stopped generating, and the current assistant-owned DOM turn agrees, the reader may finish its logical wait without requiring the CDP transport to close. It does not abort active generation or grant tool authority. See [5.3.2 release notes](docs/RELEASE_5.3.2.md).
+
 # Reverse Proxy 5.3.1 — bounded ChatGPT capture recovery
 
 Long submitted prompts with split request content now correlate without weakening strict anchors. A completed answer in the newest assistant-style conversation turn can be validated even if role attributes changed. See [5.3.1 release notes](docs/RELEASE_5.3.1.md). Live-site reproduction remains a required operator acceptance gate.
