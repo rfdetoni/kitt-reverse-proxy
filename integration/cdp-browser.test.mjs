@@ -291,8 +291,8 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
 
 test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemini', {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless:true});
-  const prior = 'K2 F\\nstatus: old\\nK2/END';
-  const answer = 'K2 F\\nstatus: done\\nK2/END';
+  const prior = 'K2 F\nstatus: old\nK2/END';
+  const answer = 'K2 F\nstatus: done\nK2/END';
   try {
     for (const [url, markup] of [
       ['https://chatgpt.com/', '<div class="plain-answer"></div>'],
