@@ -1,5 +1,6 @@
 import { waitForDrain } from './stream-io.js';
 import { parseKAP, KAPError } from '../contracts/kap.js';
+import { KAP_VERSION_HEADER, negotiateKAPVersion, KAPNegotiationError } from '../contracts/kap-version.js';
 import { ProviderRequestState } from '../runtime/request-state.js';
 import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -85,6 +86,24 @@ function agentContractEnabled(req: Request): boolean {
     throw new AgentContractError(400, 'agent_contract_version_mismatch', `Unsupported Agent contract ${version}; expected ${AGENT_CONTRACT_VERSION}. Update Agent and Proxy together.`);
   }
   return Boolean(version);
+}
+
+/** A single exact version is negotiated per agent request, never inferred from model text. */
+function requireKAPVersion(req: Request, res: Response, agentContract: boolean): void {
+  const header = req.get(KAP_VERSION_HEADER);
+  if (!agentContract) {
+    if (header !== undefined) throw new AgentContractError(400, 'kap_negotiation_requires_agent_contract',
+      'X-Kitt-KAP is only valid with a declared Agent contract.');
+    return;
+  }
+  try {
+    res.setHeader(KAP_VERSION_HEADER, negotiateKAPVersion(header));
+  } catch (error) {
+    if (error instanceof KAPNegotiationError) {
+      throw new AgentContractError(400, 'kap_version_unsupported', error.message);
+    }
+    throw error;
+  }
 }
 
 function compactContractRepairMessages(plan: AgentContractPlan, candidate: string): JsonObject[] {
@@ -457,6 +476,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           reasoning_effort: reasoningEffort ?? null
         });
         const contract = agentContractEnabled(req);
+        requireKAPVersion(req, res, contract);
         const body = contract ? validatedBody : ensureAgentExecutionContext(validatedBody);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
@@ -506,6 +526,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           session_id: sessionId ?? null
         });
         const contract = agentContractEnabled(req);
+        requireKAPVersion(req, res, contract);
         const body = contract ? converted : ensureAgentExecutionContext(converted);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = { signal };
