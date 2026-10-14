@@ -11,6 +11,6 @@ test('rendered reply must not reuse a previous body', () => {
 test('new malformed reply can be handed to validation without reusing the prompt', () => {
   const old = 'Previous chat';
   const previous = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:old}];
-  const reply = 'K2 F\nbad! = 1\nK2/END';
+  const reply = 'K2 F\nitems[1]:\n malformed row\nK2/END';
   assert.equal(selectFreshRenderedFrameForRepair([old + '\n' + reply], previous), reply);
 });
