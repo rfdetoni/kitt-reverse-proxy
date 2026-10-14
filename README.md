@@ -1,3 +1,7 @@
+# Reverse Proxy 5.3.4 — DOM-only default for ChatGPT and Gemini Web
+
+After authenticated browser incidents where the model displayed a complete `K2/END` frame but the proxy timed out, UI `readMode=auto` uses only the DOM for ChatGPT and Gemini; the CDP tap is not connected, armed or polled. `--read-mode tap` remains explicit opt-in for diagnostics. DOM KAP capture now handles model-response elements, markdown wrappers and a bounded rendered conversation fallback for both providers, with strict KAP parsing and a pre-submit baseline so stale frames and prompt examples cannot be replayed. See [5.3.4 release notes](docs/RELEASE_5.3.4.md).
+
 # Reverse Proxy 5.3.3 — independent CDP/DOM completion observers
 
 The browser response reader now races two observers: the correlated network CDP tap and the assistant-owned DOM. The first source with a **complete, structurally valid and stable KAP/2 response** completes the logical turn without waiting for the other observer or for the upstream HTTP stream to close. A long, segmented prompt may correlate through one unique 192-character anchor only on a high-confidence, authorized provider endpoint and only when no competing candidate exists. DOM fallback recognizes answer markup that lost ChatGPT's role/turn attributes. No model text can authorize a tool or bypass host validation. See [release 5.3.3](docs/RELEASE_5.3.3.md).
