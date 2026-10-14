@@ -26,7 +26,7 @@ test('compact @json is strict, bounded and action-specific', () => {
     'K2 F items[1]: - local_id: T00 K2/END',
   ];
   for (const text of rejects) assert.throws(() => parseKAP(text),KAP2Error,text);
-  assert.equal(parseKAP('K2 F\ncontent: legacy\nK2/END').content,'legacy');
+  assert.deepEqual({...parseKAP('K2 F\ncontent: legacy\nK2/END').content as Record<string, unknown>},{content:'legacy'});
 });
 
 test('real planner-style compact JSON with missing FINAL is syntactically valid but not semantically complete', () => {
