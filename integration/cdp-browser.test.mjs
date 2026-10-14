@@ -8,7 +8,7 @@ import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
 import { abortableSleep } from '../dist/runtime/cancellation.js';
 import { UiChatExecutor } from '../dist/runtime/ui-executor.js';
 import { detectProvider } from '../dist/providers/catalog.js';
-import { collectVisibleSnapshots, extractArtifactContents } from '../dist/runtime/ui-dom.js';
+import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline } from '../dist/runtime/ui-dom.js';
 import { parseContractJson } from '../dist/util/contract-json.js';
 import { readFileSync } from 'node:fs';
 import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
@@ -287,4 +287,49 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemini', {timeout: 30_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  const prior = 'K2 F\\nstatus: old\\nK2/END';
+  const answer = 'K2 F\\nstatus: done\\nK2/END';
+  try {
+    for (const [url, markup] of [
+      ['https://chatgpt.com/', '<div class="plain-answer"></div>'],
+      ['https://gemini.google.com/app', '<model-response><message-content class="reply"></message-content></model-response>']
+    ]) {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent('<main><div style="white-space:pre-wrap" id="previous"></div></main>');
+      await page.locator('#previous').evaluate((node, value) => {node.textContent=value;}, prior);
+      const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,
+        text:await visibleContractBaseline(page)}];
+      let cdpSessions = 0;
+      const session = {page,context:{newCDPSession:async()=>{cdpSessions++;throw Error('CDP disabled');}}};
+      const provider = detectProvider(url);
+      const reader = new HybridUiResponseReader(session,provider,{
+        targetUrl:url,readMode:'auto',uiSettleMs:100,uiResponseTimeoutMs:6_000,
+        headed:false,allowedEndpointHosts:[]
+      });
+      await reader.initialize();
+      reader.arm('Different submitted prompt');
+      const pending = reader.read(baseline,'Different submitted prompt',undefined,undefined,true);
+      await delay(180);
+      await page.locator('main').evaluate((node,{markup,text})=>{
+        node.insertAdjacentHTML('beforeend',markup);
+        const added = node.lastElementChild;
+        if (added) {
+          added.setAttribute('style','display:block;white-space:pre-wrap');
+          const target=added.querySelector('message-content')||added;
+          target.textContent=text;
+        }
+      },{markup,text:answer});
+      const received = await pending;
+      assert.equal(received.text,answer);
+      assert.equal(received.readDiagnostics.source,'dom');
+      assert.equal(received.readDiagnostics.tap_mode,'disabled');
+      assert.equal(cdpSessions,0);
+      await context.close();
+    }
+  } finally {await browser.close();}
 });
