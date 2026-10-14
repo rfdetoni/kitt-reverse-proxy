@@ -157,6 +157,25 @@ export class UiChatExecutor implements ChatExecutor {
     await this.responseReader.initialize();
   }
 
+  private async captureResponseBaseline(): Promise<UiTextSnapshot[]> {
+    const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+    if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
+      // Snapshot before *every* send, including repair attempts. The prior
+      // assistant response must not be mistaken for the new repaired output.
+      const previousVisible = await visibleContractBaseline(this.session.page);
+      if (previousVisible) baseline.push({
+        selector: '[pre-submit-visible-text]', frameIndex: -1,
+        count: 1, text: previousVisible
+      });
+      const previousContract = await inspectCompletedAssistantContract(this.session.page, baseline);
+      if (previousContract.text) baseline.push({
+        selector: '[prior-assistant-contract]', frameIndex: -1,
+        count: 1, text: previousContract.text
+      });
+    }
+    return baseline;
+  }
+
   private async waitForReady(reason: string, signal?: AbortSignal): Promise<void> {
     await waitForUiReady(this.session, this.provider, this.config, reason, signal);
   }
@@ -430,22 +449,7 @@ export class UiChatExecutor implements ChatExecutor {
       const initialArtifacts = await extractArtifactContents(this.session.page).catch(() => []);
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
-    const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-    if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
-      // Record the visible conversation before sending anything. Without this
-      // guard, a roleless DOM fallback might reuse an old KAP response or a
-      // KAP example rendered inside the long user prompt.
-      const previousVisible = await visibleContractBaseline(this.session.page);
-      if (previousVisible) baseline.push({
-        selector: '[pre-submit-visible-text]', frameIndex: -1,
-        count: 1, text: previousVisible
-      });
-      const previousContract = await inspectCompletedAssistantContract(this.session.page, baseline);
-      if (previousContract.text) baseline.push({
-        selector: '[prior-assistant-contract]', frameIndex: -1,
-        count: 1, text: previousContract.text
-      });
-    }
+    const baseline = await this.captureResponseBaseline();
     const promptSendStartedAt = Date.now();
     options?.lifecycle?.beforeSubmit(prompt);
     await this.sendPrompt(prompt, options?.signal);
@@ -520,7 +524,7 @@ export class UiChatExecutor implements ChatExecutor {
           ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryPrompt = buildUiRepairEvidence(repairInstruction, body, textToParse);
-        const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        const retryBaseline = await this.captureResponseBaseline();
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         const previousCandidate = textToParse;
@@ -542,7 +546,7 @@ export class UiChatExecutor implements ChatExecutor {
       let checked = validateStructuredOutput(textToParse, structured);
       if (!checked.ok) {
         const retryPrompt = buildUiRepairEvidence(buildStructuredRetryPrompt(structured, checked.error), body, textToParse);
-        const retryBaseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+        const retryBaseline = await this.captureResponseBaseline();
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal, true);
