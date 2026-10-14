@@ -1,4 +1,4 @@
-import { completedRawContract, selectContractResponseText } from './contract-text.js';
+import { selectContractResponseText } from './contract-text.js';
 import { UiTimeoutError } from '../ui-errors.js';
 export { selectContractResponseText } from './contract-text.js';
 import type { AppConfig, ChatExecutionOptions, JsonObject, LiveBrowserSession } from '../../types.js';
@@ -9,7 +9,6 @@ import {
 } from '../ui-response-monitor.js';
 import type { UiTextSnapshot } from '../ui-dom.js';
 import { logger } from '../../logger.js';
-import { abortableSleep } from '../cancellation.js';
 import { CdpStreamTap } from './tap-cdp.js';
 import { TapStreamAdapter } from './tap-adapter.js';
 import { ResponseReconciler } from './reconciler.js';
