@@ -19,9 +19,10 @@ the completed final frame.
   submitted prompt and prior assistant frames. A bare `K2/END`, an
   unfinished newer frame or multiple competing valid frames does not
   finish a turn. Results settle before the logical observer closes.
-- Both ChatGPT and Gemini get this strict DOM-completion path. A truncated
-  or malformed frame must be repaired through the existing validated
-  Agent-contract workflow, never promoted into a tool call.
+- Both ChatGPT and Gemini get this strict DOM-completion path. A stable but
+  invalid KAP response is returned after an extended 3.5s settle period to
+  the existing Agent-contract validation/repair workflow; invalid frames
+  are never promoted to tool calls or treated as successful early completion.
 - No browser request replay, permission bypass, host authorization
   changes or forced cancellation of upstream model generation.
 
