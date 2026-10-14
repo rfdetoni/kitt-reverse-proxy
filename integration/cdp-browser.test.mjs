@@ -8,7 +8,7 @@ import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
 import { abortableSleep } from '../dist/runtime/cancellation.js';
 import { UiChatExecutor } from '../dist/runtime/ui-executor.js';
 import { detectProvider } from '../dist/providers/catalog.js';
-import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline } from '../dist/runtime/ui-dom.js';
+import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline, inspectCompletedAssistantContract } from '../dist/runtime/ui-dom.js';
 import { parseContractJson } from '../dist/util/contract-json.js';
 import { readFileSync } from 'node:fs';
 import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
@@ -324,6 +324,9 @@ test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemin
           target.textContent=text;
         }
       },{markup,text:answer});
+      const probe = await inspectCompletedAssistantContract(page,baseline,'Different submitted prompt');
+      assert.equal(probe.text,answer,
+        JSON.stringify({url,probe,visible:await page.locator('main').innerText()}));
       const received = await pending;
       assert.equal(received.text,answer);
       assert.equal(received.readDiagnostics.source,'dom');
