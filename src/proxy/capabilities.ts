@@ -92,6 +92,7 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
     agent_contract: {
       version: AGENT_CONTRACT_VERSION,
       kap_negotiation: { header: KAP_VERSION_HEADER, supported_versions: [...KAP_SUPPORTED_VERSIONS], default_version: 'KAP/2', downgrade: false },
+      verified_logical_completion: { supported: manager.transport === 'ui', requires: 'trusted-correlated-cdp+k2+current-assistant-dom+settled-ui-and-bytes', aborts_upstream: false },
       header: AGENT_CONTRACT_HEADER,
       route_header: AGENT_ROUTE_HEADER,
       routes: [...AGENT_ROUTES],
