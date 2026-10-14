@@ -14,6 +14,7 @@ import type {
 import {
   collectVisibleSnapshots,
   inspectCompletedAssistantContract,
+  visibleContractBaseline,
   extractArtifactContents,
   type ExtractedArtifact,
   type UiTextSnapshot
@@ -430,7 +431,15 @@ export class UiChatExecutor implements ChatExecutor {
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
-    if (this.provider.id === 'chatgpt') {
+    if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
+      // Record the visible conversation before sending anything. Without this
+      // guard, a roleless DOM fallback might reuse an old KAP response or a
+      // KAP example rendered inside the long user prompt.
+      const previousVisible = await visibleContractBaseline(this.session.page);
+      if (previousVisible) baseline.push({
+        selector: '[pre-submit-visible-text]', frameIndex: -1,
+        count: 1, text: previousVisible
+      });
       const previousContract = await inspectCompletedAssistantContract(this.session.page, baseline);
       if (previousContract.text) baseline.push({
         selector: '[prior-assistant-contract]', frameIndex: -1,
