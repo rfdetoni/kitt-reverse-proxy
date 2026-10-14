@@ -55,7 +55,7 @@ test('real Chromium hybrid reader preserves contracts and stops failed delivery'
     await page.locator('#answer').evaluate((element, text) => { element.textContent = text; }, expected);
     let fetchedDone = true;
     let monitorAborted = false;
-    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'auto', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
+    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'tap', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
       const signal = args[6];
       try { while (!fetchedDone) await abortableSleep(10, signal); }
       catch (error) { monitorAborted = Boolean(signal?.aborted); throw error; }
@@ -267,7 +267,7 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
     }};
     const provider = detectProvider('https://gemini.google.com/app');
     const ui = new UiChatExecutor({context:wrappedContext,page,persistent:false},provider,
-      {targetUrl:origin,allowedEndpointHosts:[],readMode:'auto',tapVerifyTurns:1,tapMatchTimeoutMs:250,tapFirstByteMs:5000,tapStallMs:5000,
+      {targetUrl:origin,allowedEndpointHosts:[],readMode:'tap',tapVerifyTurns:1,tapMatchTimeoutMs:250,tapFirstByteMs:5000,tapStallMs:5000,
         manualInterventionTimeoutMs:1000,uiResponseTimeoutMs:5000,uiSettleMs:100,headed:false,toolEnforcement:'off'});
     await ui.initialize();
     locatorPrototype = Object.getPrototypeOf(page.locator('.ql-editor'));
