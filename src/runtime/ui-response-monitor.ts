@@ -177,6 +177,8 @@ export async function awaitUiResponse(
   let assistantProbeLogged = false;
   let completedAssistantCandidate = '';
   let completedAssistantSince = 0;
+  let malformedReplyCandidate = '';
+  let malformedReplySince = 0;
   let nextContractScanAt = startedAt;
 
   await abortableSleep(250, signal);
@@ -251,6 +253,25 @@ export async function awaitUiResponse(
         return { text: found, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
           durationMs: Date.now() - startedAt };
       }
+      // If WebChat rendered the model reply but changed whitespace or broke
+      // KAP syntax, return only a proven FRESH, stable, delimited reply to
+      // the existing host-owned contract repair path. This is never a parsed
+      // or authorized tool action, and never an upstream replay.
+      const malformed = probe?.repairText ?? '';
+      if (malformed !== malformedReplyCandidate) {
+        malformedReplyCandidate = malformed;
+        malformedReplySince = Date.now();
+      }
+      if (malformed && !streaming
+          && Date.now() - malformedReplySince >= Math.max(3_500, config.uiSettleMs)) {
+        logger.event('warn', 'ui.response.dom_unparsed_for_repair', {
+          provider_id: provider.id, response_chars: malformed.length,
+          stopped_generating: observedStreaming && !streaming
+        });
+        return { text: malformed, deltas: [],
+          firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,
+          durationMs: Date.now() - startedAt };
+      }
     }
 
     const tap = tapActivity?.();
@@ -305,7 +326,8 @@ export async function awaitUiResponse(
           assistantProbeLogged = true;
           logger.event('warn', 'ui.response.capture_missing', {
             provider_id: provider.id, assistant_nodes: probe.assistantNodes, structural_turn_nodes: probe.structuralTurnNodes,
-            text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers
+            text_samples: probe.textSamples, visible_end_markers: probe.visibleEndMarkers,
+            unparsed_fresh_candidate: Boolean(probe.repairText)
           });
         }
       }
