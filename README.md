@@ -1,3 +1,22 @@
+## Reverse Proxy 5.3.10 — post-submit DOM mutation capture
+
+ChatGPT Web 5.3.9 again timed out on a 64,071-character prompt: the
+page displayed three KAP terminators and one compact candidate, but all
+candidates were either prompt examples or pre-submit content. No assistant
+role/turn nodes were detected, and no model text reached the Agent.
+
+The DOM adapter now observes bounded newly added/changed text before UI
+submission, in addition to existing selector and snapshot fallbacks.
+It excludes user-owned and composer nodes, limits captured strings and
+retention, and always applies the existing prompt/baseline and canonical
+contract validation checks. It disconnects the observer after each turn.
+The browser never grants tool permissions. No proxy/parser grammar change.
+
+A real Chromium boundary test checks that a prompt-embedded KAP example
+is rejected, while a new unmarked reply is recovered even when long page
+text pushes it outside the 131 KiB snapshot tail. See
+[5.3.10 release notes](docs/RELEASE_5.3.10.md).
+
 ## Reverse Proxy 5.3.9 — KAP/2 compact final accepted by the contract validator
 
 WebChat 5.3.8 captured an actual `K2 F @json: {...}\nK2/END`

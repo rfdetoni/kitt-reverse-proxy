@@ -200,6 +200,96 @@ export async function readVisibleSnapshotSlot(
   }
 }
 
+
+/**
+ * Capture DOM text that actually changed after pre-submit baseline collection.
+ * Some WebChat builds have no recognizable assistant nodes; a page-wide text
+ * scan then finds only the compact KAP example inside the long user prompt.
+ * These snapshots remain UNTRUSTED until prompt/baseline exclusion and KAP
+ * validation. No network hook, host privilege or arbitrary page evaluation.
+ */
+export async function armFreshContractDomObserver(page: Page): Promise<void> {
+  for (const frame of frames(page)) {
+    try {
+      await frame.evaluate(() => {
+        type Capture = { observer: MutationObserver; samples: string[] };
+        const holder = window as typeof window & { __kittFreshContractDom?: Capture };
+        holder.__kittFreshContractDom?.observer.disconnect();
+        if (!document.body) return;
+        const samples: string[] = [];
+        const observed = new Set<string>();
+        const isUserOrComposer = (element: Element): boolean => Boolean(element.closest(
+          'form, [contenteditable="true"], [role="textbox"], ' +
+          '[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]'
+        ));
+        const collect = (initial: Element): void => {
+          if (isUserOrComposer(initial)) return;
+          let element: Element | null = initial;
+          for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
+            if (element === document.body || element === document.documentElement) break;
+            const text = element.textContent?.trim() ?? '';
+            if (text.length > 65_536 || !text.includes('K2 F') || !text.includes('K2/END')) continue;
+            if (!observed.has(text)) {
+              observed.add(text);
+              samples.push(text);
+              if (samples.length > 24) samples.shift();
+            }
+            break;
+          }
+        };
+        const observer = new MutationObserver((mutations) => {
+          const changed = new Set<Element>();
+          for (const mutation of mutations) {
+            if (mutation.type === 'characterData' && mutation.target.parentElement)
+              changed.add(mutation.target.parentElement);
+            if (mutation.type === 'childList') {
+              for (const added of Array.from(mutation.addedNodes)) {
+                if (added.nodeType === Node.ELEMENT_NODE) changed.add(added as Element);
+                else if (added.parentElement) changed.add(added.parentElement);
+              }
+            }
+          }
+          // Bound DOM processing even if an unrelated application subtree
+          // renders thousands of nodes in one mutation batch.
+          for (const element of [...changed].slice(-100)) collect(element);
+        });
+        observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+        holder.__kittFreshContractDom = { observer, samples };
+      });
+    } catch { /* A navigating/remote frame cannot be observed. */ }
+  }
+}
+
+export async function stopFreshContractDomObserver(page: Page): Promise<void> {
+  for (const frame of frames(page)) {
+    try {
+      await frame.evaluate(() => {
+        const holder = window as typeof window & {
+          __kittFreshContractDom?: { observer: MutationObserver; samples: string[] }
+        };
+        holder.__kittFreshContractDom?.observer.disconnect();
+        delete holder.__kittFreshContractDom;
+      });
+    } catch { /* Frame already navigated. */ }
+  }
+}
+
+async function recentFreshContractDomSamples(page: Page): Promise<string[]> {
+  const samples: string[] = [];
+  for (const frame of frames(page)) {
+    try {
+      const captured = await frame.evaluate(() => {
+        const holder = window as typeof window & {
+          __kittFreshContractDom?: { samples: string[] }
+        };
+        return holder.__kittFreshContractDom?.samples.slice(-24) ?? [];
+      });
+      samples.push(...captured);
+    } catch { /* Frame may navigate during output generation. */ }
+  }
+  return samples.slice(-24);
+}
+
 /** Fallback for a completed ChatGPT response when markdown selectors are stale.
  * Fallback page text is untrusted; prompt and pre-submit baselines are excluded. */
 export interface AssistantContractProbe {
@@ -214,6 +304,7 @@ export interface AssistantContractProbe {
   compactCandidates?: number;
   freshCompactCandidates?: number;
   maxSampleChars?: number;
+  mutationSamples?: number;
 }
 
 /**
@@ -616,6 +707,8 @@ export async function inspectCompletedAssistantContract(
       samples.push(...scan.samples);
     } catch { /* Page changes while rendering; next pass can inspect it. */ }
   }
+  const mutationSamples = await recentFreshContractDomSamples(page);
+  samples.push(...mutationSamples);
   const text = selectCompletedAssistantContract(samples, baseline, sentPrompt);
   const repairText = text ? undefined : selectFreshRenderedFrameForRepair(samples, baseline, sentPrompt);
   const compact = new Set(samples.flatMap(compactFinalCandidates));
@@ -635,7 +728,8 @@ export async function inspectCompletedAssistantContract(
   return { ...(text ? { text } : {}), ...(repairText ? { repairText } : {}),
     assistantNodes, textSamples, visibleEndMarkers, structuralTurnNodes,
     freshVisibleChars, compactCandidates: compact.size, freshCompactCandidates,
-    maxSampleChars: Math.max(0, ...samples.map(sample => sample.length)) };
+    maxSampleChars: Math.max(0, ...samples.map(sample => sample.length)),
+    mutationSamples: mutationSamples.length };
 }
 
 export async function latestVisibleSnapshot(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot> {

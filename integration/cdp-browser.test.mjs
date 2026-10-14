@@ -8,7 +8,7 @@ import { HybridUiResponseReader } from '../dist/runtime/read/hybrid-reader.js';
 import { abortableSleep } from '../dist/runtime/cancellation.js';
 import { UiChatExecutor } from '../dist/runtime/ui-executor.js';
 import { detectProvider } from '../dist/providers/catalog.js';
-import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline, inspectCompletedAssistantContract } from '../dist/runtime/ui-dom.js';
+import { collectVisibleSnapshots, extractArtifactContents, visibleContractBaseline, inspectCompletedAssistantContract, armFreshContractDomObserver, stopFreshContractDomObserver } from '../dist/runtime/ui-dom.js';
 import { parseContractJson } from '../dist/util/contract-json.js';
 import { readFileSync } from 'node:fs';
 import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
@@ -380,5 +380,50 @@ test('real Chromium preserves indented KAP from a roleless code block outside ma
     }, reply);
     const probe = await inspectCompletedAssistantContract(page, baseline, 'New user prompt');
     assert.equal(probe.text, reply);
+  } finally { await browser.close(); }
+});
+
+
+test('real Chromium recovers only the fresh KAP/2 answer from DOM mutations without assistant markup', {timeout: 30_000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.setContent('<main id="thread"><div id="old">Earlier context</div></main>');
+    const before = await visibleContractBaseline(page);
+    const prompt = 'Please create a plan. K2 F @json: {"items":[{"local_id":"EXAMPLE"}]} K2/END';
+    const response = 'K2 F @json: {"items":[{"local_id":"T00","kind":"task"},{"local_id":"FINAL","kind":"final"}]} K2/END';
+    const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:before}];
+    await armFreshContractDomObserver(page);
+    await page.evaluate(prompt => {
+      const user = document.createElement('div');
+      user.setAttribute('data-message-author-role','user');
+      user.textContent = prompt;
+      document.querySelector('#thread').append(user);
+    },prompt);
+    await page.waitForTimeout(25);
+    const promptOnly = await inspectCompletedAssistantContract(page, baseline, prompt);
+    assert.equal(promptOnly.text,undefined);
+    assert.equal(promptOnly.mutationSamples,0);
+    await page.evaluate(response => {
+      const reply = document.createElement('div');
+      reply.textContent = response;
+      document.querySelector('#thread').append(reply);
+      // Hide the answer from the previous 131k page-text tail fallback;
+      // only the post-submit mutation observer can still see its snapshot.
+      const filler = document.createElement('div');
+      filler.textContent = 'z'.repeat(140_000);
+      document.querySelector('#thread').append(filler);
+    },response);
+    await page.waitForTimeout(25);
+    const found = await inspectCompletedAssistantContract(page, baseline, prompt);
+    assert.equal(found.assistantNodes,0);
+    assert.equal(found.structuralTurnNodes,0);
+    assert.equal(found.text,response);
+    assert.ok(found.mutationSamples > 0);
+    await stopFreshContractDomObserver(page);
+    const afterStop = await inspectCompletedAssistantContract(page, baseline, prompt);
+    assert.equal(afterStop.mutationSamples,0);
+    assert.equal(afterStop.text,undefined);
   } finally { await browser.close(); }
 });

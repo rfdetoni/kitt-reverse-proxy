@@ -15,6 +15,8 @@ import {
   collectVisibleSnapshots,
   inspectCompletedAssistantContract,
   visibleContractBaseline,
+  armFreshContractDomObserver,
+  stopFreshContractDomObserver,
   extractArtifactContents,
   type ExtractedArtifact,
   type UiTextSnapshot
@@ -173,6 +175,9 @@ export class UiChatExecutor implements ChatExecutor {
         count: 1, text: previousContract.text
       });
     }
+    if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
+      await armFreshContractDomObserver(this.session.page);
+    }
     return baseline;
   }
 
@@ -196,7 +201,11 @@ export class UiChatExecutor implements ChatExecutor {
     signal?: AbortSignal,
     preferRawContract = false
   ): Promise<HybridUiResponseResult> {
-    return this.responseReader.read(baseline, sentPrompt, onDelta, signal, preferRawContract);
+    try {
+      return await this.responseReader.read(baseline, sentPrompt, onDelta, signal, preferRawContract);
+    } finally {
+      await stopFreshContractDomObserver(this.session.page);
+    }
   }
 
   async reset(signal?: AbortSignal): Promise<void> {
