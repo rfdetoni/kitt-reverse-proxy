@@ -297,7 +297,20 @@ export function selectFreshRenderedFrameForRepair(
         if (pos >= 0) at = pos + anchor.length;
       }
       if (at < 0) continue;
-      const fresh = current.slice(at).trim();
+      let fresh = current.slice(at).trim();
+      if (!fresh || sentPrompt.includes(fresh)) continue;
+      // The submitted user prompt can itself contain complete KAP examples.
+      // Exclude the entire *new* user message when it is visible, so old
+      // in-prompt delimiters cannot compete with the actual assistant reply.
+      if (sentPrompt && fresh.includes(sentPrompt)) {
+        fresh = fresh.slice(fresh.lastIndexOf(sentPrompt) + sentPrompt.length).trim();
+      } else if (sentPrompt.length >= 256) {
+        const promptTail = sentPrompt.slice(-256).trim();
+        const marker = promptTail && fresh.lastIndexOf(promptTail);
+        if (typeof marker === 'number' && marker >= 0) {
+          fresh = fresh.slice(marker + promptTail.length).trim();
+        }
+      }
       if (!fresh || sentPrompt.includes(fresh)) continue;
       const starts = [...fresh.matchAll(/(?:^|\n)(K2 [TFWQ](?: [^\r\n]+)?|KITT\/1)(?=\r?\n)/g)];
       const ends = [...fresh.matchAll(/(?:^|\n)(K2\/END|KITT\/END)(?=\r?\n|$)/g)];
