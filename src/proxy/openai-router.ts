@@ -172,9 +172,9 @@ export function buildAgentContractSerializationRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the candidate action and data, but emit exactly one syntactically valid contract payload matching the output contract.',
       'Do not restart, re-plan, summarize, or answer the original task. Repair serialization only.',
-      'Respond with KAP/2 text: exactly one action and K2/END; no model-authored JSON.',
-      'Use key: value scalars and content<<TAG literal fields for multiline code without escaping quotes or backslashes.',
-      'For structured results use nested two-space-indented fields or tabular rows[count]{fields}:.',
+      'Respond with exactly one KAP/2 envelope and K2/END; never emit standalone JSON.',
+      'If the candidate is a compact structured final, preserve K2 F @json: {..} K2/END and correct only invalid JSON inside the tag.',
+      'Otherwise use key: value scalars and content<<TAG literal fields for multiline code; structured results may use indented fields or tabular rows[count]{fields}:.',
       'Preserve the original action, tool name and all unaffected fields exactly.',
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')

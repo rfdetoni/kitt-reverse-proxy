@@ -18,3 +18,11 @@ No other endpoints, model prompts or policies change. CI cannot replace
 an authenticated WebChat regression test. The reverse proxy still embeds
 a KAP/2 parser, which is technical debt; follow-up migration to the shared
 SDK should be evaluated separately instead of weakening the validators.
+
+## Repair prompt alignment
+
+Both the model-facing KAP/2 bootstrap and serialization repair prompt now
+advertise the valid `K2 F @json: {...} K2/END` form. The old proxy prompt
+incorrectly forbade all JSON and forced indentation even when the original
+planner selected the canonical compact final. Raw/standalone JSON remains
+forbidden; the host still enforces the complete protocol and plan schema.
