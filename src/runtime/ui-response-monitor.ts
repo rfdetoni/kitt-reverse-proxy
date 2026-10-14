@@ -317,20 +317,21 @@ export async function awaitUiResponse(
     }
 
     if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {
-      // KAP/2 must be complete before the DOM's generic stable-text shortcut
-      // can release the Agent. A truncated / invalid frame should remain
-      // observable until the bounded timeout or a valid repaired reply arrives.
-      if (preferRawContract && (provider.id === 'chatgpt' || provider.id === 'gemini')
-          && !selectCompletedAssistantContract([lastText], baseline, sentPrompt)) {
-        stableSince = Date.now();
-      }
       if (stableSince === 0) stableSince = Date.now();
-      const settleMs = observedStreaming
-        ? Math.max(750, config.uiSettleMs)
-        : Math.max(1_250, config.uiSettleMs);
-      if (Date.now() - stableSince >= settleMs
-          && (!preferRawContract || !['chatgpt', 'gemini'].includes(provider.id)
-            || Boolean(selectCompletedAssistantContract([lastText], baseline, sentPrompt)))) {
+      const contractCapture = preferRawContract && ['chatgpt', 'gemini'].includes(provider.id);
+      const hasCompleteContract = contractCapture
+        ? Boolean(selectCompletedAssistantContract([lastText], baseline, sentPrompt))
+        : false;
+      // Completed KAP frames take the fast, strictly parsed path above.
+      // But INVALID stable answers must still reach the Agent contract repair
+      // loop. Waiting for a strictly valid frame here would turn every
+      // repairable syntax failure into a transport timeout.
+      const settleMs = contractCapture && !hasCompleteContract
+        ? Math.max(3_500, config.uiSettleMs)
+        : observedStreaming
+          ? Math.max(750, config.uiSettleMs)
+          : Math.max(1_250, config.uiSettleMs);
+      if (Date.now() - stableSince >= settleMs) {
         return { text: lastText, deltas, firstDeltaMs, durationMs: Math.max(0, Date.now() - startedAt) };
       }
     }
