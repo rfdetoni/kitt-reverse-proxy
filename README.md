@@ -1,3 +1,21 @@
+## Reverse Proxy 5.3.9 — KAP/2 compact final accepted by the contract validator
+
+WebChat 5.3.8 captured an actual `K2 F @json: {...}\nK2/END`
+planner reply but the proxy's independent KAP/2 parser rejected the new
+header with `E_HEADER`, initiating an unnecessary model-repair turn.
+The second turn then failed DOM freshness detection and timed out.
+
+Mirror the canonical Protocol 0.13.3 `compactJsonFinal` grammar and strict
+duplicate-key JSON reader into the proxy's internal fast-path validator.
+Keep 64 KiB, depth, array and Unicode limits unchanged. The proxy now
+accepts either a single-line or line-delimited tagged structured final,
+but it does **not** decide whether the `items` list satisfies the
+planner's required FINAL entry; that belongs to the Agent host.
+
+Regression tests cover completed framing through `parseKAP` and
+`transportPayload`, invalid keys/escapes, flattened legacy output and
+existing indented format. Refer to [release notes](docs/RELEASE_5.3.9.md).
+
 The DOM extractor additionally reverses only invalid Markdown presentation
 escapes before underscores/asterisks inside compact JSON strings. It does so
 only when the entire normalized candidate passes the strict JSON syntax

@@ -1,5 +1,6 @@
 /** Strict KAP/2 wire syntax. Authorization remains host-owned. */
 import { KAPError } from './kap-error.js';
+import { strictJson } from './strict-json.js';
 import type { KAPMessage } from './kap.js';
 const MAX_SIZE = 65536, MAX_LINES = 3000, MAX_DEPTH = 20, MAX_ROWS = 1024;
 const KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -127,8 +128,56 @@ function linesOf(raw: string): string[] {
   if (lines.length > MAX_LINES) fail('Too many lines', 'E_LINES');
   return lines;
 }
+function compactJsonFinal(raw: string): KAPMessage | undefined {
+  if (!raw.startsWith('K2 F')) return undefined;
+  const marker = /^K2 F(?: |\r?\n)@json: /.exec(raw);
+  if (!marker) {
+    if (/^K2 F(?: |\r?\n)@json:/.test(raw)) fail('Malformed compact frame', 'E_COMPACT_JSON');
+    return undefined;
+  }
+  const payloadWithEnd = raw.slice(marker[0].length);
+  const terminator = /(?: |\r?\n)K2\/END$/.exec(payloadWithEnd);
+  if (!terminator) fail('Missing compact terminator', 'E_TERMINATOR');
+  const payload = payloadWithEnd.slice(0, terminator.index);
+  if (/[\r\n]/.test(payload)) fail('Compact JSON requires one physical line', 'E_COMPACT_JSON');
+  let parsed: unknown;
+  try { parsed = strictJson(payload); }
+  catch (error) {
+    if (error instanceof Error && error.message === 'duplicate JSON field')
+      fail('Duplicate compact JSON key', 'E_KEY_DUPLICATE');
+    fail('Invalid compact JSON', 'E_COMPACT_JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
+      || !Object.keys(parsed).length) fail('Compact final requires non-empty object', 'E_COMPACT_JSON');
+  function inspect(value: unknown, depth = 0): void {
+    if (depth > MAX_DEPTH) fail('Compact depth exceeded', 'E_DEPTH');
+    if (Array.isArray(value)) {
+      if (value.length > MAX_ROWS) fail('Compact array too large', 'E_ARRAY_SIZE');
+      for (const item of value) inspect(item, depth + 1);
+    } else if (value && typeof value === 'object') {
+      if (Object.keys(value).length > MAX_ROWS) fail('Compact object too large', 'E_ARRAY_SIZE');
+      for (const [name, item] of Object.entries(value)) {
+        if (DENIED.has(name)) fail('Unsafe compact key', 'E_KEY_UNSAFE');
+        safe(name);
+        inspect(item, depth + 1);
+      }
+    } else if (typeof value === 'string') safe(value, undefined, true);
+    else if (typeof value === 'number') {
+      if (!Number.isFinite(value)) fail('Non-finite compact number', 'E_NUMBER_RANGE');
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) fail('Unsafe compact integer', 'E_NUMBER_RANGE');
+    }
+  }
+  inspect(parsed);
+  return {action:'final_response',tool:null,tool_input:null,
+    content:parsed as Record<string, unknown>,reasoning_summary:'',loop:null};
+}
+
 export function parseKAP2(raw: string, options: {schema?: Schema} = {}): KAPMessage {
   const lines = linesOf(raw);
+  const compact = compactJsonFinal(lines.join('\n'));
+  if (compact) return compact;
+  if (lines.length === 1 && /^K2 [TFWQ](?: |$)/.test(lines[0]!))
+    fail('KAP/2 line boundaries lost', 'E_LAYOUT_LOSS');
   if (lines.at(-1) !== 'K2/END') fail('Missing K2/END', 'E_TERMINATOR');
   const match = /^K2 ([TFWQ])(?: ([A-Za-z0-9_.:-]{1,64}))?$/.exec(lines[0] ?? '');
   if (!match || (match[1] === 'T') !== (match[2] !== undefined)) fail('Invalid K2 header', 'E_HEADER', 1);
