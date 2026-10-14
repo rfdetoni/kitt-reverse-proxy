@@ -167,6 +167,9 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
 
   const startedAt = Date.now();
   const largePrompt = prompt.length >= 16_384;
+  // A long (but sub-16 KiB) task prompt can also be changed by ChatGPT's
+  // rich-text editor. Its content must never be blindly retyped/submitted.
+  const integrityCritical = prompt.length >= 8_192;
   const native = largePrompt && await isNativeComposer(input);
   const strategy = native ? 'native_input' : 'fill';
   let writeFailed = false;
@@ -197,10 +200,11 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     }
   }
 
-  if (largePrompt && !native) {
-    // Large contenteditable fields frequently autoformat markdown during
-    // Playwright fill. Retry once with a direct, non-typing DOM assignment.
-    // Verify again after the editor's controlled-state reconciliation.
+  if (integrityCritical) {
+    // Rich text may autoformat even below the previous 16 KiB threshold.
+    // Reset the editor once without typing a long second copy; verify again
+    // after its controlled-state reconciliation. Native inputs use their
+    // value setter on this recovery path.
     await setComposerTextThroughDom(input, prompt, true).catch(() => undefined);
     await abortableSleep(250);
     if (await composerHasExpectedText(input, expected)) {
@@ -215,8 +219,8 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     }
   }
 
-  // Do not ever send a corrupted draft, or retry a 65 KiB keyboard paste.
-  if (largePrompt) {
+  // Never keyboard-retype a multi-KiB corrupted draft.
+  if (integrityCritical) {
     const actual = normalizeComposerText(await readComposerText(input) ?? '');
     const target = await describeComposerTarget(input);
     logger.event('warn', 'ui.composer.write', {
@@ -371,6 +375,11 @@ export async function sendUiPrompt(
   await writeComposerText(session.page, input, prompt);
 
   await abortableSleep(150, signal);
+  // A controlled editor can reconcile with an old value after a successful
+  // write. A final integrity check prevents accidentally sending that value.
+  if (!await composerHasExpectedText(input, normalizeComposerText(prompt))) {
+    throw new UiAutomationError('O editor modificou o prompt antes do envio. O texto não foi enviado.');
+  }
   const sendButtonDeadline = Date.now() + 2_500;
   let submitted = false;
   const sendSelectors = selectorCandidates(provider.ui.sendSelectors, 'send').map((item) =>

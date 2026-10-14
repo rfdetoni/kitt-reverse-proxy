@@ -1,3 +1,20 @@
+## Reverse Proxy 5.3.11 — reliable T00 composer submission
+
+On 2026-10-14 the model planner returned successfully, but the next T00
+request never reached the chat: the rich editor changed a 12,371-character
+normalized prompt to 12,374 characters. The proxy rejected the mismatch
+before submission, and repeated retries left an unsent draft.
+
+The existing bounded rich-DOM replacement now also handles prompts above
+8 KiB (rather than only above 16 KiB). As before, the proxy verifies the
+actual text twice after replacement, refuses to keyboard-retype long
+payloads, and never submits an unreconciled draft. An additional check just
+before the send-button click detects late controlled-editor changes.
+Regression tests reproduce +3 characters in T00 and fail-closed behavior.
+
+No KAP/2 parsing, host authorization or Agent CLI retry policy changed.
+See [5.3.11 notes](docs/RELEASE_5.3.11.md).
+
 ## Reverse Proxy 5.3.10 — post-submit DOM mutation capture
 
 ChatGPT Web 5.3.9 again timed out on a 64,071-character prompt: the
