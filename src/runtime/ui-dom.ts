@@ -277,19 +277,40 @@ export function selectCompletedAssistantContract(
  * The same malformed frame in the prompt, old chat or a competing response
  * fails closed.
  */
+/**
+ * Locate text after the just-submitted prompt even if the web app
+ * virtualized the old conversation. This proves turn freshness, not validity.
+ */
+function afterSubmittedPrompt(current: string, sentPrompt: string): string | undefined {
+  const words = sentPrompt.trim().split(/\s+/).slice(-24);
+  if (words.length < 8 || words.join(' ').length < 96) return undefined;
+  const escape = (word: string): string => word.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+  const pattern = new RegExp(words.map(escape).join('\\s+'), 'g');
+  let end = -1;
+  for (const match of current.matchAll(pattern)) {
+    end = (match.index ?? -1) + match[0].length;
+  }
+  return end < 0 ? undefined : current.slice(end).trim();
+}
+
+/**
+ * Recover only a fresh, delimited but INVALID envelope for the host-owned
+ * repair flow. Never accept malformed text as an authorized tool action.
+ */
 export function selectFreshRenderedFrameForRepair(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
   const before = baseline.filter(s => s.selector === '[pre-submit-visible-text]')
     .map(s => s.text.replace(/\r\n?/g, '\n').trim()).filter(Boolean);
-  if (!before.length) return undefined;
+  const previous = baseline.map(s => s.text.replace(/\r\n?/g, '\n').trim()).filter(Boolean);
   const found = new Set<string>();
   for (const value of samples) {
     const current = value.replace(/\r\n?/g, '\n').trim();
+    const regions: string[] = [];
+    const fromPrompt = afterSubmittedPrompt(current, sentPrompt);
+    if (fromPrompt) regions.push(fromPrompt);
+
     for (const old of before) {
-      // A stable suffix of the previously seen page is sufficient when
-      // navigation/sidebar text shifts; still require a >=128-character
-      // overlap to avoid treating a prompt example as a new model turn.
       let at = current.startsWith(old) ? old.length : -1;
       if (at < 0 && old.length >= 128) {
         const anchor = old.slice(-Math.min(old.length, 512));
@@ -298,30 +319,33 @@ export function selectFreshRenderedFrameForRepair(
       }
       if (at < 0) continue;
       let fresh = current.slice(at).trim();
-      if (!fresh || sentPrompt.includes(fresh)) continue;
-      // The submitted user prompt can itself contain complete KAP examples.
-      // Exclude the entire *new* user message when it is visible, so old
-      // in-prompt delimiters cannot compete with the actual assistant reply.
       if (sentPrompt && fresh.includes(sentPrompt)) {
         fresh = fresh.slice(fresh.lastIndexOf(sentPrompt) + sentPrompt.length).trim();
-      } else if (sentPrompt.length >= 256) {
-        const promptTail = sentPrompt.slice(-256).trim();
-        const marker = promptTail && fresh.lastIndexOf(promptTail);
-        if (typeof marker === 'number' && marker >= 0) {
-          fresh = fresh.slice(marker + promptTail.length).trim();
-        }
+      } else {
+        fresh = afterSubmittedPrompt(fresh, sentPrompt) ?? fresh;
       }
+      if (fresh) regions.push(fresh);
+    }
+
+    for (const fresh of regions) {
       if (!fresh || sentPrompt.includes(fresh)) continue;
-      const starts = [...fresh.matchAll(/(?:^|\n)(K2 [TFWQ](?: [^\r\n]+)?|KITT\/1)(?=\r?\n)/g)];
-      const ends = [...fresh.matchAll(/(?:^|\n)(K2\/END|KITT\/END)(?=\r?\n|$)/g)];
-      if (starts.length !== 1 || ends.length !== 1) continue;
-      const begin = starts[0]!.index! + (starts[0]![0]!.startsWith('\n') ? 1 : 0);
-      const finish = ends[0]!.index! + ends[0]![0]!.length;
-      if (finish <= begin) continue;
-      const candidate = fresh.slice(begin, finish).trim();
-      if (!candidate || new TextEncoder().encode(candidate).length > 65_536 || sentPrompt.includes(candidate)) continue;
+      const framed = kapCandidatesFromRenderedText(fresh);
+      // WebChat can collapse Markdown soft line breaks into a single line.
+      // Such a frame is NOT valid KAP; it may only go to host repair, and
+      // only if it follows the uniquely identified submitted prompt.
+      const collapsed = fromPrompt === fresh && !fresh.includes('\n')
+        && /^K2 [TFWQ](?=\s)/.test(fresh)
+        && fresh.endsWith('K2/END')
+        && (fresh.match(/K2\/END/g) ?? []).length === 1
+        ? fresh : undefined;
+      const candidates = framed.length === 1 ? framed : collapsed ? [collapsed] : [];
+      if (candidates.length !== 1) continue;
+      const candidate = candidates[0]!;
+      if (new TextEncoder().encode(candidate).length > 65_536
+          || sentPrompt.includes(candidate)
+          || previous.some(text => text.includes(candidate))) continue;
       try {
-        parseKAP(candidate); // A valid frame belongs to the normal completion path.
+        parseKAP(candidate); // Valid frames use the strict completion path.
       } catch {
         found.add(candidate);
       }
