@@ -288,9 +288,45 @@ export async function inspectCompletedAssistantContract(
           || Boolean(lastReply.closest('form, [contenteditable="true"], [role="textbox"]'))
           || (owner && (owner.matches('[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]')
             || Boolean(owner.querySelector('[data-testid*="user-message"]'))));
-        if (notReply) return { count: 0, structural: turns.length, samples: [] as string[] };
-        const text = (lastReply.innerText || lastReply.textContent || '').trim().slice(0, maxChars);
-        return { count: 0, structural: turns.length || replyNodes.length, samples: text ? [text] : [] };
+        if (!notReply) {
+          const text = (lastReply.innerText || lastReply.textContent || '').trim().slice(0, maxChars);
+          if (text) return { count: 0, structural: turns.length || replyNodes.length, samples: [text] };
+        }
+
+        // ChatGPT Web can render responses outside the former main/role-based
+        // conversation containers (including plain text nodes with no markdown
+        // class). Find only *delimited* KAP frames in visible DOM text, not
+        // arbitrary page contents, hidden input values, or a loose K2/END.
+        // The host still validates the complete frame against the original
+        // prompt and pre-submit baseline before using it.
+        const root = document.querySelector('main, [role="main"], #thread, [data-testid*="conversation"]')
+          ?? document.body;
+        if (!root) return { count: 0, structural: turns.length, samples: [] as string[] };
+        const scope = root as HTMLElement;
+        const visible = (scope.innerText || '').slice(-2 * 1024 * 1024);
+        const closing = /(?:^|\\n)(K2\\/END|KITT\\/END)(?=\\r?\\n|$)/g;
+        let lastEnd = -1;
+        let endMatch: RegExpExecArray | null;
+        while ((endMatch = closing.exec(visible)) !== null) {
+          lastEnd = endMatch.index + endMatch[0].length;
+        }
+        if (lastEnd < 0) return { count: 0, structural: turns.length, samples: [] as string[] };
+        const beforeEnd = visible.slice(0, lastEnd);
+        const headings = /(?:^|\\n)(K2 [TFWQ](?: [^\\r\\n]+)?|KITT\\/1)(?=\\r?\\n)/g;
+        const starts: number[] = [];
+        let headMatch: RegExpExecArray | null;
+        while ((headMatch = headings.exec(beforeEnd)) !== null) {
+          starts.push(headMatch.index + (headMatch[0].startsWith('\\n') ? 1 : 0));
+        }
+        // Try only a bounded number of candidate frames at the tail. Each
+        // candidate must independently pass the strict host KAP parser.
+        const samples: string[] = [];
+        for (const start of starts.slice(-6).reverse()) {
+          const text = beforeEnd.slice(start).trim();
+          if (text.length > 0 && text.length <= maxChars) samples.push(text);
+        }
+        return { count: 0, structural: turns.length || replyNodes.length,
+          samples };
       }, 65_536);
       assistantNodes += scan.count;
       structuralTurnNodes += scan.structural;
