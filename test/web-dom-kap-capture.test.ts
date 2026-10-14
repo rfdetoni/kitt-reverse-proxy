@@ -27,12 +27,12 @@ for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
       }}
     } as unknown as LiveBrowserSession;
     const config = {readMode:'auto',uiSettleMs:50} as AppConfig;
-    const dom = (async (_session, _provider, _config, prior, _prompt,
+    const dom: typeof awaitUiResponse = async (_session, _provider, _config, prior, _prompt,
       _onDelta, _signal, _tap, requireKAP) => {
       assert.equal(requireKAP,true);
       assert.deepEqual(prior,baseline);
       return {text:complete,deltas:[],firstDeltaMs:3,durationMs:8};
-    }) as typeof awaitUiResponse;
+    };
     const reader = new HybridUiResponseReader(session,detectProvider(url),config,dom);
     await reader.initialize();
     reader.arm('Current turn');
