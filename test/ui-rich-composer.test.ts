@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { detectProvider } from '../src/providers/catalog.js';
 import { sendUiPrompt } from '../src/runtime/ui-interaction.js';
+import { UiAutomationError } from '../src/runtime/ui-errors.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 
 test('large rich editor autoformatting is recovered once with verified DOM assignment', async () => {
