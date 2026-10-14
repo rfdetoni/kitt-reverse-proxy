@@ -99,7 +99,7 @@ test('compact final returns from DOM when a long prompt already contains K2 exam
 
 test('invalid compact JSON is not a completed valid contract', () => {
   const slash = String.fromCharCode(92);
-  const invalid = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_init.py"]}]} K2/END';
+  const invalid = 'K2 F @json: {"items":[{"paths":["src/' + slash + 'qinit.py"]}]} K2/END';
   assert.equal(selectCompletedAssistantContract([invalid],[],'new request'),undefined);
 });
 
