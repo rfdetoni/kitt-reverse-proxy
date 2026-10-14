@@ -1,3 +1,15 @@
+## Reverse Proxy 5.3.8 — compact KAP/2 DOM capture
+
+The WebChat reader can extract a bounded tagged `K2 F @json: {...} K2/END`
+reply even when assistant-role selectors disappear and HTML folds whitespace.
+JSON-aware boundaries prevent interpreting `K2/END` inside JSON strings
+as a terminator. Valid strict syntax may complete the transport; malformed
+bytes are forwarded only through the host validation/repair flow.
+
+The proxy still rejects echoed prompts, stale snapshots and competing frames.
+The canonical kitt-protocol SDK remains responsible for semantic validation
+and authorization. Test cases cover long prompt examples and invalid escapes.
+
 # Reverse Proxy 5.3.7 — KAP/2 flattened DOM response capture
 
 WebChat sometimes renders a complete KAP/2 answer on one physical line and

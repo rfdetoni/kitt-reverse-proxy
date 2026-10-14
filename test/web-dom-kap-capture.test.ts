@@ -86,3 +86,19 @@ test('provider body fallback cannot reuse pre-submit KAP message', async () => {
   const result=await inspectCompletedAssistantContract(page,baseline,'Different request');
   assert.equal(result.text,undefined);
 });
+
+
+test('compact final returns from DOM when a long prompt already contains K2 examples', () => {
+  const reply = 'K2 F @json: {"items":[{"local_id":"T00","kind":"task"},{"local_id":"FINAL","kind":"final"}]}  K2/END';
+  const prompt = 'Decompose the original request. '.repeat(2000) +
+    '\nK2 F @json: {"items":[{"local_id":"EXAMPLE"}]} K2/END\n' +
+    'Expand with additional task items as necessary. No code fences or prose.';
+  assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + reply],baseline,prompt),reply);
+  assert.equal(selectCompletedAssistantContract([reply],[],reply),undefined);
+});
+
+test('invalid compact JSON is not a completed valid contract', () => {
+  const slash = String.fromCharCode(92);
+  const invalid = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_init.py"]}]} K2/END';
+  assert.equal(selectCompletedAssistantContract([invalid],[],'new request'),undefined);
+});

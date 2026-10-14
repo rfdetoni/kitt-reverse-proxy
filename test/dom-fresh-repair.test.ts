@@ -56,3 +56,13 @@ test('single-line fallback denies echoes, prior replies and competing frames', (
   assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+flat+nl+flat.replace('T01','T02')],[],'new request'),undefined);
   assert.equal(selectFreshRenderedFrameForRepair(['Page'+nl+'K2 F items[1]: - missing terminator'],[],'new request'),undefined);
 });
+
+
+test('invalid tagged compact response reaches host repair, excluding prompt examples', () => {
+  const slash = String.fromCharCode(92);
+  const invalid = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_init.py"]}]}  K2/END';
+  const prompt = 'Produce task items, example K2 F @json: {"items":[{"local_id":"EXAMPLE"}]} K2/END';
+  const before = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Previous visible page'}];
+  assert.equal(selectFreshRenderedFrameForRepair(['Page\n' + prompt + '\n' + invalid],before,prompt),invalid);
+  assert.equal(selectFreshRenderedFrameForRepair([invalid],[],invalid),undefined);
+});
