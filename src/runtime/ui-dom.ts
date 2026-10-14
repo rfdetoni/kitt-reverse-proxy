@@ -217,7 +217,6 @@ export async function armFreshContractDomObserver(page: Page): Promise<void> {
         holder.__kittFreshContractDom?.observer.disconnect();
         if (!document.body) return;
         const samples: string[] = [];
-        const observed = new Set<string>();
         const isUserOrComposer = (element: Element): boolean => Boolean(element.closest(
           'form, [contenteditable="true"], [role="textbox"], ' +
           '[data-message-author-role="user"], [data-role="user"], [data-testid*="user-message"]'
@@ -228,9 +227,9 @@ export async function armFreshContractDomObserver(page: Page): Promise<void> {
           for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
             if (element === document.body || element === document.documentElement) break;
             const text = element.textContent?.trim() ?? '';
-            if (text.length > 65_536 || !text.includes('K2 F') || !text.includes('K2/END')) continue;
-            if (!observed.has(text)) {
-              observed.add(text);
+            if (text.length > 65_536) break; // Ancestors only grow.
+            if (!text.includes('K2 F') || !text.includes('K2/END')) continue;
+            if (!samples.includes(text)) {
               samples.push(text);
               if (samples.length > 24) samples.shift();
             }

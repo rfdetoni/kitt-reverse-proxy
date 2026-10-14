@@ -181,7 +181,7 @@ export async function awaitUiResponse(
   let malformedReplySince = 0;
   let nextContractScanAt = startedAt;
   let lastDomProbe: { textSamples: number; visibleEndMarkers: number; freshVisibleChars?: number;
-    compactCandidates?: number; freshCompactCandidates?: number; maxSampleChars?: number } | undefined;
+    compactCandidates?: number; freshCompactCandidates?: number; maxSampleChars?: number; mutationSamples?: number } | undefined;
 
   await abortableSleep(250, signal);
 
@@ -334,7 +334,8 @@ export async function awaitUiResponse(
             unparsed_fresh_candidate: Boolean(probe.repairText),
             compact_candidates: probe.compactCandidates ?? 0,
             fresh_compact_candidates: probe.freshCompactCandidates ?? 0,
-            max_sample_chars: probe.maxSampleChars ?? 0
+            max_sample_chars: probe.maxSampleChars ?? 0,
+            fresh_dom_mutation_samples: probe.mutationSamples ?? 0
           });
         }
       }
@@ -376,7 +377,8 @@ export async function awaitUiResponse(
         dom_end_markers: lastDomProbe?.visibleEndMarkers ?? 0,
         dom_fresh_visible_chars: lastDomProbe?.freshVisibleChars ?? 0,
         dom_compact_candidates: lastDomProbe?.compactCandidates ?? 0,
-        dom_fresh_compact_candidates: lastDomProbe?.freshCompactCandidates ?? 0
+        dom_fresh_compact_candidates: lastDomProbe?.freshCompactCandidates ?? 0,
+        dom_mutation_samples: lastDomProbe?.mutationSamples ?? 0
       });
       nextProgressLogAt = Date.now() + 30_000;
     }

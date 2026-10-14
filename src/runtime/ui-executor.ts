@@ -190,6 +190,7 @@ export class UiChatExecutor implements ChatExecutor {
       await sendUiPrompt(this.session, this.provider, this.config, prompt, signal, () => this.responseReader.arm(prompt));
     } catch (error) {
       this.responseReader.cancelPending();
+      await stopFreshContractDomObserver(this.session.page);
       throw error;
     }
   }
