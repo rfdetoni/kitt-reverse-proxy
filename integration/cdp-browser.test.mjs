@@ -361,3 +361,24 @@ test('real Chromium recovers portal DOM answer outside main with pre-submit repl
     await browser.close();
   } finally { if (browser.isConnected()) await browser.close(); }
 });
+
+
+test('real Chromium preserves indented KAP from a roleless code block outside main', {timeout: 20_000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<main><p>Previous conversation</p></main>');
+    const baseline = [{selector: '[pre-submit-visible-text]', frameIndex: -1, count: 1,
+      text: await visibleContractBaseline(page)}];
+    const reply = 'K2 F\nitems[1]:\n  - updated\nK2/END';
+    await page.evaluate((value) => {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = value;
+      pre.appendChild(code);
+      document.body.appendChild(pre);
+    }, reply);
+    const probe = await inspectCompletedAssistantContract(page, baseline, 'New user prompt');
+    assert.equal(probe.text, reply);
+  } finally { await browser.close(); }
+});
