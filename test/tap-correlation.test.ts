@@ -535,3 +535,41 @@ test('recorded assistant action survives batched patches, escape presentation an
   push({p:'',o:'add',v:{message:{id:'competing',author:{role:'assistant'},channel:'final',content:{parts:[other]}}}});
   assert.equal(adapter.completedContract(),undefined,'two current-turn answers remain ambiguous');
 });
+
+
+test('provider-native tool arguments and non-final channels never complete a KITT response', () => {
+  const adapter = new TapStreamAdapter(undefined,true);
+  adapter.matchedResponse('https://chatgpt.com/current','POST','text/event-stream');
+  const push = (value: unknown) => adapter.push(Buffer.from('data: '+JSON.stringify(value)+'\n\n'));
+  const native = JSON.stringify({path:'/GitHub/link/get_repo',args:{repository_full_name:'owner/repo'}});
+  push({p:'',o:'add',v:{message:{id:'native',author:{role:'assistant'},channel:null,recipient:'all',content:{parts:[]}}}});
+  push({p:'/message/recipient',o:'replace',v:'functions.native_reader'});
+  push({p:'/message/content/parts/0',o:'append',v:native});
+  assert.equal(adapter.completedContract(),undefined);
+  push({delta:native});
+  assert.equal(adapter.completedContract(),undefined,'generic leaves cannot bypass an observed tool recipient');
+  push({p:'',o:'add',v:{message:{id:'final',author:{role:'assistant'},channel:null,recipient:'all',content:{parts:[]}}}});
+  push({p:'/message/channel',o:'replace',v:'analysis'});
+  push({p:'/message/content/parts/0',o:'append',v:native});
+  assert.equal(adapter.completedContract(),undefined);
+  push({p:'',o:'add',v:{message:{id:'answer',author:{role:'assistant'},channel:'final',recipient:'all',content:{parts:['{"verdict":"OK","issues":[]}']}}}});
+  assert.equal(adapter.completedContract(),'{"verdict":"OK","issues":[]}');
+});
+
+
+test('late recipient classification invalidates earlier generic JSON for cold and learned capture', () => {
+  const profile = {endpointOrigin:'https://chatgpt.com',endpointPath:'/stream',method:'POST',
+    contentType:'text/event-stream',framing:'sse' as const,textPath:'$.delta',textMode:'snapshot' as const};
+  for (const selected of [undefined, profile]) {
+    const adapter = new TapStreamAdapter(selected,true);
+    adapter.matchedResponse('https://chatgpt.com/stream','POST','text/event-stream');
+    const push = (value: unknown) => adapter.push(Buffer.from('data: '+JSON.stringify(value)+'\n\n'));
+    push({message:{id:'native',author:{role:'assistant'},content:{parts:[]}}});
+    push({delta:'{"path":"native-tool","args":{}}'});
+    assert.equal(adapter.completedContract(),undefined);
+    push({p:'/message/recipient',o:'replace',v:'functions.native_reader'});
+    push({message:{id:'answer',author:{role:'assistant'},channel:'final',recipient:'all',content:{parts:[]}}});
+    push({delta:'{"items":["actual answer"]}'});
+    assert.equal(adapter.completedContract(),'{"items":["actual answer"]}');
+  }
+});

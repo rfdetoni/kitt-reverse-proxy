@@ -7,6 +7,8 @@ export interface TapTextState {
   score: number;
   samples: number;
   invalid?: boolean;
+  answer?: boolean;
+  final?: boolean;
 }
 
 const PREFERRED_KEY_SCORE: Readonly<Record<string, number>> = Object.freeze({
@@ -102,7 +104,8 @@ export function collectTapStringLeaves(value: JsonValue): Map<string, TapStringL
       // A correlated provider response may echo the submitted user message.
       // Its content is not an assistant answer, even if it is valid JSON.
       if (typeof role === 'string' && /^(?:user|system|developer|tool)$/i.test(role)) return;
-      if (typeof child.channel === 'string' && /^(?:analysis|commentary)$/i.test(child.channel)) return;
+      if (typeof child.channel === 'string' && child.channel !== 'final') return;
+      if (typeof child.recipient === 'string' && child.recipient !== 'all') return;
       for (const [key, item] of Object.entries(child)) {
         if (/^(?:messages|history|request|input|prompt)$/i.test(key)) continue;
         collect(item, appendJsonPath(path, key), depth + 1, jsonStringPaths);

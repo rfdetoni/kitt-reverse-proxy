@@ -1,3 +1,9 @@
+# Reverse Proxy 5.4.4 — local result wrapping and provider message provenance
+
+A complete strict JSON result with none of the Agent envelope fields is mechanically wrapped in `final_response.content`. Its parsed data is preserved exactly; no model repair/copy turn is needed, and it cannot become a tool call or loop. Partial envelopes, duplicate keys, ambiguous objects and invalid JSON still fail validation.
+
+[Release details](docs/RELEASE_5.4.4.md).
+
 # Reverse Proxy 5.4.3 — ordered assistant patches and protocol EOF
 
 Captures implicit patch batches and complete escape-wrapped assistant JSON while excluding thoughts, user echoes and renderer metadata. A complete correlated response with SSE `[DONE]` survives a subsequent connection failure; partial or ambiguous data remains rejected. [Release details](docs/RELEASE_5.4.3.md).

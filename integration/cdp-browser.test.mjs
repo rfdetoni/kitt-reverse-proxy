@@ -15,9 +15,10 @@ import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
 import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
 import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
-for (const [kind, tool, batched] of [
+for (const [kind, tool, batched, nativeCall] of [
   ['Agent tool action', "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}"],
   ['bare JSON planning result', JSON.stringify({items:[{local_id:'T01',title:'Inspect the workspace'}]})],
+  ['final action after a provider-native tool call',JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'',loop:null}),false,true],
   ['batched assistant action with a completed SSE body and failed connection', JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'',loop:null}),true]
 ]) {
 test('auto captures one network-only '+kind+' when DOM contains only the prompt', {timeout: 20_000}, async () => {
@@ -69,6 +70,11 @@ test('auto captures one network-only '+kind+' when DOM contains only the prompt'
       {v:tool.slice(20)},
       {p:'/message/metadata/state',o:'replace',v:'finished'}
     ];
+    if (nativeCall) frames.unshift(
+      {p:'',o:'add',v:{message:{id:'native',author:{role:'assistant'},recipient:'all',channel:null,content:{parts:[]}}}},
+      {p:'/message/recipient',o:'replace',v:'functions.native_reader'},
+      {p:'/message/content/parts/0',o:'append',v:JSON.stringify({path:'/GitHub/link/get_repo',args:{repository_full_name:'owner/repo'}})}
+    );
     for (const frame of frames) { response.write('data: '+JSON.stringify(frame)+'\n\n'); await delay(30); }
     if (batched) response.write('data: [DONE]\n\n',()=>setTimeout(()=>response.destroy(),20));
     else response.end('data: [DONE]\n\n');

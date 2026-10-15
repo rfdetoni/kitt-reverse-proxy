@@ -20,7 +20,7 @@ test('complete JSON from DOM and correlated assistant patches reaches host schem
   const push = (value: unknown) => adapter.push(Buffer.from('data: '+JSON.stringify(value)+'\n\n'));
   push({p:'',o:'add',v:{message:{author:{role:'user'},content:{parts:[bare]}}}});
   assert.equal(adapter.completedContract(), undefined, 'user JSON is not an answer');
-  push({p:'',o:'add',v:{message:{author:{role:'assistant'},content:{parts:['']}}}});
+  push({p:'',o:'add',v:{message:{author:{role:'assistant'},channel:'final',content:{parts:['']}}}});
   push({p:'/message/content/parts/0',o:'append',v:bare.slice(0,12)});
   assert.equal(adapter.completedContract(), undefined);
   push({v:bare.slice(12)});
@@ -28,8 +28,9 @@ test('complete JSON from DOM and correlated assistant patches reaches host schem
   assert.equal(JSON.stringify(adapter.captureDiagnostics()).includes('Read the workspace'), false);
   assert.equal(adapter.captureDiagnostics(true).candidates.some(candidate => candidate.text === bare), true);
   const plan = prepareAgentContractRequest({messages:[{role:'user',content:'Plan this task'}]}, {sessionId:'capture-boundary'});
-  assert.throws(() => transformAgentContractCompletion(completion(bare), plan),
-    (error: unknown) => error instanceof AgentContractValidationError && error.kind === 'shape');
+  const normalized = transformAgentContractCompletion(completion(bare), plan).choices[0]!.message;
+  assert.deepEqual(JSON.parse(normalized.content!),payload);
+  assert.equal(normalized.tool_calls,undefined);
 });
 
 test('structured content repair may wrap exact data in final_response but cannot create a tool action', () => {

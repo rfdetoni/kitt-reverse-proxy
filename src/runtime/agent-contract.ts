@@ -606,9 +606,20 @@ function sentenceCount(text: string): number {
   return normalized.split(/(?<=[.!?])\s+/u).filter((part) => part.trim()).length;
 }
 
-function parseStrictContract(text: string): AgentContractResponse {
+function isBareStructuredResult(value: unknown): value is JsonObject {
+  return isRecord(value) && !Object.keys(AGENT_RESPONSE_SCHEMA.properties).some(key => Object.hasOwn(value, key));
+}
+
+function parseStrictContract(text: string, normalizeResult = false): AgentContractResponse {
   try {
-    return validateContractShape(parseContractJson(text).value);
+    const parsed = parseContractJson(text);
+    if (normalizeResult && !parsed.repaired && isBareStructuredResult(parsed.value)) {
+      // Mechanical wrapping preserves all result data and cannot create a tool
+      // call, loop or permission. Schema and tool checks still run below.
+      return validateContractShape({action:'final_response',tool:null,tool_input:null,
+        content:parsed.value,reasoning_summary:'',loop:null});
+    }
+    return validateContractShape(parsed.value);
   } catch (error) {
     if (error instanceof AgentContractValidationError) throw error;
     throw new AgentContractValidationError(
@@ -672,7 +683,7 @@ export function transformAgentContractCompletion(
     throw new AgentContractValidationError('Model response has no textual JSON content.');
   }
 
-  const response = parseStrictContract(source);
+  const response = parseStrictContract(source, true);
   validateContractResponse(response, plan);
 
   if (response.action === 'request_workspace') {
@@ -737,9 +748,7 @@ export function assertAgentRepairContinuity(candidate: string, repaired: string,
   // inventing an action, tool call or changed result is never authorized.
   let original: ReturnType<typeof parseContractJson> | undefined;
   try { original = parseContractJson(candidate); } catch { /* Existing prefix anchors apply. */ }
-  const envelopeKeys = ['action', 'tool', 'tool_input', 'content', 'reasoning_summary', 'loop'];
-  if (error.kind === 'shape' && original && !original.repaired && isRecord(original.value)
-      && !envelopeKeys.some(key => Object.hasOwn(original.value as object, key))) {
+  if (error.kind === 'shape' && original && !original.repaired && isBareStructuredResult(original.value)) {
     if (response.action !== 'final_response' || response.tool !== null || response.tool_input !== null
         || response.loop !== null || !isDeepStrictEqual(response.content, original.value)) {
       throw new AgentContractValidationError('Repair must wrap the exact structured result in final_response.content.', 'ambiguous');

@@ -383,7 +383,7 @@ test('contract repair retains the user task without replaying typed context', ()
   assert.doesNotMatch(serialized, /CONTEXT_MUST_NOT_BE_REPLAYED/);
 });
 
-test('accepts only the canonical contract shape after provider extraction', () => {
+test('requires canonical actions while preserving plain structured results as data', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'canonical-only' });
   const canonical = {
     action: 'use_tool',
@@ -400,10 +400,14 @@ test('accepts only the canonical contract shape after provider extraction', () =
   );
   assert.equal(fenced.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
 
+  const bare = {operation:'repo.read',arguments:{path:'README.md'}};
+  const dataOnly = transformAgentContractCompletion(completion(JSON.stringify(bare)),plan).choices[0]!.message;
+  assert.equal(dataOnly.tool_calls,undefined);
+  assert.deepEqual(JSON.parse(dataOnly.content!),bare);
+
   const legacyDialects = [
     JSON.stringify({ ...canonical, action: ['use_tool'] }),
     JSON.stringify({ ...canonical, loop: { objective: 'Review', completion_criteria: ['Verify'], status: ['complete'], validation_summary: '' } }),
-    JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }),
     '<kitt-tool>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</kitt-tool>',
     JSON.stringify({
       action: 'use_tool',

@@ -243,18 +243,19 @@ test('a faithful repair can reveal a second invalid argument within the same bou
   assert.equal(recovered.status, 200); assert.equal(recovered.attempts, 3);
 });
 
-test('bare structured JSON is wrapped by bounded repair without inventing host execution', async () => {
+test('bare structured JSON is wrapped locally without another provider turn or host execution', async () => {
   const data = {items:[{local_id:'T01',title:'Inspect the workspace'}]};
   const bare = JSON.stringify(data);
   const wrapped = JSON.stringify({action:'final_response',tool:null,tool_input:null,
     content:data,reasoning_summary:'',loop:null});
   const recovered = await executeRecovery([bare,wrapped],2);
   assert.equal(recovered.status,200);
-  assert.equal(recovered.attempts,2);
+  assert.equal(recovered.attempts,1);
   const choices = recovered.body.choices as Array<{message:{content:string;tool_calls?:unknown}}>;
   assert.deepEqual(JSON.parse(choices[0]!.message.content),data);
   assert.equal(choices[0]!.message.tool_calls,undefined);
   const rejected = await executeRecovery([bare,writeContract],2);
-  assert.equal(rejected.status,409);
-  assert.equal(rejected.body.choices,undefined);
+  assert.equal(rejected.status,200);
+  assert.equal(rejected.attempts,1);
+  assert.equal((rejected.body.choices as Array<{message:{tool_calls?:unknown}}>)[0]!.message.tool_calls,undefined);
 });
