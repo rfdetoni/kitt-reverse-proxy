@@ -141,17 +141,13 @@ export class HybridUiResponseReader {
       if (tapSettleTimer) clearTimeout(tapSettleTimer);
       tapSettleTimer = undefined;
     };
-    const considerTapCompletion = (ended: boolean): void => {
+    const considerTapCompletion = (): void => {
       if (!preferRawContract || !matched || tapFailure || deliveryFailed || signal?.aborted) return;
       const raw = adapter.completedContract();
       if (!raw) return;
       clearTapSettle();
-      if (ended) {
-        resolveTapWinner({ source: 'tap', raw });
-        return;
-      }
       const lastByte = tapLastByteAt;
-      const settleMs = Math.max(750, this.config.uiSettleMs);
+      const settleMs = Math.max(750, this.config.uiSettleMs ?? 0);
       tapSettleTimer = setTimeout(() => {
         // No early completion from an intermediate closing brace token.
         if (signal?.aborted || tapFailure || !lastByte || tapLastByteAt !== lastByte
@@ -191,7 +187,7 @@ export class HybridUiResponseReader {
             continue;
           }
           for (const delta of deltas) await reconciler.tapDelta(delta);
-          considerTapCompletion(false);
+          considerTapCompletion();
           continue;
         }
         if (event.type === 'end') {
@@ -209,7 +205,7 @@ export class HybridUiResponseReader {
           adapterEnded = true;
           logger.debug('ui.tap.complete', { provider_id: this.provider?.id ?? 'unknown', bytes: tapBytes, text_chars: adapter.accumulatedText().length });
           for (const delta of deltas) await reconciler.tapDelta(delta);
-          considerTapCompletion(true);
+          considerTapCompletion();
           continue;
         }
         logger.debug('ui.tap.fallback', { provider_id: this.provider?.id ?? 'unknown', reason: event.reason, bytes: tapBytes });
@@ -273,7 +269,18 @@ export class HybridUiResponseReader {
           ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(), true)
           : adapter.completedContract())
         : undefined;
-      if (recovered === undefined) throw error;
+      if (recovered === undefined) {
+        if (error instanceof UiTimeoutError && matched) {
+          logger.debug('ui.tap.capture_missing', {
+            tap_bytes: tapBytes, ended: adapterEnded, failure: tapFailure,
+            ...adapter.captureDiagnostics()
+          });
+          if (this.config.logContent === 'full') {
+            logger.trace('ui.tap.capture_missing.raw', adapter.captureDiagnostics(true));
+          }
+        }
+        throw error;
+      }
       winnerSource = 'tap';
       dom = { text: recovered, deltas: [], firstDeltaMs: firstByteAt === undefined
         ? undefined : firstByteAt - startedAt, durationMs: Date.now() - startedAt };

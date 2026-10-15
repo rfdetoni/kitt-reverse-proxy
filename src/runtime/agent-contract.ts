@@ -731,7 +731,21 @@ function extractRepairAnchors(raw: string): Map<string, unknown> {
 /** Repair cannot rewrite the action, tool, or any unrelated stable field. */
 export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
   const before = extractRepairAnchors(candidate);
-  parseStrictContract(repaired);
+  const response = parseStrictContract(repaired);
+  // A model may return the requested structured result without its Agent
+  // envelope. Repair may only wrap that exact data as a final response;
+  // inventing an action, tool call or changed result is never authorized.
+  let original: ReturnType<typeof parseContractJson> | undefined;
+  try { original = parseContractJson(candidate); } catch { /* Existing prefix anchors apply. */ }
+  const envelopeKeys = ['action', 'tool', 'tool_input', 'content', 'reasoning_summary', 'loop'];
+  if (error.kind === 'shape' && original && !original.repaired && isRecord(original.value)
+      && !envelopeKeys.some(key => Object.hasOwn(original.value as object, key))) {
+    if (response.action !== 'final_response' || response.tool !== null || response.tool_input !== null
+        || response.loop !== null || !isDeepStrictEqual(response.content, original.value)) {
+      throw new AgentContractValidationError('Repair must wrap the exact structured result in final_response.content.', 'ambiguous');
+    }
+    return;
+  }
   const after = extractRepairAnchors(repaired);
   for (const [path, value] of before) {
     const decision = path === '$/action' || path === '$/tool';

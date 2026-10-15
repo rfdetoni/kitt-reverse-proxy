@@ -15,8 +15,11 @@ import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
 import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
 import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
-test('auto captures one network-only JSON tool action when DOM contains only the prompt', {timeout: 20_000}, async () => {
-  const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
+for (const [kind, tool] of [
+  ['Agent tool action', "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}"],
+  ['bare JSON planning result', JSON.stringify({items:[{local_id:'T01',title:'Inspect the workspace'}]})]
+]) {
+test('auto captures one network-only '+kind+' when DOM contains only the prompt', {timeout: 20_000}, async () => {
   const prompt = 'Inspect the current workspace using the available host tools. Example:\n' + tool;
   let posts = 0;
   let receivedPrompt = '';
@@ -91,6 +94,8 @@ test('auto captures one network-only JSON tool action when DOM contains only the
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+}
 
 test('real Chromium hybrid reader preserves contracts and stops failed delivery', {timeout: 30_000}, async () => {
   const expected = JSON.stringify({action: 'final_response', tool: null, tool_input: null, content: '    <div>ação 😀</div>\n\nline\nline  ', reasoning_summary: '', loop: null});

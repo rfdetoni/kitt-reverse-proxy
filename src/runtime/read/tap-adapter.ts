@@ -1,7 +1,5 @@
 import { sameContractText } from './contract-text.js';
 import { parseContractJson } from '../../util/contract-json.js';
-import { AGENT_RESPONSE_SCHEMA } from '../../contracts/agent-contract.js';
-import { validateJsonSchema } from '../../util/json-schema.js';
 import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { copyProfile } from './tap-health.js';
@@ -156,7 +154,8 @@ export class TapStreamAdapter {
   /**
    * Independent tap completion: never infer the answer from a delimiter
    * or a single unverified JSON leaf. Only one complete, unambiguous JSON
-   * action extracted from an answer-shaped response field can win.
+   * object extracted from an answer-shaped response field can reach host
+   * validation. Missing Agent fields are schema errors, never capture timeouts.
    */
   completedContract(): string | undefined {
     const sources = [...(this.profile
@@ -168,12 +167,33 @@ export class TapStreamAdapter {
       const value = source.text.trim();
       try {
         const parsed = parseContractJson(value);
-        if (parsed.repaired || !validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+        if (parsed.repaired || parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) continue;
         const identity = JSON.stringify(parsed.value);
         valid.set(identity, value);
       } catch { /* Incomplete frame or marker in a literal is not completion. */ }
     }
     return valid.size === 1 ? [...valid.values()][0] : undefined;
+  }
+
+  /** Bounded failure evidence; response bytes are opt-in under full-content logging. */
+  captureDiagnostics(includeText = false) {
+    const sources = [
+      ...(this.profile ? [{ path: 'learned', text: this.learnedText, score: 125,
+        samples: this.learnedSamples, invalid: this.learnedInvalid }] : [...this.candidates.values()]),
+      ...[...this.patches.entries()].map(([path, state]) => ({ ...state, path }))
+    ];
+    return {
+      framing: this.matched?.framing, parsed_events: this.parsedEvents,
+      buffered_chars: this.frameBuffer.length, raw_chars: this.rawText.length,
+      patch_role: this.patchRole, candidate_count: sources.length,
+      candidates: sources.sort((a, b) => b.score - a.score || b.samples - a.samples)
+        .slice(0, 4).map(source => ({
+          path: source.path.slice(0, 256), score: source.score, samples: source.samples,
+          invalid: Boolean(source.invalid), chars: source.text.length,
+          ...(includeText ? { text: source.text.slice(0, 8192) } : {})
+        })),
+      ...(includeText ? { raw_tail: this.rawText.slice(-8192) } : {})
+    };
   }
 
   accumulatedText(): string {

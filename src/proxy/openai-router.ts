@@ -132,6 +132,7 @@ export function buildAgentContractRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'REPAIR_INSTRUCTION: Correct only the reported JSON contract violation. Return one JSON action object; no extra prose.',
       'Use the candidate as the source of intended action. Preserve it when valid; change only fields implicated by the validation error.',
+      'If the candidate is a complete JSON result with none of the Agent envelope fields, wrap that exact object in final_response.content; tool, tool_input and loop must be null. Do not create a tool action from bare result data.',
       'Do not restart, re-plan, summarize, or answer the original task inside the repair response.',
       '[END KITT CONTRACT REPAIR]'
     ].join('\n')

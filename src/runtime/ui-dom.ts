@@ -1,6 +1,4 @@
 import type { Frame, Locator, Page } from 'playwright';
-import { AGENT_RESPONSE_SCHEMA } from '../contracts/agent-contract.js';
-import { validateJsonSchema } from '../util/json-schema.js';
 import { parseContractJson } from '../util/contract-json.js';
 
 export interface UiTextSnapshot {
@@ -324,7 +322,7 @@ export interface AssistantContractProbe {
 /** Locate complete top-level JSON objects without interpreting their contents.
  * Braces inside strings are data. An unfinished newer object invalidates an
  * older candidate in the same region, so a restarted response cannot win early.
- * Selection and host authorization are separate checks.
+ * Selection, response schema validation and host authorization are separate checks.
  */
 export function jsonCandidatesFromRenderedText(rendered: string): string[] {
   const text = rendered.replace(/\r\n?/g, '\n').trim();
@@ -361,17 +359,19 @@ export function jsonCandidatesFromRenderedText(rendered: string): string[] {
 export function selectCompletedAssistantContract(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
-  const previous = baseline.map(item => item.text.trim());
+  const previous = baseline.map(item => sameVisibleWords(item.text));
+  const promptWords = sameVisibleWords(sentPrompt);
   const valid = new Map<string, string>();
   for (const value of new Set(samples)) {
     const fresh = afterSubmittedPrompt(value, sentPrompt, baseline);
     for (const text of jsonCandidatesFromRenderedText(fresh ?? value)) {
-      if (fresh === undefined && (previous.some(old => old.includes(text)) || (sentPrompt && sentPrompt.includes(text)))) continue;
+      if (fresh === undefined && (previous.some(old => old.includes(sameVisibleWords(text)))
+          || (promptWords && promptWords.includes(sameVisibleWords(text))))) continue;
       try {
         const parsed = parseContractJson(text);
-        if (parsed.repaired || !validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+        if (parsed.repaired || parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) continue;
         valid.set(JSON.stringify(parsed.value), text);
-      } catch { /* Invalid JSON reaches host repair; it never grants authority. */ }
+      } catch { /* Schema validation belongs to the host, after capture. */ }
     }
   }
   return valid.size === 1 ? [...valid.values()][0] : undefined;
@@ -457,7 +457,7 @@ export function selectFreshRenderedFrameForRepair(
           || sentPrompt.includes(candidate) || previous.some(text => text.includes(candidate))) continue;
       try {
         const parsed = parseContractJson(candidate);
-        if (!parsed.repaired && validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+        if (!parsed.repaired && parsed.value !== null && typeof parsed.value === 'object' && !Array.isArray(parsed.value)) continue;
       } catch { /* The host owns bounded JSON repair. */ }
       found.add(candidate);
     }

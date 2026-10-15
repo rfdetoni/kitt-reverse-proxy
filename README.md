@@ -1,3 +1,7 @@
+# Reverse Proxy 5.4.1 — complete JSON capture and faithful repair
+
+Complete JSON results now reach host validation even when the model omits the Agent envelope. Bounded repair can wrap the exact result in `final_response.content`; it cannot change the result or create a tool call. Capture keeps prompt/history exclusion, ambiguity rejection, cancellation and intervention checks. [Release details](docs/RELEASE_5.4.1.md).
+
 # Reverse Proxy 5.4.0 — JSON model wire format
 
 Agent contract v5 accepts one JSON response object, validates the shared response schema and current host tool schema, then maps it to OpenAI-compatible results/tool calls. KAP grammar copies, negotiation, operation aliases, markers and grammar-specific repair paths are removed from the application.
