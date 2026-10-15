@@ -1,3 +1,7 @@
+## Reverse Proxy 5.3.14 — authoritative KAP/2 corpus validation
+
+In addition to CI's byte-for-byte mirror check of the Protocol TypeScript SDK parser, the proxy now executes every checked-out canonical KAP/2 valid and invalid golden case, checking decoded values and error codes. This prevents a mirror, packaging or parser-wrapper regression from silently diverging from Protocol 0.13.3. [Release notes](docs/RELEASE_5.3.14.md).
+
 ## Reverse Proxy 5.3.13 — reusable DOM mutation observer
 
 UI response monitoring now reuses one mutation observer per active page instead of repeatedly allocating/disconnecting it on each polling iteration. The observer is disconnected after two idle seconds, and the existing watchdog, freshness, DOM trust, complete-frame and cancellation contracts are preserved. [Release notes](docs/RELEASE_5.3.13.md).

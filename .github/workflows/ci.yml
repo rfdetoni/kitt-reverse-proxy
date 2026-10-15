@@ -46,6 +46,8 @@ jobs:
         run: npm test
       - name: Build production package
         run: npm run build
+      - name: Validate authoritative KAP/2 golden corpus against proxy parser
+        run: node scripts/verify-kap2-corpus.mjs protocol-source/fixtures/kap2
       - name: Install Chromium for the real CDP boundary
         run: npx playwright install --with-deps chromium
       - name: Verify CDP source integrity in real Chromium
