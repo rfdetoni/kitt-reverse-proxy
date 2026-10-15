@@ -226,16 +226,30 @@ export async function armFreshContractDomObserver(page: Page): Promise<void> {
           let element: Element | null = initial;
           for (let depth = 0; element && depth < 7; depth++, element = element.parentElement) {
             if (element === document.body || element === document.documentElement) break;
-            const text = element.textContent?.trim() ?? '';
-            if (text.length > 65_536) break; // Ancestors only grow.
+            const sourceText = element.textContent?.trim() ?? '';
+            if (sourceText.length > 65_536) break; // Ancestors only grow.
+            // Avoid layout reads for unrelated page/composer mutations.
+            if (!/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(sourceText)
+                || !sourceText.includes('K2/END')) continue;
+            // innerText preserves rendered <br>/paragraph boundaries;
+            // textContent preserves source indentation in Markdown/code.
+            const texts = [...new Set([
+              (element as HTMLElement).innerText?.trim() ?? '',
+              sourceText
+            ])];
             // Tool requests (K2 T) are as important as finals (K2 F).
             // Capture only candidate bytes; host validation still controls authority.
-            if (!/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(text) || !text.includes('K2/END')) continue;
-            if (!samples.includes(text)) {
-              samples.push(text);
-              if (samples.length > 24) samples.shift();
+            let captured = false;
+            for (const text of texts) {
+              if (text.length > 65_536 || !/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(text)
+                  || !text.includes('K2/END')) continue;
+              captured = true;
+              if (!samples.includes(text)) {
+                samples.push(text);
+                if (samples.length > 24) samples.shift();
+              }
             }
-            break;
+            if (captured) break;
           }
         };
         const observer = new MutationObserver((mutations) => {
@@ -430,10 +444,15 @@ export function selectCompletedAssistantContract(
   const valid = new Map<string, string>();
   // Nested DOM snapshots can contain the same reply multiple times.
   for (const value of new Set(samples)) {
-    const candidates = new Set([...kapCandidatesFromRenderedText(value), ...compactFinalCandidates(value)]);
+    // The current reply may repeat a tool example verbatim. When the
+    // submitted prompt is present, only its following region is a reply;
+    // content equality with examples/prior actions is not replay evidence.
+    const fresh = afterSubmittedPrompt(value, sentPrompt, baseline);
+    const region = fresh ?? value;
+    const candidates = new Set([...kapCandidatesFromRenderedText(region), ...compactFinalCandidates(region)]);
     for (const text of candidates) {
-      if (previous.has(text) || previousVisible.some(old => old.includes(text))
-          || (sentPrompt && sentPrompt.includes(text))) continue;
+      if (fresh === undefined && (previous.has(text) || previousVisible.some(old => old.includes(text))
+          || (sentPrompt && sentPrompt.includes(text)))) continue;
       const compact = strictCompactFinal(text);
       if (compact) {
         // Syntax-only recognition. The host validates the canonical KAP/2
@@ -464,16 +483,20 @@ export function selectCompletedAssistantContract(
  * Locate text after the just-submitted prompt even if the web app
  * virtualized the old conversation. This proves turn freshness, not validity.
  */
-function afterSubmittedPrompt(current: string, sentPrompt: string): string | undefined {
+function afterSubmittedPrompt(
+  current: string, sentPrompt: string, baseline: readonly UiTextSnapshot[] = []
+): string | undefined {
   const words = sentPrompt.trim().split(/\s+/).slice(-24);
   if (words.length < 8 || words.join(' ').length < 96) return undefined;
   const escape = (word: string): string => word.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
   const pattern = new RegExp(words.map(escape).join('\\s+'), 'g');
-  let end = -1;
-  for (const match of current.matchAll(pattern)) {
-    end = (match.index ?? -1) + match[0].length;
-  }
-  return end < 0 ? undefined : current.slice(end).trim();
+  const matches = [...current.matchAll(pattern)];
+  const previousCount = Math.max(0, ...baseline.map(item => [...item.text.matchAll(pattern)].length));
+  // Only one newly rendered prompt establishes the current-turn boundary.
+  // A prior occurrence plus a sidebar mutation must never replay an action.
+  if (matches.length !== previousCount + 1) return undefined;
+  const last = matches.at(-1)!;
+  return current.slice(last.index! + last[0].length).trim();
 }
 
 /**
@@ -517,7 +540,7 @@ export function selectFreshRenderedFrameForRepair(
   for (const value of samples) {
     const current = value.replace(/\r\n?/g, '\n').trim();
     const regions: string[] = [];
-    const fromPrompt = afterSubmittedPrompt(current, sentPrompt);
+    const fromPrompt = afterSubmittedPrompt(current, sentPrompt, baseline);
     if (fromPrompt) regions.push(fromPrompt);
 
     for (const old of before) {
@@ -538,8 +561,12 @@ export function selectFreshRenderedFrameForRepair(
     }
 
     for (const fresh of regions) {
+      const promptAnchored = fromPrompt === fresh;
       if (!fresh || sentPrompt.includes(fresh)) continue;
-      const framed = [...new Set([...kapCandidatesFromRenderedText(fresh), ...compactFinalCandidates(fresh)])];
+      const singleFrame = (fresh.match(/\bK2 [TFWQ](?=\s)/g) ?? []).length === 1
+        && (fresh.match(/K2\/END/g) ?? []).length === 1;
+      const framed = [...new Set([...kapCandidatesFromRenderedText(fresh), ...compactFinalCandidates(fresh),
+        ...(promptAnchored && singleFrame ? collapsedKapCandidates(fresh) : [])])];
       // WebChat can collapse Markdown soft line breaks into a single line.
       // Such a frame is NOT valid KAP; it may only go to host repair, and
       // only if it follows the uniquely identified submitted prompt.

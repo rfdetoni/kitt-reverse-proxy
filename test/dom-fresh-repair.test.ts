@@ -66,3 +66,13 @@ test('invalid tagged compact response reaches host repair, excluding prompt exam
   assert.equal(selectFreshRenderedFrameForRepair(['Page\n' + prompt + '\n' + invalid],before,prompt),invalid);
   assert.equal(selectFreshRenderedFrameForRepair([invalid],[],invalid),undefined);
 });
+
+test('fresh flattened tool example with UI chrome reaches repair only after a new prompt', () => {
+  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+  const prompt = 'Inspect the workspace. Example:\n' + tool + '\n' +
+    'Use only operations actually listed in the current tool catalog and return one complete action for the host to execute and verify.';
+  const flat = tool.replace(/\s+/g,' ');
+  const before = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old answer'}];
+  assert.equal(selectFreshRenderedFrameForRepair(['Page\n' + prompt],before,prompt),undefined);
+  assert.equal(selectFreshRenderedFrameForRepair(['Page\n' + prompt + '\nChatGPT said:\n' + flat + '\nCopy'],before,prompt),flat);
+});

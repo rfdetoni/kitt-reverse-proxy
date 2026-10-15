@@ -37,3 +37,16 @@ This does not change KAP/2 syntax or authorize anything from page text.
 Regression coverage exercises fresh `K2 T` with absent role nodes, a long prompt
 containing a tool example, and duplicate/prior-frame rejection.
 An authenticated browser E2E remains required to confirm the provider DOM.
+
+## 5.3.16: response origin before content equality
+
+A new submitted-prompt boundary in the visible transcript can establish that a
+strict KAP reply is new even when its bytes repeat an example or prior action.
+The occurrence count must increase by exactly one relative to the pre-submit
+baseline; changing sidebar chrome alone is insufficient. Roleless samples
+without this evidence still use the existing prompt/baseline exclusions.
+
+Mutation capture retains both innerText (rendered line boundaries) and
+textContent (source indentation). A unique fresh flattened frame with UI chrome
+can reach host repair, while duplicate malformed and competing frames stay
+blocked. This is capture recovery, not an automatic provider replay.

@@ -427,3 +427,56 @@ test('real Chromium recovers only the fresh KAP/2 answer from DOM mutations with
     assert.equal(afterStop.text,undefined);
   } finally { await browser.close(); }
 });
+
+test('real Chromium returns a fresh tool action identical to the prompt example', {timeout: 20_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.setContent('<main><div>Earlier context</div></main>');
+    const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+    const prompt = 'Inspect the workspace. Example:\n' + tool + '\n' +
+      'Use only operations actually listed in the current tool catalog and return one complete action for the host to execute and verify.';
+    const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:await visibleContractBaseline(page)}];
+    await armFreshContractDomObserver(page);
+    await page.evaluate(prompt => {
+      const user = document.createElement('div');
+      user.setAttribute('data-message-author-role','user');
+      user.style.whiteSpace = 'pre-wrap';
+      user.textContent = prompt;
+      document.querySelector('main').append(user);
+    },prompt);
+    assert.equal((await inspectCompletedAssistantContract(page,baseline,prompt)).text,undefined);
+    await page.evaluate(tool => {
+      const reply = document.createElement('div');
+      reply.style.whiteSpace = 'pre-wrap';
+      reply.textContent = tool;
+      document.querySelector('main').append(reply);
+    },tool);
+    const result = await awaitUiResponse({page,context},detectProvider('https://chatgpt.com/'),
+      {headed:false,uiResponseTimeoutMs:5000,uiSettleMs:50},baseline,prompt,undefined,undefined,undefined,true);
+    assert.equal(result.text,tool);
+    await stopFreshContractDomObserver(page);
+  } finally { await browser.close(); }
+});
+
+test('real Chromium mutation capture preserves rendered br boundaries outside the page tail', {timeout: 20_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<main>Earlier context</main>');
+    const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:await visibleContractBaseline(page)}];
+    await armFreshContractDomObserver(page);
+    await page.evaluate(() => {
+      const reply = document.createElement('div');
+      reply.innerHTML = 'K2 T repo.list<br>path: .<br>K2/END';
+      document.querySelector('main').append(reply);
+      const filler = document.createElement('div');
+      filler.textContent = 'z'.repeat(140000);
+      document.querySelector('main').append(filler);
+    });
+    const result = await inspectCompletedAssistantContract(page,baseline,'Inspect repository');
+    assert.equal(result.text,'K2 T repo.list\npath: .\nK2/END');
+    await stopFreshContractDomObserver(page);
+  } finally { await browser.close(); }
+});

@@ -153,3 +153,19 @@ test('K2 tool candidates reject echoed, prior and competing tool actions', () =>
   assert.equal(selectCompletedAssistantContract([a,b],[]),undefined);
   assert.equal(selectCompletedAssistantContract([a],[],'Inspect README'),a);
 });
+
+test('a new reply after the submitted prompt may repeat its tool example or prior action', () => {
+  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+  const prompt = 'Inspect the current workspace. Example:\n' + tool + '\n' +
+    'Use only operations actually listed in the current tool catalog and return one complete action for the host to execute and verify.';
+  const previous = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old answer\n' + tool}];
+  assert.equal(selectCompletedAssistantContract(['Page\n' + prompt],previous,prompt),undefined);
+  assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + tool],previous,prompt),tool);
+  assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + tool + '\n' +
+    tool.replace('path: .','path: src')],previous,prompt),undefined);
+  const oldPage = 'Old page\n' + prompt + '\n' + tool;
+  const oldBaseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:oldPage}];
+  assert.equal(selectCompletedAssistantContract([oldPage + '\nSidebar changed'],oldBaseline,prompt),undefined);
+  assert.equal(selectCompletedAssistantContract([oldPage + '\n' + prompt + '\n' + tool],oldBaseline,prompt),tool);
+  assert.equal(selectCompletedAssistantContract([prompt + '\n' + prompt + '\n' + tool],[],prompt),undefined);
+});

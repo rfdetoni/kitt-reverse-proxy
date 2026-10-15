@@ -1,3 +1,7 @@
+## Reverse Proxy 5.3.16 — current-turn DOM capture
+
+Fresh KAP actions can repeat a prompt example or a previous action when the visible transcript proves a new submitted prompt. Mutation capture retains rendered line breaks alongside source indentation. Echoes, old transcript mutations and competing frames still fail closed. See [release 5.3.16](docs/RELEASE_5.3.16.md).
+
 ## Reverse Proxy 5.3.15 — WebChat KAP/2 tool-action capture
 
 The pre-submit mutation observer now accepts fresh KAP/2 tool (`K2 T`), final (`K2 F`), workspace (`K2 W`) and catalog (`K2 Q`) envelopes, instead of watching only finals. This fixes the observed handoff where plans were captured but the first operational tool action timed out under ChatGPT Web markup without assistant-role nodes. Baseline/prompt echo checks and host validation remain mandatory; the DOM never authorizes tool execution. See [capture limitations](docs/KAP2_DOM_CAPTURE_LIMITS.md) and [release 5.3.15](docs/RELEASE_5.3.15.md).
