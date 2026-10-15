@@ -23,3 +23,17 @@ repair; the proxy does not guess nesting or line breaks.
 The timeout/delivery budget and size caps are independent from AST / schema
 limits in `kitt-protocol`; raising timeouts is not a substitute for capture
 fidelity.
+
+## 5.3.15: operational KAP/2 actions
+
+The previous DOM mutation observer only stored newly rendered text containing
+`K2 F` and `K2/END`. A tool action (`K2 T`) could be missed when ChatGPT Web
+did not expose recognizable assistant-role or conversation-turn selectors.
+The observer now records bounded candidate envelopes starting with any
+`K2 T/F/W/Q`. The existing strict parser and pre-submit baseline/prompt echo
+exclusion still decide whether the response belongs to the current turn.
+This does not change KAP/2 syntax or authorize anything from page text.
+
+Regression coverage exercises fresh `K2 T` with absent role nodes, a long prompt
+containing a tool example, and duplicate/prior-frame rejection.
+An authenticated browser E2E remains required to confirm the provider DOM.

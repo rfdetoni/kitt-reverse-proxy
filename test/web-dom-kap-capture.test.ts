@@ -114,3 +114,40 @@ test('Markdown-escaped underscore/star in compact final is normalized only after
   assert.equal(selectCompletedAssistantContract([raw.replace(slash+'_',slash+'q')],[],'new request'),undefined);
   assert.equal(selectCompletedAssistantContract(['K2 F @json: {"x":1,"x":2} K2/END'],[],'new request'),undefined);
 });
+
+
+test('fresh K2 tool response survives missing assistant roles and long prompt examples', async () => {
+  const tool = 'K2 T kitt_runtime\noperation: repo.read\narguments:\n  path: README.md\nK2/END';
+  const prompt = 'Read the repository, reply with only one tool action. Example:\n' + tool;
+  const previous: UiTextSnapshot[] = [
+    {selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old assistant turn'}
+  ];
+  const page = {frames: () => [{
+    isDetached: () => false,
+    evaluate: async (_fn: unknown) => (
+      // First evaluate() reads assistant selectors; second reads the
+      // mutation observer captured before the prompt was submitted.
+      ++reads % 2 === 1
+        ? {count:0,structural:0,samples:['Old assistant turn',prompt]}
+        : [tool]
+    )
+  }]} as unknown as Page;
+  let reads = 0;
+  const observed = await inspectCompletedAssistantContract(page,previous,prompt);
+  assert.equal(observed.text, undefined, 'an echoed tool example cannot become a fresh action');
+
+  reads = 0;
+  const separatePrompt = 'Inspect the current workspace without editing files.';
+  const fresh = await inspectCompletedAssistantContract(page,previous,separatePrompt);
+  assert.equal(fresh.text, tool);
+  assert.equal(fresh.mutationSamples,1);
+});
+
+test('K2 tool candidates reject echoed, prior and competing tool actions', () => {
+  const a = 'K2 T kitt_runtime\noperation: repo.read\narguments:\n  path: README.md\nK2/END';
+  const b = a.replace('README.md','LICENSE');
+  assert.equal(selectCompletedAssistantContract([a],[],a),undefined);
+  assert.equal(selectCompletedAssistantContract([a],[{selector:'[prior-assistant-contract]',frameIndex:-1,count:1,text:a}]),undefined);
+  assert.equal(selectCompletedAssistantContract([a,b],[]),undefined);
+  assert.equal(selectCompletedAssistantContract([a],[],'Inspect README'),a);
+});

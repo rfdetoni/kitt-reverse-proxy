@@ -204,7 +204,7 @@ export async function readVisibleSnapshotSlot(
 /**
  * Capture DOM text that actually changed after pre-submit baseline collection.
  * Some WebChat builds have no recognizable assistant nodes; a page-wide text
- * scan then finds only the compact KAP example inside the long user prompt.
+ * scan then finds only KAP examples inside the long user prompt.
  * These snapshots remain UNTRUSTED until prompt/baseline exclusion and KAP
  * validation. No network hook, host privilege or arbitrary page evaluation.
  */
@@ -228,7 +228,9 @@ export async function armFreshContractDomObserver(page: Page): Promise<void> {
             if (element === document.body || element === document.documentElement) break;
             const text = element.textContent?.trim() ?? '';
             if (text.length > 65_536) break; // Ancestors only grow.
-            if (!text.includes('K2 F') || !text.includes('K2/END')) continue;
+            // Tool requests (K2 T) are as important as finals (K2 F).
+            // Capture only candidate bytes; host validation still controls authority.
+            if (!/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(text) || !text.includes('K2/END')) continue;
             if (!samples.includes(text)) {
               samples.push(text);
               if (samples.length > 24) samples.shift();
