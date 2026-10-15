@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { Frame, Locator, Page } from 'playwright';
 import { parseContractJson } from '../util/contract-json.js';
 
@@ -356,20 +357,34 @@ export function jsonCandidatesFromRenderedText(rendered: string): string[] {
   return start < 0 ? candidates : [];
 }
 
+/** Rendering may delete line breaks or reflow JSON token whitespace. Compare
+ * parsed examples without changing string data or the captured response bytes. */
+function renderedJsonValues(samples: readonly string[]): unknown[] {
+  const values: unknown[] = [];
+  for (const text of new Set(samples.flatMap(jsonCandidatesFromRenderedText))) {
+    try {
+      const parsed = parseContractJson(text);
+      if (!parsed.repaired) values.push(parsed.value);
+    } catch { /* Malformed examples provide no semantic identity. */ }
+  }
+  return values;
+}
+
 export function selectCompletedAssistantContract(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
-  const previous = baseline.map(item => sameVisibleWords(item.text));
-  const promptWords = sameVisibleWords(sentPrompt);
+  const previous = baseline.map(item => item.text.trim());
+  const knownValues = renderedJsonValues([sentPrompt, ...baseline.map(item => item.text)]);
   const valid = new Map<string, string>();
   for (const value of new Set(samples)) {
     const fresh = afterSubmittedPrompt(value, sentPrompt, baseline);
     for (const text of jsonCandidatesFromRenderedText(fresh ?? value)) {
-      if (fresh === undefined && (previous.some(old => old.includes(sameVisibleWords(text)))
-          || (promptWords && promptWords.includes(sameVisibleWords(text))))) continue;
+      if (fresh === undefined && (previous.some(old => old.includes(text))
+          || (sentPrompt && sentPrompt.includes(text)))) continue;
       try {
         const parsed = parseContractJson(text);
         if (parsed.repaired || parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) continue;
+        if (fresh === undefined && knownValues.some(value => isDeepStrictEqual(value, parsed.value))) continue;
         valid.set(JSON.stringify(parsed.value), text);
       } catch { /* Schema validation belongs to the host, after capture. */ }
     }
@@ -404,10 +419,6 @@ function afterSubmittedPrompt(
   if (matches.length !== previousCount + 1) return undefined;
   const last = matches.at(-1)!;
   return current.slice(last.index! + last[0].length).trim();
-}
-
-function sameVisibleWords(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -602,10 +613,13 @@ export async function inspectCompletedAssistantContract(
   const text = selectCompletedAssistantContract(uniqueSamples, baseline, sentPrompt);
   const repairText = text ? undefined : selectFreshRenderedFrameForRepair(uniqueSamples, baseline, sentPrompt);
   const compact = new Set(uniqueSamples.flatMap(jsonCandidatesFromRenderedText));
-  const beforeText = baseline.map(item => sameVisibleWords(item.text));
-  const freshCompactCandidates = [...compact].filter(candidate =>
-    !sameVisibleWords(sentPrompt).includes(sameVisibleWords(candidate))
-    && beforeText.every(prior => !prior.includes(sameVisibleWords(candidate)))).length;
+  const knownValues = renderedJsonValues([sentPrompt, ...baseline.map(item => item.text)]);
+  const freshCompactCandidates = [...compact].filter(candidate => {
+    try {
+      const parsed = parseContractJson(candidate);
+      return !parsed.repaired && !knownValues.some(value => isDeepStrictEqual(value, parsed.value));
+    } catch { return false; }
+  }).length;
   const oldVisible = baseline.find(item => item.selector === '[pre-submit-visible-text]')?.text ?? '';
   let freshVisibleChars = 0;
   if (oldVisible) {

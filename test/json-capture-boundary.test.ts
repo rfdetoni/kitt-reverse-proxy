@@ -49,3 +49,19 @@ test('syntax-only capture still rejects prompt echoes, prior JSON and competing 
     assert.equal(selectCompletedAssistantContract([invalid], []), undefined);
   }
 });
+
+
+test('rendered JSON prompt examples remain excluded when formatting changes token spacing', () => {
+  const example = {api_id:'identifier_from_database',target_runtime:'wine',status:'UNTESTED',
+    reason:'No verified differential probe for this scope',source_snapshot_ids:['actual-snapshot-id'],
+    prerequisites:['Windows oracle runner available'],suggested_probe_ids:[],evidence_ids:[],blockers:[]};
+  const pretty = JSON.stringify(example,null,2);
+  const rendered = pretty.replaceAll('\n','');
+  const prompt = 'Use this report shape as an example, never as actual evidence:\n'+pretty;
+  assert.equal(selectCompletedAssistantContract([rendered],[],prompt),undefined);
+  assert.equal(selectCompletedAssistantContract([rendered],
+    [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:pretty}],'new task'),undefined);
+  const distinct = JSON.stringify({...example,reason:'No verified  differential probe for this scope'});
+  assert.equal(selectCompletedAssistantContract([distinct],[],prompt),distinct,
+    'spaces inside string values are data and must not be normalized');
+});

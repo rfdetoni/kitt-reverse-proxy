@@ -266,10 +266,9 @@ export async function awaitUiResponse(
       }
     }
 
-    // Independent DOM observer. A complete fresh JSON frame is stronger
-    // completion evidence than spinner/Stop-button state, which may be stale.
-    // Probe the current assistant-owned turn even when the CDP tap is absent
-    // or still receiving, and require a stable observation before returning.
+    // A balanced JSON object can be an intermediate block in a longer answer.
+    // The DOM observer requires a stable fresh frame AND an idle generation;
+    // independent correlated CDP completion is handled by the hybrid reader.
     if (preferRawContract && (provider.id === 'chatgpt' || provider.id === 'gemini')
         && Date.now() >= nextContractScanAt) {
       nextContractScanAt = Date.now() + 500;
@@ -281,7 +280,9 @@ export async function awaitUiResponse(
         completedAssistantCandidate = found;
         completedAssistantSince = Date.now();
       }
-      if (found && Date.now() - completedAssistantSince >= Math.max(750, config.uiSettleMs)) {
+      if (found && !streaming
+          && Date.now() - completedAssistantSince >= Math.max(750, config.uiSettleMs)
+          && !await anyVisible(session.page, streamingSelectors)) {
         logger.debug('ui.response.dom_contract_complete', { provider_id: provider.id,
           response_chars: found.length, streaming });
         return { text: found, deltas: [], firstDeltaMs: firstDeltaMs ?? Date.now() - startedAt,

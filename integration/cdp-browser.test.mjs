@@ -562,3 +562,104 @@ test('real Chromium mutation capture preserves rendered br boundaries outside th
     await stopFreshContractDomObserver(page);
   } finally { await browser.close(); }
 });
+
+
+test('real Chromium excludes reformatted prompt JSON and waits for the full assistant generation', {timeout:20_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.setContent('<main>Earlier context</main><button aria-label="Stop generating" hidden>Stop</button>');
+    const example = {api_id:'identifier_from_database',status:'UNTESTED',evidence_ids:[]};
+    const pretty = JSON.stringify(example,null,2);
+    const prefix = 'Inspect the workspace and return the actual result. Report example:\n';
+    const suffix = '\nUse real observations from the current workspace and return only the requested structured plan after inspecting the actual files and tool results.';
+    const prompt = prefix+pretty+suffix;
+    const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:await visibleContractBaseline(page)}];
+    await page.evaluate(({prefix,pretty,suffix}) => {
+      const user = document.createElement('div');
+      user.textContent = prefix;
+      const code = document.createElement('pre');
+      code.textContent = pretty.replaceAll('\n','');
+      user.append(code,suffix);
+      document.querySelector('main').append(user);
+    },{prefix,pretty,suffix});
+    assert.equal((await inspectCompletedAssistantContract(page,baseline,prompt)).text,undefined,
+      'an unmarked, reformatted user example must not become the reply');
+    const expected = JSON.stringify({action:'final_response',tool:null,tool_input:null,
+      content:{items:[{local_id:'T01',title:'Inspect real files'}]},reasoning_summary:'',loop:null});
+    await page.evaluate(expected => {
+      const reply = document.createElement('div');
+      reply.dataset.messageAuthorRole = 'assistant';
+      reply.textContent = JSON.stringify({progress:'intermediate JSON, more output follows'});
+      document.querySelector('main').append(reply);
+      document.querySelector('button').hidden = false;
+      setTimeout(() => {reply.textContent = expected;},2200);
+      setTimeout(() => {document.querySelector('button').hidden = true;},3000);
+    },expected);
+    const result = await awaitUiResponse({page,context},detectProvider('https://chatgpt.com/'),
+      {headed:false,uiResponseTimeoutMs:5000,uiSettleMs:50},baseline,prompt,undefined,undefined,undefined,true);
+    assert.equal(result.text,expected);
+    assert.ok(result.durationMs>=3000,'a balanced object cannot end an active generation');
+  } finally {await browser.close();}
+});
+
+test('real Chromium waits for the preceding generation before sending a repair and honors abort', {timeout:15_000}, async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.setContent('<div contenteditable="true" role="textbox">Existing draft</div>'+
+      '<button aria-label="Stop generating" id="stop">Stop</button><button aria-label="Send message" id="send">Send</button>');
+    await page.evaluate(() => {
+      window.clicks = 0;
+      document.querySelector('#send').onclick = () => {
+        window.sent = document.querySelector('[role="textbox"]').innerText;
+        window.clickedWhileBusy = !document.querySelector('#stop').hidden;
+        window.clicks++;
+        document.querySelector('[role="textbox"]').textContent = '';
+      };
+    });
+    const session = {page,context};
+    const provider = detectProvider('https://chatgpt.com/');
+    const config = {targetUrl:'https://chatgpt.com/',readMode:'dom',toolEnforcement:'off',
+      headed:false,manualInterventionTimeoutMs:1000,uiResponseTimeoutMs:5000,uiSettleMs:50};
+    const cancel = new AbortController();
+    const aborted = assert.rejects(sendUiPrompt(session,provider,config,'Aborted repair',cancel.signal),/abort/i);
+    setTimeout(() => cancel.abort(),150);
+    await aborted;
+    assert.equal(await page.locator('[role="textbox"]').innerText(),'Existing draft');
+    assert.equal(await page.evaluate(() => window.clicks),0);
+    const old = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'Previous answer',reasoning_summary:'',loop:null});
+    const expected = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'Current repaired answer',reasoning_summary:'',loop:null});
+    const ui = new UiChatExecutor(session,provider,config);
+    await ui.initialize();
+    await page.evaluate(({old,expected}) => {
+      const previous = document.createElement('div');
+      previous.dataset.messageAuthorRole = 'assistant';
+      previous.textContent = 'Previous incomplete answer';
+      document.body.append(previous);
+      const send = document.querySelector('#send').onclick;
+      document.querySelector('#send').onclick = event => {
+        send(event);
+        setTimeout(() => {
+          const reply = document.createElement('div');
+          reply.dataset.messageAuthorRole = 'assistant';
+          reply.textContent = expected;
+          document.body.append(reply);
+        },2200);
+      };
+      setTimeout(() => {
+        previous.textContent = old;
+        window.draftWhileBusy = document.querySelector('[role="textbox"]').innerText;
+        document.querySelector('#stop').hidden = true;
+      },400);
+    },{old,expected});
+    const result = await ui.execute({messages:[{role:'user',content:'Repair the exact JSON result'}]},{preferRawContract:true});
+    assert.equal(result.completion.choices[0].message.content,expected,'baseline must be taken after the previous generation completes');
+    assert.equal(await page.evaluate(() => window.draftWhileBusy),'Existing draft');
+    assert.equal(await page.evaluate(() => window.clickedWhileBusy),false);
+    assert.ok((await page.evaluate(() => window.sent)).includes('Repair the exact JSON result'));
+    assert.equal(await page.evaluate(() => window.clicks),1);
+  } finally {await browser.close();}
+});

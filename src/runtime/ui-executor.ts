@@ -72,7 +72,7 @@ import {
   type ToolEnforcementPlan
 } from './tool-enforcement.js';
 import { throwIfAborted } from './cancellation.js';
-import { sendUiPrompt, waitForUiReady } from './ui-interaction.js';
+import { sendUiPrompt, waitForUiReady, waitForUiIdle } from './ui-interaction.js';
 import {
   HybridUiResponseReader,
   type HybridUiResponseResult
@@ -159,7 +159,8 @@ export class UiChatExecutor implements ChatExecutor {
     await this.responseReader.initialize();
   }
 
-  private async captureResponseBaseline(): Promise<UiTextSnapshot[]> {
+  private async captureResponseBaseline(signal?: AbortSignal): Promise<UiTextSnapshot[]> {
+    await waitForUiIdle(this.session, this.provider, this.config, signal);
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
     if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
       // Snapshot before *every* send, including repair attempts. The prior
@@ -459,7 +460,7 @@ export class UiChatExecutor implements ChatExecutor {
       const initialArtifacts = await extractArtifactContents(this.session.page).catch(() => []);
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
-    const baseline = await this.captureResponseBaseline();
+    const baseline = await this.captureResponseBaseline(options?.signal);
     const promptSendStartedAt = Date.now();
     options?.lifecycle?.beforeSubmit(prompt);
     await this.sendPrompt(prompt, options?.signal);
@@ -534,7 +535,7 @@ export class UiChatExecutor implements ChatExecutor {
           ? `${buildToolEnforcementRetryPrompt(enforcement, error)}\n${buildToolRetryPrompt(plan, error.message)}`
           : buildToolRetryPrompt(plan, error instanceof Error ? error.message : String(error));
         const retryPrompt = buildUiRepairEvidence(repairInstruction, body, textToParse);
-        const retryBaseline = await this.captureResponseBaseline();
+        const retryBaseline = await this.captureResponseBaseline(options?.signal);
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         const previousCandidate = textToParse;
@@ -556,7 +557,7 @@ export class UiChatExecutor implements ChatExecutor {
       let checked = validateStructuredOutput(textToParse, structured);
       if (!checked.ok) {
         const retryPrompt = buildUiRepairEvidence(buildStructuredRetryPrompt(structured, checked.error), body, textToParse);
-        const retryBaseline = await this.captureResponseBaseline();
+        const retryBaseline = await this.captureResponseBaseline(options?.signal);
         options?.lifecycle?.beforeSubmit(retryPrompt);
         await this.sendPrompt(retryPrompt, options?.signal);
         const retryResult = await this.awaitResponse(retryBaseline, retryPrompt, undefined, options?.signal, true);

@@ -338,6 +338,36 @@ export async function waitForUiReady(
   );
 }
 
+/** Do not edit a draft or snapshot a new turn while an earlier reply is changing. */
+export async function waitForUiIdle(
+  session: LiveBrowserSession,
+  provider: ProviderPreset,
+  config: AppConfig,
+  signal?: AbortSignal
+): Promise<void> {
+  throwIfAborted(signal);
+  const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
+  const idleStartedAt = Date.now();
+  const idleDeadline = idleStartedAt + Math.max(1_000, config.uiResponseTimeoutMs ?? 180_000);
+  let waitingForGeneration = false;
+  while (await anyVisible(session.page, streamingSelectors)) {
+    throwIfAborted(signal);
+    if (Date.now() >= idleDeadline) {
+      throw new UiAutomationError('O chat ainda está gerando uma resposta após o prazo de espera. O novo prompt não foi enviado.');
+    }
+    if (!waitingForGeneration) {
+      logger.debug('ui.prompt.waiting_for_generation', {provider_id: provider.id});
+      waitingForGeneration = true;
+    }
+    await abortableSleep(250, signal);
+    await waitForUiReady(session, provider, config, 'conclusão da geração anterior', signal);
+  }
+  if (waitingForGeneration) logger.debug('ui.prompt.generation_idle', {
+    provider_id: provider.id, wait_ms: Date.now() - idleStartedAt
+  });
+  throwIfAborted(signal);
+}
+
 export async function sendUiPrompt(
   session: LiveBrowserSession,
   provider: ProviderPreset,
@@ -354,6 +384,7 @@ export async function sendUiPrompt(
 
   await waitForUiReady(session, provider, config, 'envio', signal);
   throwIfAborted(signal);
+  await waitForUiIdle(session, provider, config, signal);
   const resolution = await firstEditableLocator(session.page, provider.ui.inputSelectors);
   if (!resolution) throw new UiAutomationError('Campo de entrada editável do chat não foi localizado.');
   const input = resolution.locator;
@@ -367,10 +398,6 @@ export async function sendUiPrompt(
     frame_index: resolution.frameIndex
   });
 
-  const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
-  if (await anyVisible(session.page, streamingSelectors)) {
-    throw new UiAutomationError('O chat ainda está gerando uma resposta. Aguarde a conclusão antes de enviar outro prompt.');
-  }
   const baseline = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
   await writeComposerText(session.page, input, prompt);
 

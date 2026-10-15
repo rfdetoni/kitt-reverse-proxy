@@ -89,7 +89,7 @@ test('UI code artifacts cannot decorate agent or structured contract responses',
     let shown = false;
     const frame = {
       isDetached: () => false,
-      evaluate: async (_fn: unknown, args?: unknown) => args ? [] : shown ? [{code,language:'typescript'}] : []
+      evaluate: async (_fn: unknown, args?: unknown) => Array.isArray(args) ? false : args ? [] : shown ? [{code,language:'typescript'}] : []
     };
     const ui = new UiChatExecutor({page:{frames:() => [frame],evaluate:async () => []},persistent:false} as unknown as LiveBrowserSession, detectProvider('https://gemini.google.com/app'), baseConfig);
     Object.assign(ui, {
