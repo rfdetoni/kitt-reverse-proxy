@@ -15,6 +15,83 @@ import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
 import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
 import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
+test('auto captures one network-only KAP tool action when DOM contains only the prompt', {timeout: 20_000}, async () => {
+  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+  const prompt = 'Inspect the current workspace using the available host tools. Example:\n' + tool;
+  let posts = 0;
+  let receivedPrompt = '';
+  const server = createServer(async (request,response) => {
+    if (request.method === 'GET') {
+      response.writeHead(200,{'content-type':'text/html; charset=utf-8'});
+      response.end(`<!doctype html><main id="thread">Earlier context</main>
+        <div contenteditable="true" role="textbox" style="min-height:30px"></div>
+        <button aria-label="Send message" id="send">Send</button>
+        <button aria-label="Stop generating" id="stop" style="display:none">Stop</button>
+        <script>
+          document.querySelector('#send').onclick = async () => {
+            const editor = document.querySelector('[role="textbox"]');
+            const prompt = editor.innerText;
+            const user = document.createElement('div');
+            user.dataset.messageAuthorRole = 'user';
+            user.style.whiteSpace = 'pre-wrap';
+            user.textContent = prompt;
+            document.querySelector('#thread').append(user);
+            editor.textContent = '';
+            document.querySelector('#stop').style.display = 'block';
+            const response = await fetch('/dynamic-stream', {method:'POST',
+              headers:{'content-type':'application/json'}, body:JSON.stringify({messages:[{role:'user',content:prompt}]})});
+            await response.text();
+            document.querySelector('#stop').style.display = 'none';
+          };
+        </script>`);
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    receivedPrompt = JSON.parse(Buffer.concat(chunks).toString()).messages[0].content;
+    posts++;
+    response.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-store'});
+    response.flushHeaders();
+    await delay(150);
+    const frames = [
+      {p:'',o:'add',v:{message:{author:{role:'user'},content:{parts:[tool]}}}},
+      {p:'',o:'add',v:{message:{author:{role:'assistant'},content:{parts:['']}}}},
+      {p:'/message/content/parts/0',o:'append',v:tool.slice(0,20)},
+      {v:tool.slice(20)},
+      {p:'/message/metadata/state',o:'replace',v:'finished'}
+    ];
+    for (const frame of frames) { response.write('data: '+JSON.stringify(frame)+'\n\n'); await delay(30); }
+    response.end('data: [DONE]\n\n');
+  });
+  server.listen(0,'127.0.0.1');
+  await once(server,'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  let browser;
+  try {
+    browser = await chromium.launch({headless:true});
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(origin);
+    const ui = new UiChatExecutor({page,context,persistent:false},detectProvider('https://chatgpt.com/'),
+      {targetUrl:origin,allowedEndpointHosts:[],readMode:'auto',tapMatchTimeoutMs:2000,tapFirstByteMs:2000,
+        tapStallMs:2000,tapVerifyTurns:3,uiResponseTimeoutMs:1500,uiSettleMs:50,
+        manualInterventionTimeoutMs:2000,headed:false,toolEnforcement:'off'});
+    await ui.initialize();
+    const result = await ui.execute({messages:[{role:'user',content:prompt}]},{preferRawContract:true});
+    assert.equal(result.completion.choices[0].message.content,tool);
+    assert.equal(result.metadata.timing.read_source,'tap');
+    assert.equal(posts,1,'the accepted request must never be replayed');
+    const normalized = text => text.replace(/\s+/g,' ').trim();
+    assert.ok(normalized(receivedPrompt).includes(normalized(prompt)));
+    assert.equal(normalized(await page.locator('main').innerText()),normalized('Earlier context '+receivedPrompt));
+    assert.equal(await page.locator('[data-message-author-role="assistant"]').count(),0);
+  } finally {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('real Chromium hybrid reader preserves contracts and stops failed delivery', {timeout: 30_000}, async () => {
   const expected = JSON.stringify({action: 'final_response', tool: null, tool_input: null, content: '    <div>ação 😀</div>\n\nline\nline  ', reasoning_summary: '', loop: null});
   const receivedPrompts = [];
@@ -331,7 +408,7 @@ test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemin
       assert.equal(received.text,answer);
       assert.equal(received.readDiagnostics.source,'dom');
       assert.equal(received.readDiagnostics.tap_mode,'disabled');
-      assert.equal(cdpSessions,0);
+      assert.equal(cdpSessions,1,'auto attempts CDP, then preserves DOM when attachment fails');
       await context.close();
     }
   } finally {await browser.close();}

@@ -11,8 +11,9 @@ repair; the proxy does not guess nesting or line breaks.
 - Contract frames: at most 64 KiB in the strict parser.
 - DOM snapshots are bounded; long prompts/transcripts can be virtualized or
   truncated by the website independently of KAP grammar.
-- Read mode `auto` uses DOM for ChatGPT/Gemini; network tap is not assumed
-  authoritative.
+- Read mode `auto` arms DOM and passive CDP readers for ChatGPT/Gemini.
+  Network output requires current-request correlation and strict, unique KAP/2
+  validation; arbitrary network events are not authoritative.
 - Echoes of submitted prompts, previous frames, multiple competing replies,
   unterminated replies or oversized candidates cannot be promoted.
 - If a model output loses field boundaries, the only safe recovery is a fresh,
@@ -50,3 +51,12 @@ Mutation capture retains both innerText (rendered line boundaries) and
 textContent (source indentation). A unique fresh flattened frame with UI chrome
 can reach host repair, while duplicate malformed and competing frames stay
 blocked. This is capture recovery, not an automatic provider replay.
+
+## 5.3.17: independent readers in auto mode
+
+Auto mode no longer disables CDP for ChatGPT/Gemini. A DOM-only failure must
+not discard a complete current-request KAP/2 frame from the passive reader.
+Text patches are assembled per declared answer target and operation, including
+continuation events. Patches do not teach a generic `$.v` profile. Explicit user,
+system, developer and tool message branches, metadata and competing frames are
+excluded. `--read-mode dom` still explicitly disables CDP. No request is replayed.

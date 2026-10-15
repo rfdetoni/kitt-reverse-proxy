@@ -17,7 +17,7 @@ const baseline: UiTextSnapshot[] = [
 ];
 
 for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
-  test('auto mode on '+url+' starts no CDP observer and returns DOM KAP', async () => {
+  test('explicit dom mode on '+url+' starts no CDP observer and returns DOM KAP', async () => {
     let attempts = 0;
     const session = {
       page: {frames: () => []},
@@ -26,7 +26,7 @@ for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
         throw new Error('CDP tap should not be initialized');
       }}
     } as unknown as LiveBrowserSession;
-    const config = {readMode:'auto',uiSettleMs:50} as AppConfig;
+    const config = {readMode:'dom',uiSettleMs:50} as AppConfig;
     const dom: typeof awaitUiResponse = async (_session, _provider, _config, prior, _prompt,
       _onDelta, _signal, _tap, requireKAP) => {
       assert.equal(requireKAP,true);

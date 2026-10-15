@@ -52,9 +52,9 @@ async function bounded<T>(promise: Promise<T>, ms = 2400): Promise<T> {
   }
 }
 
-test('independent CDP winner returns a complete K2 even when DOM never resolves', async () => {
+test('auto CDP winner returns a complete K2 even when DOM never resolves', async () => {
   const dom = (async () => new Promise<never>(() => {})) as typeof awaitUiResponse;
-  const { reader, push } = harness(dom);
+  const { reader, push } = harness(dom, answer, 'auto');
   await reader.initialize();
   reader.arm(prompt);
   const outcome = reader.read([], prompt, undefined, undefined, true);
@@ -90,3 +90,4 @@ test('an incomplete tap frame cannot win over a valid DOM answer', async () => {
   assert.equal(result.text, answer);
   assert.equal(result.readDiagnostics.source, 'dom');
 });
+

@@ -1,4 +1,4 @@
-import { completedRawContract, selectContractResponseText } from './contract-text.js';
+import { completedRawContract, sameContractText, selectContractResponseText } from './contract-text.js';
 import { UiTimeoutError } from '../ui-errors.js';
 export { selectContractResponseText } from './contract-text.js';
 import type { AppConfig, ChatExecutionOptions, JsonObject, LiveBrowserSession } from '../../types.js';
@@ -27,11 +27,9 @@ export class HybridUiResponseReader {
   private readonly tap: CdpStreamTap;
   private pending: TapTurn | undefined;
 
-  /** On ChatGPT Web the DOM is authoritative: CDP network streams can carry
-   * megabytes of unrelated events and never report a usable KAP frame. */
+  /** Only an explicit DOM selection disables the independent passive reader. */
   private domOnly(): boolean {
-    return this.config.readMode === 'dom'
-      || (['chatgpt', 'gemini'].includes(this.provider?.id ?? '') && this.config.readMode !== 'tap');
+    return this.config.readMode === 'dom';
   }
 
   constructor(
@@ -45,6 +43,10 @@ export class HybridUiResponseReader {
 
   async initialize(): Promise<void> {
     if (!this.domOnly()) await this.tap.initialize();
+    logger.debug('ui.read.observers', {
+      provider_id: this.provider?.id ?? 'unknown', mode: this.config.readMode ?? 'auto',
+      dom_enabled: true, tap_enabled: !this.domOnly(), tap_attached: Boolean(this.tap.health().attached)
+    });
   }
 
   arm(prompt: string): void {
@@ -305,8 +307,13 @@ export class HybridUiResponseReader {
     let verified = false;
     if (matched && adapterEnded && !tapFailure && winnerSource === 'dom') {
       const candidate = adapter.verification(dom.text);
+      const completed = adapter.completedKAP2();
       if (candidate) {
         this.tap.recordVerified(candidate.profile);
+        verified = true;
+      } else if (completed && sameContractText(completed, dom.text)) {
+        // A patch stream can agree with DOM without defining one reusable
+        // JSON leaf. Keep it in shadow mode; never learn a metadata-prone path.
         verified = true;
       } else if (adapter.accumulatedText() && !rawSelected) {
         await failTap(turn.profile ? 'verify_mismatch' : 'profile_mismatch');
@@ -337,3 +344,4 @@ export class HybridUiResponseReader {
     };
   }
 }
+

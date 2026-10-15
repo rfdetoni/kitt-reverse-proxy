@@ -8,6 +8,39 @@ import { decodeTextBody } from '../src/discovery/decoder.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
 
+test('cold KAP tap reconstructs text patches and continuations without promoting user echoes', () => {
+  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+  const adapter = new TapStreamAdapter(undefined, true);
+  adapter.matchedResponse('https://chatgpt.com/dynamic-response', 'POST', 'text/event-stream');
+  const push = (value: unknown) => adapter.push(Buffer.from('data: ' + JSON.stringify(value) + '\n\n'));
+  push({messages:[{role:'assistant',content:tool}],request:{content:tool}});
+  assert.equal(adapter.completedKAP2(),undefined,'echoed conversation history is not the current answer');
+  push({p:'',o:'add',v:{message:{author:{role:'user'},content:{parts:[tool]}}}});
+  assert.equal(adapter.completedKAP2(),undefined);
+  push({p:'/message/content/parts/0',o:'append',v:tool});
+  assert.equal(adapter.completedKAP2(),undefined);
+  push({p:'',o:'add',v:{message:{author:{role:'assistant'},content:{parts:['']}}}});
+  push({p:'/message/content/parts/0',o:'append',v:tool.slice(0,24)});
+  push({v:tool.slice(24,55)});
+  assert.equal(adapter.completedKAP2(),undefined);
+  push({o:'patch',v:[{p:'/message/content/parts/0',o:'append',v:tool.slice(55)}]});
+  assert.equal(adapter.completedKAP2(),tool);
+  assert.equal(adapter.verification(tool),undefined,'stateful $.v must never become a learned generic leaf');
+});
+
+test('patch completion excludes metadata and competing assistant frames', () => {
+  const a = 'K2 F\nstate: done\nK2/END';
+  const adapter = new TapStreamAdapter(undefined,true);
+  adapter.matchedResponse('https://chatgpt.com/dynamic-response','POST','text/event-stream');
+  const push = (value: unknown) => adapter.push(Buffer.from('data: '+JSON.stringify(value)+'\n\n'));
+  push({p:'/message/metadata/text',o:'append',v:a});
+  assert.equal(adapter.completedKAP2(),undefined);
+  push({p:'/answer',o:'replace',v:a});
+  assert.equal(adapter.completedKAP2(),a);
+  push({p:'/text',o:'replace',v:a.replace('done','different')});
+  assert.equal(adapter.completedKAP2(),undefined);
+});
+
 function fakeCdp(send: (method: string) => Promise<unknown> = async () => ({})) {
   const cdp = new EventEmitter() as EventEmitter & {
     send: (method: string) => Promise<unknown>;
@@ -479,3 +512,4 @@ test('competing partially matched requests fail closed instead of racing the wro
     assert.equal(events.some(event => event.type === 'matched'), false);
   } finally { turn.cancel(); await tap.detach(); }
 });
+

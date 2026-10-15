@@ -96,7 +96,15 @@ export function collectTapStringLeaves(value: JsonValue): Map<string, TapStringL
       const namedReply = tapPathScore(path) > 0;
       child.forEach((item, index) => collect(item, namedReply ? path + '[*]' : appendJsonPath(path, index), depth + 1, jsonStringPaths));
     } else if (child && typeof child === 'object') {
-      for (const [key, item] of Object.entries(child)) collect(item, appendJsonPath(path, key), depth + 1, jsonStringPaths);
+      const author = child.author;
+      const role = child.role ?? (author && typeof author === 'object' && !Array.isArray(author) ? author.role : undefined);
+      // A correlated provider response may echo the submitted user message.
+      // Its content is not an assistant answer, even if it is valid KAP.
+      if (typeof role === 'string' && /^(?:user|system|developer|tool)$/i.test(role)) return;
+      for (const [key, item] of Object.entries(child)) {
+        if (/^(?:messages|history|request|input|prompt)$/i.test(key)) continue;
+        collect(item, appendJsonPath(path, key), depth + 1, jsonStringPaths);
+      }
     }
   };
   collect(value, '$', 0, []);
@@ -146,3 +154,4 @@ export function applyTapPiece(state: TapTextState, raw: string, mode: 'delta' | 
   state.text += raw;
   return raw;
 }
+

@@ -1,3 +1,7 @@
+## Reverse Proxy 5.3.17 — capture KAP replies independently of DOM
+
+`--read-mode auto` now enables both the DOM reader and the passive, current-request CDP reader for ChatGPT and Gemini. A complete, unambiguous KAP/2 response can be recovered even when only the submitted prompt appears in the DOM. Stateful text patches retain their target/operation; user echoes and metadata are excluded. No provider request is replayed. [Release details](docs/RELEASE_5.3.17.md).
+
 ## Reverse Proxy 5.3.16 — current-turn DOM capture
 
 Fresh KAP actions can repeat a prompt example or a previous action when the visible transcript proves a new submitted prompt. Mutation capture retains rendered line breaks alongside source indentation. Echoes, old transcript mutations and competing frames still fail closed. See [release 5.3.16](docs/RELEASE_5.3.16.md).
@@ -706,10 +710,10 @@ Provider resilience events are available in JSON and Prometheus output through `
 
 UI providers still send every message through the authenticated browser UI exactly once. Response reading now has a conservative hybrid path:
 
-- the existing DOM monitor is always the canonical reader and remains armed for the complete turn;
+- the DOM monitor and passive CDP reader run independently; either can complete a strict, current-request KAP/2 frame;
 - `--read-mode auto` attaches a passive Chromium CDP stream tap and observes candidate response bytes without modifying requests, responses, cookies or page JavaScript;
 - a newly learned tap remains in **shadow** mode until its decoded text matches the final DOM text for several consecutive turns (default: 3);
-- only a trusted tap may emit early streaming deltas; completed, fully correlated trusted streams can also recover buffered Agent/JSON contracts damaged by DOM rendering;
+- only a trusted tap may emit early streaming deltas; a complete, unique, strictly parsed KAP/2 frame from a correlated answer field can also win in shadow mode; other buffered JSON contracts still require calibrated trust;
 - any attach, match, first-byte, stall, decode, verification or stream failure demotes the tap and continues through the DOM without resending the prompt;
 - tap failures use an independent per-session circuit breaker, so a broken tap never marks the provider itself unavailable;
 - `--read-mode dom` is the global kill switch and does not attach CDP at all.

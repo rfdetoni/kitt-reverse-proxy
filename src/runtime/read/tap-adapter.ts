@@ -4,6 +4,7 @@ import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { copyProfile } from './tap-health.js';
 import { RESOURCE_LIMITS } from '../../core/resource-limits.js';
+import { appendJsonPath } from '../../util/path.js';
 import {
   applyTapPiece,
   collectTapStringLeaves,
@@ -68,6 +69,9 @@ export class TapStreamAdapter {
   private learnedSamples = 0;
   private learnedInvalid = false;
   private readonly alternative: TapTextState = { text: '', score: 1, samples: 0 };
+  private readonly patches = new Map<string, TapTextState>();
+  private patchTarget: { path: string; mode: 'delta' | 'snapshot' } | undefined;
+  private patchRole: string | undefined;
 
   constructor(private readonly profile?: TapProfile, private readonly contractMode = false) {}
 
@@ -153,9 +157,9 @@ export class TapStreamAdapter {
    * action extracted from an answer-shaped response field can win.
    */
   completedKAP2(): string | undefined {
-    const sources = this.profile
+    const sources = [...(this.profile
       ? [{ text: this.learnedText, score: 125, samples: this.learnedSamples, invalid: this.learnedInvalid }]
-      : [...this.candidates.values()];
+      : [...this.candidates.values()]), ...this.patches.values()];
     const valid = new Map<string, string>();
     for (const source of sources) {
       if (source.invalid || !source.samples || source.score < 80) continue;
@@ -241,9 +245,21 @@ export class TapStreamAdapter {
   }
 
   private consumeValue(value: JsonValue): string[] {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const envelope = value.v && typeof value.v === 'object' && !Array.isArray(value.v) ? value.v : value;
+      const message = envelope.message;
+      if (message && typeof message === 'object' && !Array.isArray(message)) {
+        const author = message.author;
+        const role = message.role ?? (author && typeof author === 'object' && !Array.isArray(author) ? author.role : undefined);
+        if (typeof role === 'string') this.patchRole = role;
+      }
+    }
+    if (this.contractMode && this.consumePatch(value)) return [];
     if (this.profile) {
       const deltas: string[] = [];
-      const values = tapProfileValues(value, this.profile.textPath, this.profile.jsonStringPaths);
+      const source = JSON.stringify([...(this.profile.jsonStringPaths ?? []), this.profile.textPath]);
+      const decoded = tapProfileValues(value, this.profile.textPath, this.profile.jsonStringPaths);
+      const values = collectTapStringLeaves(value).has(source) ? decoded : [];
       for (const raw of values) {
         const state: TapTextState = {
           text: this.learnedText,
@@ -276,4 +292,41 @@ export class TapStreamAdapter {
     }
     return [];
   }
+
+  /** Stateful text patches are not independent $.v leaves. Preserve their
+   * declared target and operation, including continuation events, per turn. */
+  private consumePatch(value: JsonValue, depth = 0): boolean {
+    if (!value || Array.isArray(value) || typeof value !== 'object') return false;
+    const explicit = Object.hasOwn(value, 'p') || Object.hasOwn(value, 'o');
+    if (!explicit && (!this.patchTarget || !Object.hasOwn(value, 'v'))) return false;
+    if (value.o === 'patch') {
+      this.patchTarget = undefined;
+      if (depth >= 4 || !Array.isArray(value.v) || value.v.length > 128) throw new Error('Tap patch limit exceeded');
+      for (const patch of value.v) this.consumePatch(patch, depth + 1);
+      return true;
+    }
+    if (explicit) {
+      const target = typeof value.p === 'string' ? value.p : this.patchTarget?.path;
+      const mode = value.o === 'append' ? 'delta' : value.o === 'replace' ? 'snapshot' : undefined;
+      this.patchTarget = target && target.length <= 1024 && target.startsWith('/') && mode
+        ? { path: target, mode } : undefined;
+    }
+    const target = this.patchTarget;
+    // Full message snapshots inside a patch envelope still use the ordinary
+    // role-aware field extractor. Only string patches have stateful text.
+    if (!target || typeof value.v !== 'string') return explicit && typeof value.v === 'string';
+    if (this.patchRole && !/^(?:assistant|model)$/i.test(this.patchRole)) return true;
+    const segments = target.path.slice(1).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+    if (segments.length > 20 || segments.some(part => /^(?:user|system|developer|tool|messages|history|prompt|input|request|metadata|citations?|attachments?)$/i.test(part))) return true;
+    const path = segments.reduce((path, part) => appendJsonPath(path, /^\d+$/.test(part) ? Number(part) : part), '$');
+    const score = tapPathScore(path);
+    if (score < 80) return true;
+    if (!this.patches.has(target.path) && this.patches.size >= 128) throw new Error('Tap patch candidate limit exceeded');
+    const state = this.patches.get(target.path) ?? { text: '', score, samples: 0 };
+    applyTapPiece(state, value.v, target.mode);
+    if (state.text.length > 65_536) { state.text = ''; state.invalid = true; }
+    this.patches.set(target.path, state);
+    return true;
+  }
 }
+
