@@ -99,7 +99,7 @@ export function collectTapStringLeaves(value: JsonValue): Map<string, TapStringL
       const author = child.author;
       const role = child.role ?? (author && typeof author === 'object' && !Array.isArray(author) ? author.role : undefined);
       // A correlated provider response may echo the submitted user message.
-      // Its content is not an assistant answer, even if it is valid KAP.
+      // Its content is not an assistant answer, even if it is valid JSON.
       if (typeof role === 'string' && /^(?:user|system|developer|tool)$/i.test(role)) return;
       for (const [key, item] of Object.entries(child)) {
         if (/^(?:messages|history|request|input|prompt)$/i.test(key)) continue;

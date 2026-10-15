@@ -28,17 +28,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: rfdetoni/kitt-protocol
-          ref: cc3b51dd0e868adaab4ed7a0069c4dbf9aa08c42
+          ref: e88d949f6a95df4d17b342961330e76efde5e2de
           path: protocol-source
           persist-credentials: false
       - name: Check generated Agent response schema
         run: python3 protocol-source/scripts/export_agent_contract.py --check --output src/contracts/agent-contract.ts
-      - name: Check generated KAP parser parity
-        run: |
-          cmp protocol-source/sdk/typescript/src/kap.ts src/contracts/kap.ts
-          cmp protocol-source/sdk/typescript/src/kap2.ts src/contracts/kap2.ts
-          cmp protocol-source/sdk/typescript/src/kap-version.ts src/contracts/kap-version.ts
-          cmp protocol-source/sdk/typescript/src/kap-error.ts src/contracts/kap-error.ts
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
       - name: Typecheck critical surface
         run: npm run check
@@ -46,8 +40,6 @@ jobs:
         run: npm test
       - name: Build production package
         run: npm run build
-      - name: Validate authoritative KAP/2 golden corpus against proxy parser
-        run: node scripts/verify-kap2-corpus.mjs protocol-source/fixtures/kap2
       - name: Install Chromium for the real CDP boundary
         run: npx playwright install --with-deps chromium
       - name: Verify CDP source integrity in real Chromium

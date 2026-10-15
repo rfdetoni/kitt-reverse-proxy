@@ -1,5 +1,7 @@
 import { sameContractText } from './contract-text.js';
-import { parseKAP2 } from '../../contracts/kap2.js';
+import { parseContractJson } from '../../util/contract-json.js';
+import { AGENT_RESPONSE_SCHEMA } from '../../contracts/agent-contract.js';
+import { validateJsonSchema } from '../../util/json-schema.js';
 import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
 import type { JsonValue } from '../../types.js';
 import { copyProfile } from './tap-health.js';
@@ -153,10 +155,10 @@ export class TapStreamAdapter {
 
   /**
    * Independent tap completion: never infer the answer from a delimiter
-   * or a single unverified JSON leaf. Only one complete, unambiguous KAP/2
+   * or a single unverified JSON leaf. Only one complete, unambiguous JSON
    * action extracted from an answer-shaped response field can win.
    */
-  completedKAP2(): string | undefined {
+  completedContract(): string | undefined {
     const sources = [...(this.profile
       ? [{ text: this.learnedText, score: 125, samples: this.learnedSamples, invalid: this.learnedInvalid }]
       : [...this.candidates.values()]), ...this.patches.values()];
@@ -164,10 +166,10 @@ export class TapStreamAdapter {
     for (const source of sources) {
       if (source.invalid || !source.samples || source.score < 80) continue;
       const value = source.text.trim();
-      if (!value.startsWith('K2 ')) continue;
       try {
-        const parsed = parseKAP2(value);
-        const identity = JSON.stringify(parsed);
+        const parsed = parseContractJson(value);
+        if (parsed.repaired || !validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+        const identity = JSON.stringify(parsed.value);
         valid.set(identity, value);
       } catch { /* Incomplete frame or marker in a literal is not completion. */ }
     }

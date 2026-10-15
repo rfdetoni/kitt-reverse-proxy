@@ -166,7 +166,13 @@ export function parseContractJson(text: string, onMember?: (key: string, value: 
   let parsed: unknown;
   let found = false;
   for (const candidate of value(0, 0, '$')) {
-    if (skip(candidate.end) !== source.length) continue;
+    const trailing = skip(candidate.end);
+    if (trailing !== source.length) {
+      if (source[trailing] === '{' || source[trailing] === '[') {
+        throw new ContractJsonError('ambiguous', 'Multiple JSON payloads', trailing);
+      }
+      continue;
+    }
     // A caller's mandatory shape can rule out interpretations that swallow
     // required fields. Never choose between two interpretations it accepts.
     if (accepts && !accepts(candidate.value)) continue;

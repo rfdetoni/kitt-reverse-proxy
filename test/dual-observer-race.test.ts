@@ -6,7 +6,7 @@ import { awaitUiResponse } from '../src/runtime/ui-response-monitor.js';
 import { detectProvider } from '../src/providers/catalog.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 
-const answer = 'K2 F\nstate: done\nK2/END';
+const answer = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"state\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}";
 const prompt = 'CURRENT UNIQUE WORKSPACE TASK';
 
 function harness(dom: typeof awaitUiResponse, wire = answer, mode: 'auto' | 'tap' = 'tap') {

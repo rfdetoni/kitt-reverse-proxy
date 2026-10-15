@@ -3,21 +3,21 @@ import assert from 'node:assert/strict';
 import {detectProvider} from '../src/providers/catalog.js';
 import {HybridUiResponseReader} from '../src/runtime/read/hybrid-reader.js';
 import {awaitUiResponse} from '../src/runtime/ui-response-monitor.js';
-import {kapCandidatesFromRenderedText, selectCompletedAssistantContract,
+import {jsonCandidatesFromRenderedText, selectCompletedAssistantContract,
   inspectCompletedAssistantContract} from '../src/runtime/ui-dom.js';
 import type {UiTextSnapshot} from '../src/runtime/ui-dom.js';
 import type {AppConfig, LiveBrowserSession} from '../src/types.js';
 import type {Page} from 'playwright';
 
-const complete = 'K2 F\nstatus: done\nK2/END';
-const former = 'K2 F\nstatus: previous\nK2/END';
+const complete = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}";
+const former = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"previous\"},\"reasoning_summary\":\"\",\"loop\":null}";
 const wrong = 'K2 F\nstatus: broken';
 const baseline: UiTextSnapshot[] = [
   {selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old transcript\n'+former}
 ];
 
 for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
-  test('explicit dom mode on '+url+' starts no CDP observer and returns DOM KAP', async () => {
+  test('explicit dom mode on '+url+' starts no CDP observer and returns DOM JSON', async () => {
     let attempts = 0;
     const session = {
       page: {frames: () => []},
@@ -28,8 +28,8 @@ for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
     } as unknown as LiveBrowserSession;
     const config = {readMode:'dom',uiSettleMs:50} as AppConfig;
     const dom: typeof awaitUiResponse = async (_session, _provider, _config, prior, _prompt,
-      _onDelta, _signal, _tap, requireKAP) => {
-      assert.equal(requireKAP,true);
+      _onDelta, _signal, _tap, requireJSON) => {
+      assert.equal(requireJSON,true);
       assert.deepEqual(prior,baseline);
       return {text:complete,deltas:[],firstDeltaMs:3,durationMs:8};
     };
@@ -49,7 +49,7 @@ for (const url of ['https://chatgpt.com/', 'https://gemini.google.com/app']) {
 
 test('DOM framing extracts K2/END inside rich markdown with chrome around it', () => {
   const displayed = 'Gemini\nCopiar\n~~~\n'+complete+'\n~~~\nShare\n';
-  assert.ok(kapCandidatesFromRenderedText(displayed).includes(complete));
+  assert.ok(jsonCandidatesFromRenderedText(displayed).includes(complete));
   assert.equal(selectCompletedAssistantContract([displayed],baseline,'Current request'),complete);
 });
 
@@ -78,7 +78,7 @@ test('fresh Gemini DOM model-response sample can be accepted with no tap', async
   assert.equal(result.assistantNodes,1);
 });
 
-test('provider body fallback cannot reuse pre-submit KAP message', async () => {
+test('provider body fallback cannot reuse pre-submit JSON message', async () => {
   const page={frames:()=>[{
     isDetached:()=>false,
     evaluate:async()=>({count:0,structural:0,samples:['Page\n'+former]})
@@ -89,9 +89,9 @@ test('provider body fallback cannot reuse pre-submit KAP message', async () => {
 
 
 test('compact final returns from DOM when a long prompt already contains K2 examples', () => {
-  const reply = 'K2 F @json: {"items":[{"local_id":"T00","kind":"task"},{"local_id":"FINAL","kind":"final"}]}  K2/END';
+  const reply = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"items\":[{\"local_id\":\"T00\",\"kind\":\"task\"},{\"local_id\":\"FINAL\",\"kind\":\"final\"}]},\"reasoning_summary\":\"\",\"loop\":null}";
   const prompt = 'Decompose the original request. '.repeat(2000) +
-    '\nK2 F @json: {"items":[{"local_id":"EXAMPLE"}]} K2/END\n' +
+    "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"items\":[{\"local_id\":\"EXAMPLE\"}]},\"reasoning_summary\":\"\",\"loop\":null}" +
     'Expand with additional task items as necessary. No code fences or prose.';
   assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + reply],baseline,prompt),reply);
   assert.equal(selectCompletedAssistantContract([reply],[],reply),undefined);
@@ -104,20 +104,17 @@ test('invalid compact JSON is not a completed valid contract', () => {
 });
 
 
-test('Markdown-escaped underscore/star in compact final is normalized only after strict validation', () => {
+test('illegal escapes and duplicate JSON fields cannot complete from DOM', () => {
   const slash = String.fromCharCode(92);
-  const raw = 'K2 F @json: {"items":[{"paths":["src/' + slash + '_' + slash + '_init' +
-    slash + '_' + slash + '_.py"],"pattern":"dlls/' + slash + '*.spec"}]} K2/END';
-  const expected = 'K2 F @json: {"items":[{"paths":["src/__init__.py"],"pattern":"dlls/*.spec"}]} K2/END';
-  assert.equal(selectCompletedAssistantContract([raw],[],'new request'),expected);
-  // Do not reinterpret unrelated illegal JSON escapes or competing frames.
-  assert.equal(selectCompletedAssistantContract([raw.replace(slash+'_',slash+'q')],[],'new request'),undefined);
-  assert.equal(selectCompletedAssistantContract(['K2 F @json: {"x":1,"x":2} K2/END'],[],'new request'),undefined);
+  const valid = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:{path:'src/__init__.py'},reasoning_summary:'',loop:null});
+  const escaped = valid.replace('__init__',slash + '_init_');
+  assert.equal(selectCompletedAssistantContract([escaped],[],'new request'),undefined);
+  assert.equal(selectCompletedAssistantContract([valid.replace('"path":','"path":"other","path":')],[],'new request'),undefined);
 });
 
 
-test('fresh K2 tool response survives missing assistant roles and long prompt examples', async () => {
-  const tool = 'K2 T kitt_runtime\noperation: repo.read\narguments:\n  path: README.md\nK2/END';
+test('fresh JSON tool response survives missing assistant roles and long prompt examples', async () => {
+  const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.read\",\"arguments\":{\"path\":\"README.md\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const prompt = 'Read the repository, reply with only one tool action. Example:\n' + tool;
   const previous: UiTextSnapshot[] = [
     {selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old assistant turn'}
@@ -145,8 +142,8 @@ test('fresh K2 tool response survives missing assistant roles and long prompt ex
   assert.equal(fresh.mutationSamples,1);
 });
 
-test('K2 tool candidates reject echoed, prior and competing tool actions', () => {
-  const a = 'K2 T kitt_runtime\noperation: repo.read\narguments:\n  path: README.md\nK2/END';
+test('JSON tool candidates reject echoed, prior and competing tool actions', () => {
+  const a = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.read\",\"arguments\":{\"path\":\"README.md\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const b = a.replace('README.md','LICENSE');
   assert.equal(selectCompletedAssistantContract([a],[],a),undefined);
   assert.equal(selectCompletedAssistantContract([a],[{selector:'[prior-assistant-contract]',frameIndex:-1,count:1,text:a}]),undefined);
@@ -155,14 +152,14 @@ test('K2 tool candidates reject echoed, prior and competing tool actions', () =>
 });
 
 test('a new reply after the submitted prompt may repeat its tool example or prior action', () => {
-  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+  const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const prompt = 'Inspect the current workspace. Example:\n' + tool + '\n' +
     'Use only operations actually listed in the current tool catalog and return one complete action for the host to execute and verify.';
   const previous = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old answer\n' + tool}];
   assert.equal(selectCompletedAssistantContract(['Page\n' + prompt],previous,prompt),undefined);
   assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + tool],previous,prompt),tool);
   assert.equal(selectCompletedAssistantContract(['Page\n' + prompt + '\n' + tool + '\n' +
-    tool.replace('path: .','path: src')],previous,prompt),undefined);
+    tool.replace('"path":"."','"path":"src"')],previous,prompt),undefined);
   const oldPage = 'Old page\n' + prompt + '\n' + tool;
   const oldBaseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:oldPage}];
   assert.equal(selectCompletedAssistantContract([oldPage + '\nSidebar changed'],oldBaseline,prompt),undefined);

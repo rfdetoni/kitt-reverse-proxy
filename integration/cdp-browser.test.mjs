@@ -15,8 +15,8 @@ import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
 import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
 import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
-test('auto captures one network-only KAP tool action when DOM contains only the prompt', {timeout: 20_000}, async () => {
-  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+test('auto captures one network-only JSON tool action when DOM contains only the prompt', {timeout: 20_000}, async () => {
+  const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const prompt = 'Inspect the current workspace using the available host tools. Example:\n' + tool;
   let posts = 0;
   let receivedPrompt = '';
@@ -132,7 +132,7 @@ test('real Chromium hybrid reader preserves contracts and stops failed delivery'
     await page.locator('#answer').evaluate((element, text) => { element.textContent = text; }, expected);
     let fetchedDone = true;
     let monitorAborted = false;
-    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'tap', tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
+    const reader = new HybridUiResponseReader({context, page}, {id: 'chatgpt'}, {targetUrl: origin, allowedEndpointHosts: [], readMode: 'tap', uiSettleMs: 50, tapVerifyTurns: 1, tapMatchTimeoutMs: 5_000, tapFirstByteMs: 5_000, tapStallMs: 5_000}, async (...args) => {
       const signal = args[6];
       try { while (!fetchedDone) await abortableSleep(10, signal); }
       catch (error) { monitorAborted = Boolean(signal?.aborted); throw error; }
@@ -154,7 +154,7 @@ test('real Chromium hybrid reader preserves contracts and stops failed delivery'
       const prompt = `CURRENT UNIQUE TASK ${index}: preserve raw source text`;
       reader.arm(prompt);
       const fetched = fetchTurn(prompt, newline);
-      const [result] = await Promise.all([reader.read([], prompt, undefined, undefined, true), fetched]);
+      const [result] = await Promise.all([reader.read([], prompt, undefined, undefined, index !== 0), fetched]);
       assert.equal(result.text, expected);
       assert.equal(result.readDiagnostics.tap_trusted, true);
       if (index === 0) {
@@ -366,10 +366,10 @@ test('real Chromium RPC tap learns positional source, retrieves omitted POST dat
   }
 });
 
-test('real Chromium DOM-only KAP recovery works without CDP on ChatGPT and Gemini', {timeout: 30_000}, async () => {
+test('real Chromium DOM-only JSON recovery works without CDP on ChatGPT and Gemini', {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless:true});
-  const prior = 'K2 F\nstatus: old\nK2/END';
-  const answer = 'K2 F\nstatus: done\nK2/END';
+  const prior = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"old\"},\"reasoning_summary\":\"\",\"loop\":null}";
+  const answer = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}";
   try {
     for (const [url, markup] of [
       ['https://chatgpt.com/', '<div class="plain-answer"></div>'],
@@ -420,11 +420,11 @@ test('real Chromium recovers portal DOM answer outside main with pre-submit repl
   try {
     const page = await browser.newPage();
     await page.setContent('<main><div id="old" style="white-space:pre-wrap"></div></main>');
-    const old = 'K2 F\nstatus: previous\nK2/END';
+    const old = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"previous\"},\"reasoning_summary\":\"\",\"loop\":null}";
     await page.locator('#old').evaluate((node, text) => { node.textContent = text; }, old);
     const baseline = [{selector: '[pre-submit-visible-text]', frameIndex: -1, count: 1,
       text: await visibleContractBaseline(page)}];
-    const newReply = 'K2 F\nstatus: new\nK2/END';
+    const newReply = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"new\"},\"reasoning_summary\":\"\",\"loop\":null}";
     await page.evaluate((text) => {
       const node = document.createElement('div');
       node.id = 'portal-reply';
@@ -440,14 +440,14 @@ test('real Chromium recovers portal DOM answer outside main with pre-submit repl
 });
 
 
-test('real Chromium preserves indented KAP from a roleless code block outside main', {timeout: 20_000}, async () => {
+test('real Chromium preserves indented JSON from a roleless code block outside main', {timeout: 20_000}, async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage();
     await page.setContent('<main><p>Previous conversation</p></main>');
     const baseline = [{selector: '[pre-submit-visible-text]', frameIndex: -1, count: 1,
       text: await visibleContractBaseline(page)}];
-    const reply = 'K2 F\nitems[1]:\n  - updated\nK2/END';
+    const reply = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"items\":[\"updated\"]},\"reasoning_summary\":\"\",\"loop\":null}";
     await page.evaluate((value) => {
       const pre = document.createElement('pre');
       const code = document.createElement('code');
@@ -461,15 +461,15 @@ test('real Chromium preserves indented KAP from a roleless code block outside ma
 });
 
 
-test('real Chromium recovers only the fresh KAP/2 answer from DOM mutations without assistant markup', {timeout: 30_000}, async () => {
+test('real Chromium recovers only the fresh JSON answer from DOM mutations without assistant markup', {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.setContent('<main id="thread"><div id="old">Earlier context</div></main>');
     const before = await visibleContractBaseline(page);
-    const prompt = 'Please create a plan. K2 F @json: {"items":[{"local_id":"EXAMPLE"}]} K2/END';
-    const response = 'K2 F @json: {"items":[{"local_id":"T00","kind":"task"},{"local_id":"FINAL","kind":"final"}]} K2/END';
+    const prompt = 'Please create a plan. JSON example: {"items":[{"local_id":"EXAMPLE"}]}';
+    const response = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"items\":[{\"local_id\":\"T00\",\"kind\":\"task\"},{\"local_id\":\"FINAL\",\"kind\":\"final\"}]},\"reasoning_summary\":\"\",\"loop\":null}";
     const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:before}];
     await armFreshContractDomObserver(page);
     await page.evaluate(prompt => {
@@ -511,7 +511,7 @@ test('real Chromium returns a fresh tool action identical to the prompt example'
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.setContent('<main><div>Earlier context</div></main>');
-    const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+    const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
     const prompt = 'Inspect the workspace. Example:\n' + tool + '\n' +
       'Use only operations actually listed in the current tool catalog and return one complete action for the host to execute and verify.';
     const baseline = [{selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:await visibleContractBaseline(page)}];
@@ -546,14 +546,14 @@ test('real Chromium mutation capture preserves rendered br boundaries outside th
     await armFreshContractDomObserver(page);
     await page.evaluate(() => {
       const reply = document.createElement('div');
-      reply.innerHTML = 'K2 T repo.list<br>path: .<br>K2/END';
+      reply.innerHTML = JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'',loop:null}).replaceAll(',',',<br>');
       document.querySelector('main').append(reply);
       const filler = document.createElement('div');
       filler.textContent = 'z'.repeat(140000);
       document.querySelector('main').append(filler);
     });
     const result = await inspectCompletedAssistantContract(page,baseline,'Inspect repository');
-    assert.equal(result.text,'K2 T repo.list\npath: .\nK2/END');
+    assert.equal(result.text,"{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}");
     await stopFreshContractDomObserver(page);
   } finally { await browser.close(); }
 });

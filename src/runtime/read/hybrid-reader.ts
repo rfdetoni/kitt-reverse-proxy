@@ -129,7 +129,7 @@ export class HybridUiResponseReader {
     let adapterEnded = false;
     let tapLastByteAt: number | undefined;
     let tapBytes = 0;
-    // Independent completion channel. A valid correlated K2 frame may win
+    // Independent completion channel. A valid correlated JSON object may win
     // while the DOM observer is still polling (or while the CDP HTTP request
     // remains open). The DOM observer may also win when tap matching fails.
     let resolveTapWinner!: (value: { source: 'tap'; raw: string }) => void;
@@ -143,7 +143,7 @@ export class HybridUiResponseReader {
     };
     const considerTapCompletion = (ended: boolean): void => {
       if (!preferRawContract || !matched || tapFailure || deliveryFailed || signal?.aborted) return;
-      const raw = adapter.completedKAP2();
+      const raw = adapter.completedContract();
       if (!raw) return;
       clearTapSettle();
       if (ended) {
@@ -153,10 +153,10 @@ export class HybridUiResponseReader {
       const lastByte = tapLastByteAt;
       const settleMs = Math.max(750, this.config.uiSettleMs);
       tapSettleTimer = setTimeout(() => {
-        // No early completion from an intermediate K2/END token.
+        // No early completion from an intermediate closing brace token.
         if (signal?.aborted || tapFailure || !lastByte || tapLastByteAt !== lastByte
             || Date.now() - lastByte < settleMs) return;
-        if (adapter.completedKAP2() === raw) resolveTapWinner({ source: 'tap', raw });
+        if (adapter.completedContract() === raw) resolveTapWinner({ source: 'tap', raw });
       }, settleMs);
       tapSettleTimer.unref?.();
     };
@@ -271,7 +271,7 @@ export class HybridUiResponseReader {
       const recovered = error instanceof UiTimeoutError && !signal?.aborted && !deliveryFailed && matched && !tapFailure
         ? (eligibleLegacy
           ? completedRawContract(adapter.accumulatedText(), adapter.accumulatedAlternativeText(), true)
-          : adapter.completedKAP2())
+          : adapter.completedContract())
         : undefined;
       if (recovered === undefined) throw error;
       winnerSource = 'tap';
@@ -307,7 +307,7 @@ export class HybridUiResponseReader {
     let verified = false;
     if (matched && adapterEnded && !tapFailure && winnerSource === 'dom') {
       const candidate = adapter.verification(dom.text);
-      const completed = adapter.completedKAP2();
+      const completed = adapter.completedContract();
       if (candidate) {
         this.tap.recordVerified(candidate.profile);
         verified = true;

@@ -1,4 +1,4 @@
-import { kapFromHistoricFixture, kapFixture } from './kap-fixtures.js';
+import { jsonFromFixture, jsonFixture } from './json-fixtures.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -21,7 +21,7 @@ function completion(content: string): OpenAiCompletion {
     model: 'chatgpt-web',
     choices: [{
       index: 0,
-      message: { role: 'assistant', content: kapFromHistoricFixture(content) },
+      message: { role: 'assistant', content: jsonFromFixture(content) },
       finish_reason: 'stop'
     }]
   };
@@ -112,9 +112,9 @@ test('replaces upstream system persona and mounts tools/workspace as dynamic tur
 
   assert.equal(messages[0].role, 'system');
   assert.equal(messages[0].content, AGENT_CONTRACT_SYSTEM_PROMPT);
-  assert.match(messages[0].content, /Preserve code formatting/);
-  assert.match(messages[0].content, /Preserve code formatting/);
-  assert.match(messages[0].content, /OUTPUT CONTRACT \(mandatory, no exceptions\)/);
+  assert.match(messages[0].content, /JSON object/);
+  assert.match(messages[0].content, /JSON object/);
+  assert.match(messages[0].content, /exactly one JSON object/);
   assert.doesNotMatch(messages[0].content, /Você|CONTRATO DE SAÍDA|Regras:|Responda|Retorne/u);
   assert.equal(messages[1].role, 'user');
   assert.match(messages[1].content, /TOOLS_AVAILABLE:/);
@@ -135,7 +135,7 @@ test('keeps model instructions English while preserving user-authored language v
   const messages = plan.body.messages as Array<{ role?: string; content?: string }>;
 
   assert.equal(messages[0]?.content, AGENT_CONTRACT_SYSTEM_PROMPT);
-  assert.match(messages[0]?.content ?? '', /OUTPUT CONTRACT \(mandatory, no exceptions\)/);
+  assert.match(messages[0]?.content ?? '', /exactly one JSON object/);
   assert.doesNotMatch(messages[0]?.content ?? '', /Você|CONTRATO DE SAÍDA|Regras:|Responda|Retorne/u);
   assert.match(
     messages.find((message) => message.role === 'user')?.content ?? '',
@@ -333,7 +333,7 @@ test('rejects oversized reasoning while wrapped JSON normalization is covered se
   );
 });
 
-test('accepts deterministic WebChat KAP fences without extracting commands from prose', () => {
+test('accepts deterministic WebChat JSON fences without extracting commands from prose', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'webchat-wrapper-tolerance' });
   const canonical = JSON.stringify({
     action: 'use_tool',
@@ -344,10 +344,10 @@ test('accepts deterministic WebChat KAP fences without extracting commands from 
     loop: null
   });
 
-  const kap = kapFromHistoricFixture(canonical);
+  const kap = jsonFromFixture(canonical);
   for (const candidate of [
     kap,
-    `\`\`\`kap\n${kap}\n\`\`\``,
+    `\`\`\`json\n${kap}\n\`\`\``,
     `\`\`\`\n${kap}\n\`\`\``
   ]) {
     const result = transformAgentContractCompletion(completion(candidate), plan);
@@ -395,7 +395,7 @@ test('accepts only the canonical contract shape after provider extraction', () =
   };
 
   const fenced = transformAgentContractCompletion(
-    completion(`\`\`\`kap\n${kapFixture(canonical)}\n\`\`\``),
+    completion(`\`\`\`json\n${jsonFixture(canonical)}\n\`\`\``),
     plan
   );
   assert.equal(fenced.choices[0]?.message.tool_calls?.[0]?.function.name, 'kitt_runtime');
@@ -729,27 +729,27 @@ test('rejects unknown and mismatched request metadata', () => {
 
 test('schema repair preserves valid sibling arguments while correcting only the reported path', async () => {
   const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
-  const candidate = kapFixture({action:'use_tool',tool:'read_file',tool_input:{path:'safe.txt',limit:'bad'},content:null,reasoning_summary:'',loop:null});
+  const candidate = jsonFixture({action:'use_tool',tool:'read_file',tool_input:{path:'safe.txt',limit:'bad'},content:null,reasoning_summary:'',loop:null});
   const error = new AgentContractValidationError('Invalid limit', 'schema', ['$/tool_input/limit']);
-  assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, candidate.replace('STRING limit = bad','INTEGER limit = 2'), error));
+  assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, candidate.replace('"bad"','2'), error));
   assert.throws(() => assertAgentRepairContinuity(candidate, candidate.replace('"bad"','2').replace('safe.txt','other.txt'), error), /unrelated field|complete TEXT|original action/);
 });
 
-test('a truncated KAP tool retains stable path during repair', async () => {
+test('a truncated JSON tool retains stable path during repair', async () => {
   const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
-  const candidate = 'KITT/1\nACTION TOOL\nTOOL write_file\nSTRING path = safe.txt\nTEXT content\ncut';
-  const repaired = 'KITT/1\nACTION TOOL\nTOOL write_file\nSTRING path = safe.txt\nTEXT content\ncut\nKITT/ENDTEXT\nKITT/END';
+  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"safe.txt","content":"cut';
+  const repaired = "{\"action\":\"use_tool\",\"tool\":\"write_file\",\"tool_input\":{\"path\":\"safe.txt\",\"content\":\"cut\"},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const error = new AgentContractValidationError('Incomplete TEXT', 'syntax');
   assert.doesNotThrow(() => assertAgentRepairContinuity(candidate, repaired, error));
   assert.throws(() => assertAgentRepairContinuity(candidate, repaired.replace('safe.txt','other.txt'), error), /unrelated field/);
 });
 
-test('repairs reject changing a pending KAP TOOL action to FINAL', async () => {
+test('repairs reject changing a pending JSON TOOL action to FINAL', async () => {
   const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
-  const candidate = 'KITT/1\nACTION TOOL\nTOOL write_file\nSTRING path = safe.py';
-  const replaced = 'KITT/1\nACTION FINAL\nSTRING content = Done\nKITT/END';
+  const candidate = '{"action":"use_tool","tool":"write_file","tool_input":{"path":"safe.py",';
+  const replaced = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":\"Done\",\"reasoning_summary\":\"\",\"loop\":null}";
   const error = new AgentContractValidationError('Incomplete tool', 'syntax');
-  assert.throws(() => assertAgentRepairContinuity(candidate, replaced, error), /original action/);
+  assert.throws(() => assertAgentRepairContinuity(candidate, replaced, error), /unrelated field/);
 });
 
 test('agent contract bounds serialized UTF-8 tool arguments before returning a call', () => {

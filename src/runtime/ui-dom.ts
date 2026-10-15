@@ -1,5 +1,6 @@
 import type { Frame, Locator, Page } from 'playwright';
-import { parseKAP } from '../contracts/kap.js';
+import { AGENT_RESPONSE_SCHEMA } from '../contracts/agent-contract.js';
+import { validateJsonSchema } from '../util/json-schema.js';
 import { parseContractJson } from '../util/contract-json.js';
 
 export interface UiTextSnapshot {
@@ -204,8 +205,8 @@ export async function readVisibleSnapshotSlot(
 /**
  * Capture DOM text that actually changed after pre-submit baseline collection.
  * Some WebChat builds have no recognizable assistant nodes; a page-wide text
- * scan then finds only KAP examples inside the long user prompt.
- * These snapshots remain UNTRUSTED until prompt/baseline exclusion and KAP
+ * scan then finds only JSON examples inside the long user prompt.
+ * These snapshots remain UNTRUSTED until prompt/baseline exclusion and JSON
  * validation. No network hook, host privilege or arbitrary page evaluation.
  */
 export async function armFreshContractDomObserver(page: Page): Promise<void> {
@@ -229,20 +230,18 @@ export async function armFreshContractDomObserver(page: Page): Promise<void> {
             const sourceText = element.textContent?.trim() ?? '';
             if (sourceText.length > 65_536) break; // Ancestors only grow.
             // Avoid layout reads for unrelated page/composer mutations.
-            if (!/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(sourceText)
-                || !sourceText.includes('K2/END')) continue;
+            if (!sourceText.includes('{')) continue;
             // innerText preserves rendered <br>/paragraph boundaries;
             // textContent preserves source indentation in Markdown/code.
             const texts = [...new Set([
               (element as HTMLElement).innerText?.trim() ?? '',
               sourceText
             ])];
-            // Tool requests (K2 T) are as important as finals (K2 F).
+            // Tool requests and final responses use the same capture path.
             // Capture only candidate bytes; host validation still controls authority.
             let captured = false;
             for (const text of texts) {
-              if (text.length > 65_536 || !/(?:^|\s)K2 [TFWQ](?=\s|$)/.test(text)
-                  || !text.includes('K2/END')) continue;
+              if (text.length > 65_536 || !text.includes('{')) continue;
               captured = true;
               if (!samples.includes(text)) {
                 samples.push(text);
@@ -322,149 +321,57 @@ export interface AssistantContractProbe {
   mutationSamples?: number;
 }
 
-/**
- * Extract only complete candidate frames. Rendered code blocks may prepend
- * labels, copy controls or fences; a loose K2/END is never sufficient.
- * A frame embedded in the submitted prompt or pre-submit page is not a reply.
+/** Locate complete top-level JSON objects without interpreting their contents.
+ * Braces inside strings are data. An unfinished newer object invalidates an
+ * older candidate in the same region, so a restarted response cannot win early.
+ * Selection and host authorization are separate checks.
  */
-export function kapCandidatesFromRenderedText(rendered: string): string[] {
+export function jsonCandidatesFromRenderedText(rendered: string): string[] {
   const text = rendered.replace(/\r\n?/g, '\n').trim();
-  if (!text) return [];
-  const lines = text.split('\n');
-  const start = /^(?:K2 [TFWQ](?: [A-Za-z0-9_.:-]{1,64})?|KITT\/1)$/;
-  const finish = /^(?:K2\/END|KITT\/END)$/;
+  if (!text || text.length > 131_072) return [];
   const candidates: string[] = [];
-  if (start.test(lines[0] ?? '') && finish.test(lines.at(-1) ?? '')) candidates.push(text);
-  // Scan at most the most recent 24 starts to bound work in long conversations.
-  const beginnings: number[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (start.test(lines[i]!.trim())) beginnings.push(i);
-  }
-  // A newer unfinished frame invalidates an older complete one in the same
-  // rendered message: never prematurely accept the first K2/END.
-  const latestStart = beginnings.at(-1);
-  if (latestStart !== undefined && !lines.slice(latestStart + 1).some(line => finish.test(line.trim()))) {
-    return [];
-  }
-  for (const i of beginnings.slice(-24)) {
-    for (let j = i + 1; j < lines.length; j++) {
-      if (!finish.test(lines[j]!.trim())) continue;
-      const block = lines.slice(i, j + 1).join('\n').trim();
-      if (block.length <= 65_536 && !candidates.includes(block)) candidates.push(block);
-      break;
-    }
-  }
-  return candidates;
-}
-
-
-/**
- * Extract explicitly tagged KAP/2 compact finals from DOM text. Keep JSON
- * quotes and delimiters intact even if the renderer adds line breaks.
- * This only locates bytes; the Protocol SDK validates the resulting frame.
- */
-function compactFinalCandidates(rendered: string): string[] {
-  const text = rendered.replace(/\r\n?/g, '\n');
-  const found = new Set<string>();
-  const starts = [...text.matchAll(/(?:^|\s)K2 F[ \t\n]+@json:[ \t\n]+/g)].slice(-32);
-  for (const match of starts) {
-    const start = (match.index ?? 0) + (match[0]!.startsWith('K2') ? 0 : 1);
-    const opening = (match.index ?? 0) + match[0]!.length;
-    if (text[opening] !== '{') continue;
-    const stack: string[] = [];
-    let quote = false, escaped = false, closeAt = -1;
-    for (let i = opening; i < text.length && i - start <= 65_536; i++) {
-      const char = text[i]!;
-      if (quote) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') quote = false;
-        continue;
-      }
-      if (char === '"') { quote = true; continue; }
-      if (char === '{' || char === '[') { stack.push(char); continue; }
-      if (char === '}' || char === ']') {
-        const opening = stack.pop();
-        if (opening !== (char === '}' ? '{' : '[')) break;
-        if (!stack.length) { closeAt = i + 1; break; }
-      }
-    }
-    if (closeAt < 0) continue;
-    const end = /^[ \t\n]+K2\/END(?=$|\s)/.exec(text.slice(closeAt));
-    if (!end) continue;
-    const candidate = text.slice(start, closeAt + end[0].length).trim();
-    if (new TextEncoder().encode(candidate).length <= 65_536) found.add(candidate);
-  }
-  return [...found];
-}
-
-function strictCompactFinal(candidate: string): string | undefined {
-  const match = /^K2 F(?: |\n)@json: (\{[^\n]*\})[ \t\n]+K2\/END$/.exec(candidate);
-  if (!match) return undefined;
-  const original = match[1]!;
-  const valid = (json: string): boolean => {
-    try {
-      const parsed = parseContractJson(json);
-      return !parsed.repaired && parsed.value !== null
-        && typeof parsed.value === 'object' && !Array.isArray(parsed.value);
-    } catch { return false; }
-  };
-  if (valid(original)) return candidate;
-
-  // Some Markdown views add a backslash before "_" and "*" inside JSON
-  // strings. These are NOT legal JSON escapes: undo only those two known
-  // presentation escapes, only inside quotes, and ONLY if the entire result
-  // then passes strict JSON validation. Never rewrite proper backslashes.
-  let quoted = false, corrections = 0, repaired = '';
-  for (let i = 0; i < original.length; i++) {
-    const ch = original[i]!;
-    if (ch === '"') { quoted = !quoted; repaired += ch; continue; }
-    if (quoted && ch === '\\' && i + 1 < original.length) {
-      const next = original[i + 1]!;
-      if (next === '_' || next === '*') {
-        if (++corrections > 32) return undefined;
-        repaired += next;
-      } else repaired += ch + next;
-      i++;
+  let start = -1, depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (start < 0) {
+      if (char !== '{') continue;
+      start = i; depth = 1; quoted = false; escaped = false;
       continue;
     }
-    repaired += ch;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
+    if (char === '{' || char === '[') depth++;
+    else if (char === '}' || char === ']') {
+      if (--depth === 0) {
+        if (i - start + 1 > 65_536) return [];
+        candidates.push(text.slice(start, i + 1));
+        if (candidates.length > 24) return [];
+        start = -1;
+      }
+    }
   }
-  if (!corrections || !valid(repaired)) return undefined;
-  return candidate.slice(0, match.index! + match[0].indexOf(original))
-    + repaired + candidate.slice(match.index! + match[0].indexOf(original) + original.length);
+  return start < 0 ? candidates : [];
 }
 
 export function selectCompletedAssistantContract(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
-  const previous = new Set(baseline.map(item => item.text.trim()));
-  const previousVisible = baseline.filter(item => item.selector === '[pre-submit-visible-text]')
-    .map(item => item.text);
+  const previous = baseline.map(item => item.text.trim());
   const valid = new Map<string, string>();
-  // Nested DOM snapshots can contain the same reply multiple times.
   for (const value of new Set(samples)) {
-    // The current reply may repeat a tool example verbatim. When the
-    // submitted prompt is present, only its following region is a reply;
-    // content equality with examples/prior actions is not replay evidence.
     const fresh = afterSubmittedPrompt(value, sentPrompt, baseline);
-    const region = fresh ?? value;
-    const candidates = new Set([...kapCandidatesFromRenderedText(region), ...compactFinalCandidates(region)]);
-    for (const text of candidates) {
-      if (fresh === undefined && (previous.has(text) || previousVisible.some(old => old.includes(text))
-          || (sentPrompt && sentPrompt.includes(text)))) continue;
-      const compact = strictCompactFinal(text);
-      if (compact) {
-        // Syntax-only recognition. The host validates the canonical KAP/2
-        // frame and the result schema; the proxy grants no tool authority.
-        valid.set('compact:' + sameVisibleWords(compact), compact);
-        continue;
-      }
+    for (const text of jsonCandidatesFromRenderedText(fresh ?? value)) {
+      if (fresh === undefined && (previous.some(old => old.includes(text)) || (sentPrompt && sentPrompt.includes(text)))) continue;
       try {
-        const parsed = parseKAP(text);
-        const canonical = JSON.stringify(parsed);
-        if (!valid.has(canonical)) valid.set(canonical, text);
-      } catch { /* Invalid frames must reach host repair, never execute. */ }
+        const parsed = parseContractJson(text);
+        if (parsed.repaired || !validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+        valid.set(JSON.stringify(parsed.value), text);
+      } catch { /* Invalid JSON reaches host repair; it never grants authority. */ }
     }
   }
   return valid.size === 1 ? [...valid.values()][0] : undefined;
@@ -472,7 +379,7 @@ export function selectCompletedAssistantContract(
 
 /**
  * A stable malformed response must reach the existing contract repair loop
- * instead of turning into a transport timeout. This is NEVER an accepted KAP
+ * instead of turning into a transport timeout. This is NEVER an accepted JSON
  * frame, tool authorization or a provider-side retry.
  *
  * Only the strictly appended part of the visible pre-submit DOM is eligible.
@@ -497,29 +404,6 @@ function afterSubmittedPrompt(
   if (matches.length !== previousCount + 1) return undefined;
   const last = matches.at(-1)!;
   return current.slice(last.index! + last[0].length).trim();
-}
-
-/**
- * A Markdown renderer can replace all line breaks in a generated KAP reply
- * with spaces while retaining its indentation. Extract these delimited,
- * single-line frames only as UNTRUSTED repair input, never as parsed actions.
- * In particular, prompt examples and already-visible answers are not fresh.
- */
-function collapsedKapCandidates(rendered: string): string[] {
-  const text = rendered.replace(/\r\n?/g, '\n');
-  const candidates = new Set<string>();
-  const starts = [...text.matchAll(/(?:^|\s)K2 [TFWQ](?=\s)/g)].slice(-32);
-  for (const start of starts) {
-    const at = (start.index ?? 0) + (start[0]!.startsWith('K2') ? 0 : 1);
-    const end = text.indexOf('K2/END', at);
-    if (end < 0) continue;
-    const candidate = text.slice(at, end + 'K2/END'.length).trim();
-    if (candidate.length < 40 || candidate.length > 65_536 || candidate.includes('\n')) continue;
-    if ((candidate.match(/\bK2 [TFWQ](?=\s)/g) ?? []).length !== 1
-      || candidate.split('K2/END').length !== 2) continue;
-    candidates.add(candidate);
-  }
-  return [...candidates];
 }
 
 function sameVisibleWords(value: string): string {
@@ -561,44 +445,20 @@ export function selectFreshRenderedFrameForRepair(
     }
 
     for (const fresh of regions) {
-      const promptAnchored = fromPrompt === fresh;
       if (!fresh || sentPrompt.includes(fresh)) continue;
-      const singleFrame = (fresh.match(/\bK2 [TFWQ](?=\s)/g) ?? []).length === 1
-        && (fresh.match(/K2\/END/g) ?? []).length === 1;
-      const framed = [...new Set([...kapCandidatesFromRenderedText(fresh), ...compactFinalCandidates(fresh),
-        ...(promptAnchored && singleFrame ? collapsedKapCandidates(fresh) : [])])];
-      // WebChat can collapse Markdown soft line breaks into a single line.
-      // Such a frame is NOT valid KAP; it may only go to host repair, and
-      // only if it follows the uniquely identified submitted prompt.
-      const collapsed = fromPrompt === fresh && !fresh.includes('\n')
-        && /^K2 [TFWQ](?=\s)/.test(fresh)
-        && fresh.endsWith('K2/END')
-        && (fresh.match(/K2\/END/g) ?? []).length === 1
-        ? fresh : undefined;
-      const candidates = framed.length === 1 ? framed : collapsed ? [collapsed] : [];
+      const framed = jsonCandidatesFromRenderedText(fresh);
+      // Stable truncated JSON may be delivered as untrusted repair input only
+      // after an established prompt/baseline boundary. No extraction of nested
+      // fields or recovery of a competing action is allowed here.
+      const candidates = framed.length ? framed : fresh.startsWith('{') ? [fresh] : [];
       if (candidates.length !== 1) continue;
       const candidate = candidates[0]!;
       if (new TextEncoder().encode(candidate).length > 65_536
-          || sentPrompt.includes(candidate)
-          || previous.some(text => text.includes(candidate))) continue;
+          || sentPrompt.includes(candidate) || previous.some(text => text.includes(candidate))) continue;
       try {
-        parseKAP(candidate); // Valid frames use the strict completion path.
-      } catch {
-        found.add(candidate);
-      }
-    }
-  }
-  // Some WebChat versions render assistant text as one flat line in main/body,
-  // without role-marked nodes, a retained pre-submit baseline, or a matching
-  // last-prompt tail. We can still deliver a unique new frame for HOST REPAIR,
-  // provided its whitespace-normalized form is absent from the supplied prompt
-  // and all pre-submit snapshots. Do not authorize it as a KAP action here.
-  const echoed = sameVisibleWords(sentPrompt);
-  const oldViews = previous.map(sameVisibleWords);
-  for (const sample of samples) {
-    for (const candidate of new Set([...collapsedKapCandidates(sample), ...compactFinalCandidates(sample)])) {
-      const normalized = sameVisibleWords(candidate);
-      if (echoed.includes(normalized) || oldViews.some(old => old.includes(normalized))) continue;
+        const parsed = parseContractJson(candidate);
+        if (!parsed.repaired && validateJsonSchema(parsed.value, AGENT_RESPONSE_SCHEMA).valid) continue;
+      } catch { /* The host owns bounded JSON repair. */ }
       found.add(candidate);
     }
   }
@@ -676,7 +536,7 @@ export async function inspectCompletedAssistantContract(
         // Stay under main, require a reply-format descendant and exclude
         // composers, forms and explicitly user-owned containers. The host
         // subsequently rejects baseline answers, prompt echoes, truncated
-        // envelopes and competing KAP frames.
+        // envelopes and competing JSON objects.
         const replyNodes = Array.from(document.querySelectorAll(
           'main .markdown, main .prose, main [data-testid="message-content"], main article pre'
         )) as HTMLElement[];
@@ -698,11 +558,11 @@ export async function inspectCompletedAssistantContract(
 
         // The WebChat reply may be rendered in a code block outside the
         // legacy main/assistant nodes. textContent retains the indentation
-        // required by KAP/2 structured arrays even when CSS changes innerText.
+        // required by JSON strings and arrays even when CSS changes innerText.
         for (const code of Array.from(document.querySelectorAll('pre, [role="code"]')).slice(-12)) {
           if (code.closest('form, [contenteditable="true"], [role="textbox"], [data-message-author-role="user"], [data-role="user"]')) continue;
           const text = (code.textContent || '').trim();
-          if (text.includes('K2/END') || text.includes('KITT/END')) {
+          if (text.includes('{')) {
             responseSamples.push(text.slice(-maxChars));
           }
         }
@@ -721,10 +581,10 @@ export async function inspectCompletedAssistantContract(
         // textContent is only an untrusted fallback when innerText omits
         // a portaled response. All prompt/baseline/freshness checks still apply.
         const rawText = (root as HTMLElement | null)?.textContent || '';
-        if (rawText && rawText !== visible && rawText.includes('K2/END'))
+        if (rawText && rawText !== visible && rawText.includes('{'))
           responseSamples.push(rawText.slice(-131_072));
         const rawBody = document.body?.textContent || '';
-        if (rawBody && rawBody !== body && rawBody !== rawText && rawBody.includes('K2/END'))
+        if (rawBody && rawBody !== body && rawBody !== rawText && rawBody.includes('{'))
           responseSamples.push(rawBody.slice(-131_072));
         return { count: roots.length, structural: structural || turns.length || replyNodes.length,
           samples: responseSamples };
@@ -732,7 +592,7 @@ export async function inspectCompletedAssistantContract(
       assistantNodes += scan.count;
       structuralTurnNodes += scan.structural;
       textSamples += scan.samples.length;
-      visibleEndMarkers += scan.samples.filter(value => value.includes('KITT/END') || value.includes('K2/END')).length;
+      visibleEndMarkers += scan.samples.filter(value => value.includes('}')).length;
       samples.push(...scan.samples);
     } catch { /* Page changes while rendering; next pass can inspect it. */ }
   }
@@ -741,7 +601,7 @@ export async function inspectCompletedAssistantContract(
   const uniqueSamples = [...new Set(samples)];
   const text = selectCompletedAssistantContract(uniqueSamples, baseline, sentPrompt);
   const repairText = text ? undefined : selectFreshRenderedFrameForRepair(uniqueSamples, baseline, sentPrompt);
-  const compact = new Set(uniqueSamples.flatMap(compactFinalCandidates));
+  const compact = new Set(uniqueSamples.flatMap(jsonCandidatesFromRenderedText));
   const beforeText = baseline.map(item => sameVisibleWords(item.text));
   const freshCompactCandidates = [...compact].filter(candidate =>
     !sameVisibleWords(sentPrompt).includes(sameVisibleWords(candidate))

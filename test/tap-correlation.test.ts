@@ -8,37 +8,37 @@ import { decodeTextBody } from '../src/discovery/decoder.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 import type { ProviderPreset } from '../src/providers/catalog.js';
 
-test('cold KAP tap reconstructs text patches and continuations without promoting user echoes', () => {
-  const tool = 'K2 T kitt_runtime\noperation: repo.list\narguments:\n  path: .\nK2/END';
+test('cold JSON tap reconstructs text patches and continuations without promoting user echoes', () => {
+  const tool = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}";
   const adapter = new TapStreamAdapter(undefined, true);
   adapter.matchedResponse('https://chatgpt.com/dynamic-response', 'POST', 'text/event-stream');
   const push = (value: unknown) => adapter.push(Buffer.from('data: ' + JSON.stringify(value) + '\n\n'));
   push({messages:[{role:'assistant',content:tool}],request:{content:tool}});
-  assert.equal(adapter.completedKAP2(),undefined,'echoed conversation history is not the current answer');
+  assert.equal(adapter.completedContract(),undefined,'echoed conversation history is not the current answer');
   push({p:'',o:'add',v:{message:{author:{role:'user'},content:{parts:[tool]}}}});
-  assert.equal(adapter.completedKAP2(),undefined);
+  assert.equal(adapter.completedContract(),undefined);
   push({p:'/message/content/parts/0',o:'append',v:tool});
-  assert.equal(adapter.completedKAP2(),undefined);
+  assert.equal(adapter.completedContract(),undefined);
   push({p:'',o:'add',v:{message:{author:{role:'assistant'},content:{parts:['']}}}});
   push({p:'/message/content/parts/0',o:'append',v:tool.slice(0,24)});
   push({v:tool.slice(24,55)});
-  assert.equal(adapter.completedKAP2(),undefined);
+  assert.equal(adapter.completedContract(),undefined);
   push({o:'patch',v:[{p:'/message/content/parts/0',o:'append',v:tool.slice(55)}]});
-  assert.equal(adapter.completedKAP2(),tool);
+  assert.equal(adapter.completedContract(),tool);
   assert.equal(adapter.verification(tool),undefined,'stateful $.v must never become a learned generic leaf');
 });
 
 test('patch completion excludes metadata and competing assistant frames', () => {
-  const a = 'K2 F\nstate: done\nK2/END';
+  const a = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"state\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}";
   const adapter = new TapStreamAdapter(undefined,true);
   adapter.matchedResponse('https://chatgpt.com/dynamic-response','POST','text/event-stream');
   const push = (value: unknown) => adapter.push(Buffer.from('data: '+JSON.stringify(value)+'\n\n'));
   push({p:'/message/metadata/text',o:'append',v:a});
-  assert.equal(adapter.completedKAP2(),undefined);
+  assert.equal(adapter.completedContract(),undefined);
   push({p:'/answer',o:'replace',v:a});
-  assert.equal(adapter.completedKAP2(),a);
+  assert.equal(adapter.completedContract(),a);
   push({p:'/text',o:'replace',v:a.replace('done','different')});
-  assert.equal(adapter.completedKAP2(),undefined);
+  assert.equal(adapter.completedContract(),undefined);
 });
 
 function fakeCdp(send: (method: string) => Promise<unknown> = async () => ({})) {
@@ -375,13 +375,13 @@ test('named reply parts retain their ordered source while opaque tuples keep sep
   assert.equal(active.accumulatedText(),'next source');
 });
 
-test('a correlated complete KAP/1 reply can be recovered only after tap trust', () => {
-  const raw = 'KITT/1\nACTION FINAL\nTEXT content\nFinished\nKITT/ENDTEXT\nKITT/END';
+test('a correlated complete JSON reply can be recovered only after tap trust', () => {
+  const raw = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":\"Finished\",\"reasoning_summary\":\"\",\"loop\":null}";
   assert.equal(completedRawContract(raw, '', false), undefined);
   assert.equal(completedRawContract(raw, '', true), raw);
   assert.equal((transportPayload(raw) as { action: string }).action, 'final_response');
-  assert.equal(completedRawContract(raw.replace('KITT/END', ''), '', true), undefined);
-  const different = 'KITT/1\nACTION FINAL\nTEXT content\nDifferent\nKITT/ENDTEXT\nKITT/END';
+  assert.equal(completedRawContract(raw.slice(0,-1), '', true), undefined);
+  const different = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":\"Different\",\"reasoning_summary\":\"\",\"loop\":null}";
   assert.throws(() => selectContractResponseText(different, raw, true), /ambiguous|different/i);
 });
 
@@ -424,12 +424,12 @@ test('large prompt matches correlated POST whose JSON splits the user content', 
   } finally { turn.cancel(); await tap.detach(); }
 });
 
-test('CDP contract reader accepts only complete compact KAP/2 and rejects disagreement', () => {
-  const compact = 'K2 F\nDone.\nK2/END';
+test('CDP contract reader accepts only complete compact JSON and rejects disagreement', () => {
+  const compact = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":\"Done.\",\"reasoning_summary\":\"\",\"loop\":null}";
   assert.equal(completedRawContract(compact, '', true), compact);
-  assert.equal(completedRawContract(compact.replace('K2/END', ''), '', true), undefined);
+  assert.equal(completedRawContract(compact.slice(0,-1), '', true), undefined);
   assert.equal((transportPayload(compact) as {action: string}).action, 'final_response');
-  assert.throws(() => selectContractResponseText('K2 F\nChanged.\nK2/END', compact, true), /different valid contract/i);
+  assert.throws(() => selectContractResponseText("{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":\"Changed.\",\"reasoning_summary\":\"\",\"loop\":null}", compact, true), /different valid contract/i);
 });
 
 test('long composer prompts split into adjacent request content parts still correlate', async () => {
@@ -467,7 +467,7 @@ test('long composer prompts split into adjacent request content parts still corr
 
 test('a single segmented long-prompt anchor can correlate a uniquely scoped provider request', async () => {
   const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
-    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta:'K2 F\nstatus: done\nK2/END'}) + '\n\n').toString('base64')}
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta:"{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"status\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}"}) + '\n\n').toString('base64')}
     : {});
   const {tap} = fixtureTap(async () => cdp);
   await tap.initialize();

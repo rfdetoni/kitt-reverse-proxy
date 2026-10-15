@@ -1,6 +1,4 @@
 import { waitForDrain } from './stream-io.js';
-import { parseKAP, KAPError } from '../contracts/kap.js';
-import { KAP_VERSION_HEADER, negotiateKAPVersion, KAPNegotiationError } from '../contracts/kap-version.js';
 import { ProviderRequestState } from '../runtime/request-state.js';
 import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
@@ -89,22 +87,6 @@ function agentContractEnabled(req: Request): boolean {
 }
 
 /** A single exact version is negotiated per agent request, never inferred from model text. */
-function requireKAPVersion(req: Request, res: Response, agentContract: boolean): void {
-  const header = req.get(KAP_VERSION_HEADER);
-  if (!agentContract) {
-    if (header !== undefined) throw new AgentContractError(400, 'kap_negotiation_requires_agent_contract',
-      'X-Kitt-KAP is only valid with a declared Agent contract.');
-    return;
-  }
-  try {
-    res.setHeader(KAP_VERSION_HEADER, negotiateKAPVersion(header));
-  } catch (error) {
-    if (error instanceof KAPNegotiationError) {
-      throw new AgentContractError(400, 'kap_version_unsupported', error.message);
-    }
-    throw error;
-  }
-}
 
 function compactContractRepairMessages(plan: AgentContractPlan, candidate: string): JsonObject[] {
   const messages: JsonObject[] = [
@@ -148,7 +130,7 @@ export function buildAgentContractRepairBody(
       `ERROR_KIND: ${validationError.kind}`,
       `AFFECTED_PATHS: ${JSON.stringify(validationError.paths)}`,
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
-      'REPAIR_INSTRUCTION: Correct only the reported KAP/2 violation. Return one K2 action ending K2/END; no extra prose.',
+      'REPAIR_INSTRUCTION: Correct only the reported JSON contract violation. Return one JSON action object; no extra prose.',
       'Use the candidate as the source of intended action. Preserve it when valid; change only fields implicated by the validation error.',
       'Do not restart, re-plan, summarize, or answer the original task inside the repair response.',
       '[END KITT CONTRACT REPAIR]'
@@ -172,9 +154,7 @@ export function buildAgentContractSerializationRepairBody(
       `PREVIOUS_VALIDATION_ERROR: ${validationError.message}`,
       'SERIALIZATION_INSTRUCTION: Preserve the candidate action and data, but emit exactly one syntactically valid contract payload matching the output contract.',
       'Do not restart, re-plan, summarize, or answer the original task. Repair serialization only.',
-      'Respond with exactly one KAP/2 envelope and K2/END; never emit standalone JSON.',
-      'If the candidate is a compact structured final, preserve K2 F @json: {..} K2/END and correct only invalid JSON inside the tag.',
-      'Otherwise use key: value scalars and content<<TAG literal fields for multiline code; structured results may use indented fields or tabular rows[count]{fields}:.',
+      'Respond with exactly one JSON object containing all six contract fields; no fences or extra prose.',
       'Preserve the original action, tool name and all unaffected fields exactly.',
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
@@ -243,25 +223,6 @@ function recordContractAttempt(
 }
 
 
-/** Competing drafts are never repaired. This only permits a fresh generation
- * after an unfinished FINAL prefix and a complete restarted FINAL. */
-function isInterruptedFinalRestart(raw: string): boolean {
-  const text = raw.replace(/\r\n/g, '\n').trim();
-  const header = 'KITT/1\nACTION FINAL\n';
-  if (!text.startsWith(header)) return false;
-  const restart = text.indexOf(header, header.length);
-  if (restart < 0 || text.indexOf(header, restart + header.length) !== -1) return false;
-  const abandoned = text.slice(0, restart);
-  if (abandoned.includes('KITT/END') || /(?:^|\n)(?:TOOL |TEXT )/.test(abandoned)
-    || (abandoned.match(/(?:^|\n)ACTION /g) ?? []).length !== 1) return false;
-  try {
-    return parseKAP(text.slice(restart)).action === 'final_response';
-  } catch (error) {
-    if (error instanceof KAPError) return false;
-    throw error;
-  }
-}
-
 async function executeAgentContract(
   lease: SessionExecutionLease,
   plan: AgentContractPlan,
@@ -299,37 +260,6 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  // Do not reinterpret competing drafts. Request one independent FINAL instead.
-  if (firstValidationError.kind === 'ambiguous'
-    && isInterruptedFinalRestart(first.completion.choices[0]?.message.content ?? '')) {
-    const messages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
-    messages.push({
-      role: 'user',
-      content: '[KITT FRESH RESPONSE]\nThe preceding output was discarded because it contained an interrupted and restarted FINAL envelope. Do not repair, quote or reuse that output. Recompute the original task above independently. Return exactly one complete K2 F response ending with K2/END.\n[END KITT FRESH RESPONSE]'
-    });
-    const body: JsonObject = { ...plan.body, messages };
-    const retryOptions = contractRepairExecutionOptions(plan, options);
-    logger.trace('agent.contract.request.raw', {
-      contract_session_id: plan.sessionId, route: plan.route,
-      attempt: 'regeneration', body, options: retryOptions
-    });
-    const regenerated = await lease.execute(body, retryOptions);
-    try {
-      const transformed = transform(regenerated);
-      if (transformed.completion.choices[0]?.message.tool_calls?.length) {
-        throw new AgentContractValidationError('Regeneration must remain a FINAL response.', 'ambiguous');
-      }
-      recordAgentContractValidation(plan.contextKey, true);
-      recordContractAttempt(plan, 'regeneration', regenerated);
-      return transformed;
-    } catch (error) {
-      if (!(error instanceof AgentContractValidationError)) throw error;
-      recordAgentContractValidation(plan.contextKey, false);
-      recordContractAttempt(plan, 'regeneration', regenerated, error);
-      throw new AgentContractError(409, 'agent_contract_invalid',
-        'Fresh FINAL regeneration failed validation: ' + error.message, true, 'continue');
-    }
-  }
   if (firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
   const buildFirstRepair = firstValidationError.kind === 'syntax'
     ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
@@ -476,7 +406,6 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           reasoning_effort: reasoningEffort ?? null
         });
         const contract = agentContractEnabled(req);
-        requireKAPVersion(req, res, contract);
         const body = contract ? validatedBody : ensureAgentExecutionContext(validatedBody);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
@@ -526,7 +455,6 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           session_id: sessionId ?? null
         });
         const contract = agentContractEnabled(req);
-        requireKAPVersion(req, res, contract);
         const body = contract ? converted : ensureAgentExecutionContext(converted);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = { signal };

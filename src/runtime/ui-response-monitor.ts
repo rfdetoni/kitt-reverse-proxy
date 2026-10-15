@@ -17,15 +17,15 @@ import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
 import { sameContractText } from './read/contract-text.js';
-import { parseKAP2 } from '../contracts/kap2.js';
+import { transportPayload } from './read/contract-text.js';
 
 /** Progress from a matched CDP response, not arbitrary page mutations. */
 /** Strict model-frame validation is necessary but DOM provenance is still required. */
 export function verifiedLogicalCompletion(assistantText: string, correlatedFrame: string): boolean {
-  if (!assistantText || !correlatedFrame || !correlatedFrame.trimStart().startsWith('K2 ')) return false;
+  if (!assistantText || !correlatedFrame) return false;
   try {
-    parseKAP2(correlatedFrame);
-    parseKAP2(assistantText);
+    transportPayload(correlatedFrame, true);
+    transportPayload(assistantText, true);
     return sameContractText(assistantText, correlatedFrame);
   } catch { return false; }
 }
@@ -33,7 +33,7 @@ export function verifiedLogicalCompletion(assistantText: string, correlatedFrame
 export interface UiTransportActivity {
   lastByteAt?: number;
   receiving: boolean;
-  /** Strictly parsed current-turn K2 frame from a pretrusted, correlated CDP tap. */
+  /** Strictly parsed current-turn JSON object from a pretrusted, correlated CDP tap. */
   completedContract?: string;
 }
 
@@ -266,7 +266,7 @@ export async function awaitUiResponse(
       }
     }
 
-    // Independent DOM observer. A complete fresh KAP/2 frame is stronger
+    // Independent DOM observer. A complete fresh JSON frame is stronger
     // completion evidence than spinner/Stop-button state, which may be stale.
     // Probe the current assistant-owned turn even when the CDP tap is absent
     // or still receiving, and require a stable observation before returning.
@@ -288,7 +288,7 @@ export async function awaitUiResponse(
           durationMs: Date.now() - startedAt };
       }
       // If WebChat rendered the model reply but changed whitespace or broke
-      // KAP syntax, return only a proven FRESH, stable, delimited reply to
+      // JSON syntax, return only a proven FRESH, stable, delimited reply to
       // the existing host-owned contract repair path. This is never a parsed
       // or authorized tool action, and never an upstream replay.
       const malformed = probe?.repairText ?? '';
@@ -320,14 +320,14 @@ export async function awaitUiResponse(
 
     // A correlated HTTP response may remain open after the browser stops
     // generating. A delimiter alone is not proof: require a complete
-    // schema-valid K2 frame, prior CDP trust and the current assistant-owned
+    // schema-valid JSON object, prior CDP trust and the current assistant-owned
     // DOM turn to agree semantically before ending the *logical* wait.
     // This does not abort the web provider or replay the request.
     if (provider.id === 'chatgpt' && observedStreaming && !streaming
         && tap?.receiving && tap.completedContract) {
       if (!generationStoppedAt) generationStoppedAt = Date.now();
       const settleMs = Math.max(750, config.uiSettleMs);
-      // Do not mistake a transient K2/END during an actively arriving stream
+      // Do not mistake a transient closing brace during an actively arriving stream
       // for stable completion. Require both UI and CDP-byte quiet periods.
       if (tap.lastByteAt && Date.now() - tap.lastByteAt >= settleMs
           && Date.now() - generationStoppedAt >= settleMs) {
@@ -383,7 +383,7 @@ export async function awaitUiResponse(
       const hasCompleteContract = contractCapture
         ? Boolean(selectCompletedAssistantContract([lastText], baseline, sentPrompt))
         : false;
-      // Completed KAP frames take the fast, strictly parsed path above.
+      // Completed JSON objects take the fast, strictly parsed path above.
       // But INVALID stable answers must still reach the Agent contract repair
       // loop. Waiting for a strictly valid frame here would turn every
       // repairable syntax failure into a transport timeout.

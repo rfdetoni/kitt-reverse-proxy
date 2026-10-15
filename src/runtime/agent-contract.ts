@@ -1,6 +1,7 @@
 import { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
 export { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
-import { KAPError, parseKAP } from '../contracts/kap.js';
+import { ContractJsonError, parseContractJson } from '../util/contract-json.js';
+import { isDeepStrictEqual } from 'node:util';
 import { CONTEXT_ENVELOPE_SCHEMA } from '../contracts/context-schema.js';
 import { MAX_TOOL_ARGUMENT_BYTES } from '../contracts/provider-limits.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -17,7 +18,7 @@ const MAX_DYNAMIC_CONTEXT_BYTES = 256 * 1024;
 const MAX_TRACKED_SESSIONS = 512;
 const REINJECT_EVERY_TURNS = 8;
 const ROUTES = new Set<string>(AGENT_ROUTES);
-const NON_KAP_CONTRACT_MESSAGE = 'The model response is not a valid KAP action.';
+const INVALID_CONTRACT_MESSAGE = 'The model response is not a valid JSON action.';
 
 export type AgentContractAction = 'use_tool' | 'final_response' | 'request_workspace' | 'request_tools';
 
@@ -607,18 +608,12 @@ function sentenceCount(text: string): number {
 
 function parseStrictContract(text: string): AgentContractResponse {
   try {
-    return validateContractShape(parseKAP(text));
+    return validateContractShape(parseContractJson(text).value);
   } catch (error) {
     if (error instanceof AgentContractValidationError) throw error;
-    // Detect competing directives even when an earlier malformed line stopped parsing.
-    if (error instanceof KAPError && !/exceeds|too large|payload.*KiB/i.test(error.message)) extractRepairAnchors(text);
     throw new AgentContractValidationError(
-      `${NON_KAP_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : String(error)}`,
-      error instanceof KAPError
-        ? (/exceeds|too large|payload.*KiB/i.test(error.message) ? 'limit'
-          : /Duplicate|already assigned|conflict|Conflicting/i.test(error.message) ? 'ambiguous'
-          : 'syntax')
-        : 'shape'
+      `${INVALID_CONTRACT_MESSAGE} ${error instanceof Error ? error.message : String(error)}`,
+      error instanceof ContractJsonError ? error.kind : 'shape'
     );
   }
 }
@@ -674,25 +669,10 @@ export function transformAgentContractCompletion(
 ): OpenAiCompletion {
   const source = completion.choices[0]?.message.content;
   if (typeof source !== 'string') {
-    throw new AgentContractValidationError('Model response has no textual KAP content.');
+    throw new AgentContractValidationError('Model response has no textual JSON content.');
   }
 
   const response = parseStrictContract(source);
-  // Short operation names are resolved only against the tool schema supplied by the host.
-  if (source.trim().startsWith('K2 T ') && response.action === 'use_tool' && response.tool && !plan.tools.has(response.tool)) {
-    const operation = response.tool;
-    const matches = [...plan.tools.values()].filter(descriptor => {
-      const schema = descriptor.parameters;
-      if (!isRecord(schema) || !isRecord(schema.properties)) return false;
-      const declared = schema.properties.operation;
-      return isRecord(declared) && Array.isArray(declared.enum) && declared.enum.includes(operation)
-        && isRecord(schema.properties.arguments);
-    });
-    if (matches.length !== 1) throw new AgentContractValidationError('Unknown or ambiguous operation alias: ' + operation, 'schema', ['$/tool']);
-    response.tool = matches[0]!.name;
-    response.tool_input = { operation, arguments: response.tool_input ?? {} };
-  }
-
   validateContractResponse(response, plan);
 
   if (response.action === 'request_workspace') {
@@ -731,75 +711,34 @@ export function buildAgentContractRetryBody(plan: AgentContractPlan): JsonObject
   return { ...plan.body, messages };
 }
 
-/** Extract stable fields without interpreting directives inside literal TEXT. */
-function extractRepairAnchors(raw: string): { decisions: Map<string, string>; fields: Map<string, string> } {
-  const lines = raw.trim().split(/\r?\n/);
-  if (lines[0]?.startsWith('K2 ')) {
-    const decisions = new Map<string, string>([['K2', lines[0]]]);
-    const fields = new Map<string, string>();
-    // An incomplete compact response can only be repaired without changing its header.
-    // Preserve complete field declarations; literal contents are not interpreted as fields.
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i]!;
-      if (line === 'K2/END') continue;
-      const opening = /^([A-Za-z_][A-Za-z0-9_]*)<<([A-Z_][A-Z0-9_]{0,24})$/.exec(line);
-      if (opening) {
-        const end = lines.indexOf(opening[2]!, i + 1);
-        if (end < 0) break; // An incomplete literal is not a stable field.
-        fields.set(opening[1]!, lines.slice(i, end + 1).join('\n'));
-        i = end;
-        continue;
-      }
-      const match = /^( *)([A-Za-z_][A-Za-z0-9_]*)(?:\[[0-9]+\](?:\{[^}]+\})?)?:/.exec(line);
-      if (match) fields.set((match[1] ?? '') + (match[2] ?? ''), line);
+/** Stable JSON members are evidence, never instructions or permission grants. */
+function extractRepairAnchors(raw: string): Map<string, unknown> {
+  const fields = new Map<string, unknown>();
+  try {
+    parseContractJson(raw, (_key, value, path, stable) => {
+      if (stable) fields.set(path, value);
+    });
+  } catch (error) {
+    if (error instanceof ContractJsonError && (error.kind === 'ambiguous' || error.kind === 'limit')) {
+      throw new AgentContractValidationError(error.message, error.kind);
     }
-    return { decisions, fields };
+    // An incomplete trailing value is not an anchor. Complete preceding
+    // values still cannot be changed by serialization repair.
   }
-  const decisions = new Map<string, string>();
-  const fields = new Map<string, string>();
-  const directive = /^(STRING|INTEGER|DECIMAL|BOOLEAN|NULL|ARRAY|OBJECT|TEXT) ([A-Za-z0-9_.]+)(?: = .*)?$/;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]!;
-    const control = /^(ACTION|TOOL) (.+)$/.exec(line);
-    if (control) {
-      if (decisions.has(control[1]!)) throw new AgentContractValidationError('Conflicting contract directives cannot be repaired.', 'ambiguous');
-      decisions.set(control[1]!, control[2]!);
-      continue;
-    }
-    const match = directive.exec(line);
-    if (!match) continue;
-    const path = match[2]!;
-    if (fields.has(path)) throw new AgentContractValidationError('Competing field values cannot be repaired.', 'ambiguous');
-    if (match[1] === 'TEXT') {
-      const end = lines.indexOf('KITT/ENDTEXT', index + 1);
-      if (end < 0) break; // Truncated field: only complete preceding fields are anchored.
-      fields.set(path, lines.slice(index, end + 1).join('\n'));
-      index = end;
-    } else {
-      fields.set(path, line);
-    }
-  }
-  return { decisions, fields };
+  return fields;
 }
 
-/** Repair cannot rewrite stable decisions or fields. */
+/** Repair cannot rewrite the action, tool, or any unrelated stable field. */
 export function assertAgentRepairContinuity(candidate: string, repaired: string, error: AgentContractValidationError): void {
   const before = extractRepairAnchors(candidate);
-  // Never use substring matches: a tool argument echoed inside TEXT is not an action.
+  parseStrictContract(repaired);
   const after = extractRepairAnchors(repaired);
-  for (const [key, value] of before.decisions) {
-    if (after.decisions.get(key) !== value) {
-      throw new AgentContractValidationError('Repair changed the original action or tool.', 'ambiguous');
-    }
-  }
-  const allowed = error.paths.map(path =>
-    path.replace(/^\$\/(?:tool_input\/)?/, '').replaceAll('/', '.')
-  );
-  for (const [path, value] of before.fields) {
-    if (allowed.some(prefix => prefix === path || path.startsWith(prefix + '.'))) continue;
-    if (after.fields.get(path) !== value) {
+  for (const [path, value] of before) {
+    const decision = path === '$/action' || path === '$/tool';
+    const affected = error.paths.some(prefix => path === prefix || path.startsWith(prefix + '/') || prefix.startsWith(path + '/'));
+    if (!decision && affected) continue;
+    if (!after.has(path) || !isDeepStrictEqual(after.get(path), value)) {
       throw new AgentContractValidationError('Repair modified an unrelated field: ' + path, 'ambiguous');
     }
   }
-  parseStrictContract(repaired);
 }

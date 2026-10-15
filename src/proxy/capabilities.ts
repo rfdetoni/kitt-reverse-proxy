@@ -3,7 +3,6 @@ import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
 import { AGENT_CONTRACT_HEADER, AGENT_CONTRACT_VERSION, AGENT_ROUTE_HEADER, AGENT_ROUTES } from '../runtime/agent-contract.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
-import { KAP_VERSION_HEADER, KAP_SUPPORTED_VERSIONS } from '../contracts/kap-version.js';
 import { BROWSER_AUTOMATION_ACTIONS } from '../runtime/browser-automation.js';
 import { tracingContract } from '../observability/tracing.js';
 import { semanticLocatorContract } from '../runtime/semantic-locator.js';
@@ -91,8 +90,8 @@ export function kittAgentCliCapabilities(manager: SessionManager): JsonObject {
     native_tool_roundtrip: true,
     agent_contract: {
       version: AGENT_CONTRACT_VERSION,
-      kap_negotiation: { header: KAP_VERSION_HEADER, supported_versions: [...KAP_SUPPORTED_VERSIONS], default_version: 'KAP/2', downgrade: false },
-      verified_logical_completion: { supported: manager.transport === 'ui', requires: 'trusted-correlated-cdp+k2+current-assistant-dom+settled-ui-and-bytes', aborts_upstream: false },
+      model_response_format: 'json',
+      verified_logical_completion: { supported: manager.transport === 'ui', requires: 'trusted-correlated-cdp+json+current-assistant-dom+settled-ui-and-bytes', aborts_upstream: false },
       header: AGENT_CONTRACT_HEADER,
       route_header: AGENT_ROUTE_HEADER,
       routes: [...AGENT_ROUTES],

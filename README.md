@@ -1,151 +1,20 @@
-## Reverse Proxy 5.3.17 — capture KAP replies independently of DOM
+# Reverse Proxy 5.4.0 — JSON model wire format
 
-`--read-mode auto` now enables both the DOM reader and the passive, current-request CDP reader for ChatGPT and Gemini. A complete, unambiguous KAP/2 response can be recovered even when only the submitted prompt appears in the DOM. Stateful text patches retain their target/operation; user echoes and metadata are excluded. No provider request is replayed. [Release details](docs/RELEASE_5.3.17.md).
+Agent contract v5 accepts one JSON response object, validates the shared response schema and current host tool schema, then maps it to OpenAI-compatible results/tool calls. KAP grammar copies, negotiation, operation aliases, markers and grammar-specific repair paths are removed from the application.
 
-## Reverse Proxy 5.3.16 — current-turn DOM capture
-
-Fresh KAP actions can repeat a prompt example or a previous action when the visible transcript proves a new submitted prompt. Mutation capture retains rendered line breaks alongside source indentation. Echoes, old transcript mutations and competing frames still fail closed. See [release 5.3.16](docs/RELEASE_5.3.16.md).
-
-## Reverse Proxy 5.3.15 — WebChat KAP/2 tool-action capture
-
-The pre-submit mutation observer now accepts fresh KAP/2 tool (`K2 T`), final (`K2 F`), workspace (`K2 W`) and catalog (`K2 Q`) envelopes, instead of watching only finals. This fixes the observed handoff where plans were captured but the first operational tool action timed out under ChatGPT Web markup without assistant-role nodes. Baseline/prompt echo checks and host validation remain mandatory; the DOM never authorizes tool execution. See [capture limitations](docs/KAP2_DOM_CAPTURE_LIMITS.md) and [release 5.3.15](docs/RELEASE_5.3.15.md).
-
-## Reverse Proxy 5.3.14 — authoritative KAP/2 corpus validation
-
-In addition to CI's byte-for-byte mirror check of the Protocol TypeScript SDK parser, the proxy now executes every checked-out canonical KAP/2 valid and invalid golden case, checking decoded values and error codes. This prevents a mirror, packaging or parser-wrapper regression from silently diverging from Protocol 0.13.3. [Release notes](docs/RELEASE_5.3.14.md).
+[Release details](docs/RELEASE_5.4.0.md).
 
 ## Reverse Proxy 5.3.13 — reusable DOM mutation observer
 
 UI response monitoring now reuses one mutation observer per active page instead of repeatedly allocating/disconnecting it on each polling iteration. The observer is disconnected after two idle seconds, and the existing watchdog, freshness, DOM trust, complete-frame and cancellation contracts are preserved. [Release notes](docs/RELEASE_5.3.13.md).
 
-## Reverse Proxy 5.3.12 — bounded-cost DOM processing and tap queue
-
-The KAP/2 DOM inspector de-duplicates repeated text samples before contract parsing and freshness diagnostics. The CDP tap event queue consumes buffered chunks with a cursor instead of shifting an array on every event; buffers are compacted periodically. No capture source, provenance rule, parsing grammar or host authorization is relaxed. See [release notes](docs/RELEASE_5.3.12.md).
-
-## Reverse Proxy 5.3.11 — reliable T00 composer submission
-
-On 2026-10-14 the model planner returned successfully, but the next T00
-request never reached the chat: the rich editor changed a 12,371-character
-normalized prompt to 12,374 characters. The proxy rejected the mismatch
-before submission, and repeated retries left an unsent draft.
-
-The existing bounded rich-DOM replacement now also handles prompts above
-8 KiB (rather than only above 16 KiB). As before, the proxy verifies the
-actual text twice after replacement, refuses to keyboard-retype long
-payloads, and never submits an unreconciled draft. An additional check just
-before the send-button click detects late controlled-editor changes.
-Regression tests reproduce +3 characters in T00 and fail-closed behavior.
-
-No KAP/2 parsing, host authorization or Agent CLI retry policy changed.
-See [5.3.11 notes](docs/RELEASE_5.3.11.md).
-
-## Reverse Proxy 5.3.10 — post-submit DOM mutation capture
-
-ChatGPT Web 5.3.9 again timed out on a 64,071-character prompt: the
-page displayed three KAP terminators and one compact candidate, but all
-candidates were either prompt examples or pre-submit content. No assistant
-role/turn nodes were detected, and no model text reached the Agent.
-
-The DOM adapter now observes bounded newly added/changed text before UI
-submission, in addition to existing selector and snapshot fallbacks.
-It excludes user-owned and composer nodes, limits captured strings and
-retention, and always applies the existing prompt/baseline and canonical
-contract validation checks. It disconnects the observer after each turn.
-The browser never grants tool permissions. No proxy/parser grammar change.
-
-A real Chromium boundary test checks that a prompt-embedded KAP example
-is rejected, while a new unmarked reply is recovered even when long page
-text pushes it outside the 131 KiB snapshot tail. See
-[5.3.10 release notes](docs/RELEASE_5.3.10.md).
-
-## Reverse Proxy 5.3.9 — KAP/2 compact final accepted by the contract validator
-
-WebChat 5.3.8 captured an actual `K2 F @json: {...}\nK2/END`
-planner reply but the proxy's independent KAP/2 parser rejected the new
-header with `E_HEADER`, initiating an unnecessary model-repair turn.
-The second turn then failed DOM freshness detection and timed out.
-
-Mirror the canonical Protocol 0.13.3 `compactJsonFinal` grammar and strict
-duplicate-key JSON reader into the proxy's internal fast-path validator.
-Keep 64 KiB, depth, array and Unicode limits unchanged. The proxy now
-accepts either a single-line or line-delimited tagged structured final,
-but it does **not** decide whether the `items` list satisfies the
-planner's required FINAL entry; that belongs to the Agent host.
-
-Regression tests cover completed framing through `parseKAP` and
-`transportPayload`, invalid keys/escapes, flattened legacy output and
-existing indented format. Refer to [release notes](docs/RELEASE_5.3.9.md).
-
-The DOM extractor additionally reverses only invalid Markdown presentation
-escapes before underscores/asterisks inside compact JSON strings. It does so
-only when the entire normalized candidate passes the strict JSON syntax
-check; all other invalid escapes and duplicate fields still fail closed.
-KAP tool authorization and host semantic validation are unchanged.
-
-## Reverse Proxy 5.3.8 — compact KAP/2 DOM capture
-
-The WebChat reader can extract a bounded tagged `K2 F @json: {...} K2/END`
-reply even when assistant-role selectors disappear and HTML folds whitespace.
-JSON-aware boundaries prevent interpreting `K2/END` inside JSON strings
-as a terminator. Valid strict syntax may complete the transport; malformed
-bytes are forwarded only through the host validation/repair flow.
-
-The proxy still rejects echoed prompts, stale snapshots and competing frames.
-The canonical kitt-protocol SDK remains responsible for semantic validation
-and authorization. Test cases cover long prompt examples and invalid escapes.
-
-# Reverse Proxy 5.3.7 — KAP/2 flattened DOM response capture
-
-WebChat sometimes renders a complete KAP/2 answer on one physical line and
-without role-labeled assistant nodes. The DOM reader recognizes only a unique,
-bounded, delimited candidate absent from the submitted prompt and pre-submit
-snapshot. It passes malformed text **only as untrusted content to the existing
-strict protocol/repair path**, never as a validated tool action. The proxy does
-not infer field boundaries, insert indentation or authorize host tools.
-
-Regression tests cover a large prompt containing an earlier KAP example,
-flattened assistant reply, duplicated visual snapshots, prior answer replay
-and competing frames. DOM-only capture is unchanged.
-
-KAP/2 structural parsing, maximum frame size and host capability checks
-remain strict; the browser cannot restore original line breaks after they have
-actually been discarded. See [KAP/2 capture limitations](docs/KAP2_DOM_CAPTURE_LIMITS.md).
-
-# Reverse Proxy 5.3.6 — DOM capture after transcript virtualization
-
-When the ChatGPT Web UI replaces earlier conversation DOM and loses the previous visible baseline, the reader can use the just-submitted prompt tail to locate a fresh single rendered KAP/2 reply. A response whose line breaks were collapsed is forwarded only to the host-owned contract-repair loop; no malformed KAP is authorized as a tool action. Strict completion, prompt-echo guards, and DOM-only defaults remain in effect. See [release 5.3.6](docs/RELEASE_5.3.6.md).
-
 # Reverse Proxy 5.3.5 — DOM final response recovery
 
 The authenticated ChatGPT Web incident on 5.3.4 showed a complete browser response but `response_chars=0`, with two visible DOM text samples and a terminal marker. This release broadens the DOM reader to include portal-rendered body replies; records consistent pre-submit snapshots before both initial and repair requests; returns only fresh, stable, structurally delimited but malformed model text to the existing host contract repair flow (not as a valid response); and adds counts-only diagnostics. CDP stays disabled for ChatGPT/Gemini auto mode. See [release 5.3.5](docs/RELEASE_5.3.5.md).
 
-# Reverse Proxy 5.3.4 — DOM-only default for ChatGPT and Gemini Web
-
-After authenticated browser incidents where the model displayed a complete `K2/END` frame but the proxy timed out, UI `readMode=auto` uses only the DOM for ChatGPT and Gemini; the CDP tap is not connected, armed or polled. `--read-mode tap` remains explicit opt-in for diagnostics. DOM KAP capture now handles model-response elements, markdown wrappers and a bounded rendered conversation fallback for both providers, with strict KAP parsing and a pre-submit baseline so stale frames and prompt examples cannot be replayed. See [5.3.4 release notes](docs/RELEASE_5.3.4.md).
-
-# Reverse Proxy 5.3.3 — independent CDP/DOM completion observers
-
-The browser response reader now races two observers: the correlated network CDP tap and the assistant-owned DOM. The first source with a **complete, structurally valid and stable KAP/2 response** completes the logical turn without waiting for the other observer or for the upstream HTTP stream to close. A long, segmented prompt may correlate through one unique 192-character anchor only on a high-confidence, authorized provider endpoint and only when no competing candidate exists. DOM fallback recognizes answer markup that lost ChatGPT's role/turn attributes. No model text can authorize a tool or bypass host validation. See [release 5.3.3](docs/RELEASE_5.3.3.md).
-
-# Reverse Proxy 5.3.2 — KAP/2 negotiation and verified logical completion
-
-Agent HTTP routes negotiate exact `X-Kitt-KAP: KAP/2` and advertise supported versions via capabilities; unknown/ambiguous versions are rejected before submission. When a pretrusted, correlated CDP stream contains a complete strict K2 frame, the browser has stopped generating, and the current assistant-owned DOM turn agrees, the reader may finish its logical wait without requiring the CDP transport to close. It does not abort active generation or grant tool authority. See [5.3.2 release notes](docs/RELEASE_5.3.2.md).
-
 # Reverse Proxy 5.3.1 — bounded ChatGPT capture recovery
 
 Long submitted prompts with split request content now correlate without weakening strict anchors. A completed answer in the newest assistant-style conversation turn can be validated even if role attributes changed. See [5.3.1 release notes](docs/RELEASE_5.3.1.md). Live-site reproduction remains a required operator acceptance gate.
-
-## 5.3.0 — KAP/2 strict TypeScript contract
-
-The proxy uses canonical Protocol 0.13.1 parsers and typed diagnostics. Quoted keys, explicit empty values, object arrays, UTF-8 literal lengths and summary fields are accepted without bypassing host tool schemas or authorization. CDP/DOM recovery continues to recognize completed K2 envelopes.
-
-## 5.2.1 — KAP/2 stream and repair hardening
-
-Strictly recover finished K2 frames from trusted DOM and CDP sources, reject competing actions in plain text, and preserve complete source literals during repair. The canonical parser is pinned to Protocol 0.12.1.
-
-## KAP/2 — compact model output (5.2.0)
-
-The proxy now requests strict `K2 T` or `K2 F` text, with a bounded TOON-inspired grammar, tabular plan fields, literal code blocks and host-schema-validated operation aliases. The authoritative grammar and safety contract are documented in [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP2.md). Host-side validation remains mandatory.
 
 ## Release 5.1.4 — Native textarea handling for large WebChat prompts
 
@@ -158,14 +27,6 @@ Prevents the current Agent task from being replayed as browser history, verifies
 ## Release 5.1.2 — Safe regeneration of interrupted FINAL envelopes
 
 For a truncated Gemini `ACTION FINAL` followed by a new complete FINAL, the proxy discards both competing drafts and requests a fresh, independently validated response within the existing retry budget. Other ambiguities and tool actions still fail closed. Prompt instructions consistently name `KITT/1`. See [release notes](docs/RELEASE_5.1.2.md).
-
-## Release 5.1.1 — Reject competing actions before repair
-
-Malformed KAP that contains competing ACTION/TOOL directives or field assignments is rejected before an upstream repair request. Literal TEXT bodies remain opaque. See [release notes](docs/RELEASE_5.1.1.md).
-
-## 5.1.0 — KAP/1 WebChat action wire
-
-Agent contract v4 prompts the WebChat for bounded KAP/1 textual actions instead of nested JSON envelopes; the host still validates permissions and emits OpenAI-compatible tool calls. The wire grammar is maintained by [kitt-protocol](https://github.com/rfdetoni/kitt-protocol/blob/main/docs/KAP.md).
 
 ## Release 5.0.2 — Select an enabled chat send control
 
@@ -710,10 +571,10 @@ Provider resilience events are available in JSON and Prometheus output through `
 
 UI providers still send every message through the authenticated browser UI exactly once. Response reading now has a conservative hybrid path:
 
-- the DOM monitor and passive CDP reader run independently; either can complete a strict, current-request KAP/2 frame;
+- the DOM monitor and passive CDP reader run independently; either can complete a strict, current-request JSON object;
 - `--read-mode auto` attaches a passive Chromium CDP stream tap and observes candidate response bytes without modifying requests, responses, cookies or page JavaScript;
 - a newly learned tap remains in **shadow** mode until its decoded text matches the final DOM text for several consecutive turns (default: 3);
-- only a trusted tap may emit early streaming deltas; a complete, unique, strictly parsed KAP/2 frame from a correlated answer field can also win in shadow mode; other buffered JSON contracts still require calibrated trust;
+- only a trusted tap may emit early streaming deltas; a complete, unique, strictly parsed JSON object from a correlated answer field can also win in shadow mode; other buffered JSON contracts still require calibrated trust;
 - any attach, match, first-byte, stall, decode, verification or stream failure demotes the tap and continues through the DOM without resending the prompt;
 - tap failures use an independent per-session circuit breaker, so a broken tap never marks the provider itself unavailable;
 - `--read-mode dom` is the global kill switch and does not attach CDP at all.
