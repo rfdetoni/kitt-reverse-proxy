@@ -73,23 +73,54 @@ async function waitForDomMutation(
       window.setTimeout(() => resolve(false), waitMs);
       return;
     }
+    type DomWatcher = {
+      root: Element;
+      observer: MutationObserver;
+      listeners: Set<() => void>;
+      idleTimer: number | undefined;
+    };
+    const doc = document as Document & { __kittDomWatcher?: DomWatcher };
+    let watcher = doc.__kittDomWatcher;
+    if (!watcher || watcher.root !== root) {
+      watcher?.observer.disconnect();
+      const listeners = new Set<() => void>();
+      const observer = new MutationObserver(() => {
+        for (const wake of listeners) wake();
+      });
+      observer.observe(root, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['aria-busy', 'data-state', 'class']
+      });
+      watcher = { root, observer, listeners, idleTimer: undefined };
+      doc.__kittDomWatcher = watcher;
+    }
+    if (watcher.idleTimer !== undefined) {
+      window.clearTimeout(watcher.idleTimer);
+      watcher.idleTimer = undefined;
+    }
+    const current = watcher;
     let settled = false;
     let timer = 0;
+    const wake = (): void => finish(true);
     const finish = (changed: boolean): void => {
       if (settled) return;
       settled = true;
-      observer.disconnect();
       window.clearTimeout(timer);
+      current.listeners.delete(wake);
+      if (current.listeners.size === 0) {
+        current.idleTimer = window.setTimeout(() => {
+          if (doc.__kittDomWatcher === current && current.listeners.size === 0) {
+            current.observer.disconnect();
+            delete doc.__kittDomWatcher;
+          }
+        }, 2_000);
+      }
       resolve(changed);
     };
-    const observer = new MutationObserver(() => finish(true));
-    observer.observe(root, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['aria-busy', 'data-state', 'class']
-    });
+    current.listeners.add(wake);
     timer = window.setTimeout(() => finish(false), waitMs);
   }), bounded).catch(() => false);
   if (!signal) return mutation;

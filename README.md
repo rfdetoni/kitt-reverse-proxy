@@ -1,3 +1,7 @@
+## Reverse Proxy 5.3.13 — reusable DOM mutation observer
+
+UI response monitoring now reuses one mutation observer per active page instead of repeatedly allocating/disconnecting it on each polling iteration. The observer is disconnected after two idle seconds, and the existing watchdog, freshness, DOM trust, complete-frame and cancellation contracts are preserved. [Release notes](docs/RELEASE_5.3.13.md).
+
 ## Reverse Proxy 5.3.12 — bounded-cost DOM processing and tap queue
 
 The KAP/2 DOM inspector de-duplicates repeated text samples before contract parsing and freshness diagnostics. The CDP tap event queue consumes buffered chunks with a cursor instead of shifting an array on every event; buffers are compacted periodically. No capture source, provenance rule, parsing grammar or host authorization is relaxed. See [release notes](docs/RELEASE_5.3.12.md).
