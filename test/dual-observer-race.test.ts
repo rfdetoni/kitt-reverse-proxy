@@ -3,19 +3,20 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { HybridUiResponseReader } from '../src/runtime/read/hybrid-reader.js';
 import { awaitUiResponse } from '../src/runtime/ui-response-monitor.js';
+import { UiTimeoutError, ManualInterventionRequiredError } from '../src/runtime/ui-errors.js';
 import { detectProvider } from '../src/providers/catalog.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 
 const answer = "{\"action\":\"final_response\",\"tool\":null,\"tool_input\":null,\"content\":{\"state\":\"done\"},\"reasoning_summary\":\"\",\"loop\":null}";
 const prompt = 'CURRENT UNIQUE WORKSPACE TASK';
 
-function harness(dom: typeof awaitUiResponse, wire = answer, mode: 'auto' | 'tap' = 'tap') {
+function harness(dom: typeof awaitUiResponse, wire = answer, mode: 'auto' | 'tap' = 'tap', failedSse = false) {
   const cdp = new EventEmitter() as EventEmitter & {
     send: (method: string) => Promise<unknown>;
     detach: () => Promise<void>;
   };
   cdp.send = async method => method === 'Network.streamResourceContent'
-    ? { bufferedData: Buffer.from('data: ' + JSON.stringify({delta: wire}) + '\n\n')
+    ? { bufferedData: Buffer.from(failedSse ? wire : 'data: ' + JSON.stringify({delta: wire}) + '\n\n')
         .toString('base64') }
     : {};
   cdp.detach = async () => {};
@@ -36,7 +37,7 @@ function harness(dom: typeof awaitUiResponse, wire = answer, mode: 'auto' | 'tap
     cdp.emit('Network.responseReceived', { requestId: 'unique',
       response: {url, status:200, mimeType:'text/event-stream',
         headers: {'content-type': 'text/event-stream'} } });
-    cdp.emit('Network.loadingFinished', {requestId: 'unique'});
+    cdp.emit(failedSse ? 'Network.loadingFailed' : 'Network.loadingFinished', {requestId: 'unique'});
   };
   return { reader, push };
 }
@@ -91,3 +92,29 @@ test('an incomplete tap frame cannot win over a valid DOM answer', async () => {
   assert.equal(result.readDiagnostics.source, 'dom');
 });
 
+
+
+test('SSE DONE preserves a complete assistant action after a transport abort without accepting partial or metadata data', async () => {
+  const frame = (value: unknown) => 'data: '+JSON.stringify(value)+'\n\n';
+  const message = frame({p:'',o:'add',v:{message:{id:'current',author:{role:'assistant'},channel:'final',content:{parts:[]}}}});
+  const patch = (text: string) => frame({v:[{p:'/message/content/parts/0',o:'append',v:text}]});
+  const complete = message+patch('<escape>'+answer+'</escape>');
+  for (const [wire,accepted,intervention] of [
+    [complete+'data: [DONE]\n\n',true,false],
+    [complete,false,false],
+    [message+patch('<escape>'+answer.slice(0,-2))+'data: [DONE]\n\n',false,false],
+    [message+frame({v:[{p:'/message/metadata/model_dil_v2/constants',o:'append',v:{'0':answer}}]})+'data: [DONE]\n\n',false,false],
+    [complete+'data: [DONE]\n\n',false,true]
+  ] as const) {
+    const failure = intervention ? new ManualInterventionRequiredError('login required') : new UiTimeoutError('missing DOM');
+    const dom = (async () => {await new Promise(resolve=>setTimeout(resolve,200));throw failure;}) as typeof awaitUiResponse;
+    const {reader,push} = harness(dom,wire,'auto',true);
+    await reader.initialize();reader.arm(prompt);
+    const pending = reader.read([],prompt,undefined,undefined,true);
+    push();
+    if (accepted) {
+      const result = await bounded(pending);
+      assert.equal(result.text,answer);assert.equal(result.readDiagnostics.source,'tap');
+    } else await assert.rejects(bounded(pending),error=>error===failure);
+  }
+});

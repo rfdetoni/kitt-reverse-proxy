@@ -1,3 +1,7 @@
+# Reverse Proxy 5.4.3 — ordered assistant patches and protocol EOF
+
+Captures implicit patch batches and complete escape-wrapped assistant JSON while excluding thoughts, user echoes and renderer metadata. A complete correlated response with SSE `[DONE]` survives a subsequent connection failure; partial or ambiguous data remains rejected. [Release details](docs/RELEASE_5.4.3.md).
+
 # Reverse Proxy 5.4.2 — exclude prompt examples and wait for generation
 
 Rendered JSON examples remain excluded when the browser changes token whitespace. DOM capture waits for generation to stop, and the next request collects its baseline and edits the composer only after the preceding reply is complete. Cancellation and busy timeout preserve the draft. [Release details](docs/RELEASE_5.4.2.md).

@@ -15,9 +15,10 @@ import { sendUiPrompt } from '../dist/runtime/ui-interaction.js';
 import { awaitUiResponse } from '../dist/runtime/ui-response-monitor.js';
 import { UiAutomationError } from '../dist/runtime/ui-errors.js';
 
-for (const [kind, tool] of [
+for (const [kind, tool, batched] of [
   ['Agent tool action', "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"\",\"loop\":null}"],
-  ['bare JSON planning result', JSON.stringify({items:[{local_id:'T01',title:'Inspect the workspace'}]})]
+  ['bare JSON planning result', JSON.stringify({items:[{local_id:'T01',title:'Inspect the workspace'}]})],
+  ['batched assistant action with a completed SSE body and failed connection', JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'',loop:null}),true]
 ]) {
 test('auto captures one network-only '+kind+' when DOM contains only the prompt', {timeout: 20_000}, async () => {
   const prompt = 'Inspect the current workspace using the available host tools. Example:\n' + tool;
@@ -56,7 +57,12 @@ test('auto captures one network-only '+kind+' when DOM contains only the prompt'
     response.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-store'});
     response.flushHeaders();
     await delay(150);
-    const frames = [
+    const frames = batched ? [
+      {p:'',o:'add',v:{message:{id:'analysis',author:{role:'assistant'},channel:'analysis',content:{content_type:'thoughts',thoughts:[{content:tool}]}}}},
+      {p:'',o:'add',v:{message:{id:'final',author:{role:'assistant'},channel:'final',content:{parts:['<escape>'+tool.slice(0,20)]}}}},
+      {v:[{p:'/message/content/parts/0',o:'append',v:tool.slice(20)+'</escape>'},
+        {p:'/message/metadata/model_dil_v2/constants',o:'append',v:{'0':'{"untrusted_metadata":true}'}}]}
+    ] : [
       {p:'',o:'add',v:{message:{author:{role:'user'},content:{parts:[tool]}}}},
       {p:'',o:'add',v:{message:{author:{role:'assistant'},content:{parts:['']}}}},
       {p:'/message/content/parts/0',o:'append',v:tool.slice(0,20)},
@@ -64,7 +70,8 @@ test('auto captures one network-only '+kind+' when DOM contains only the prompt'
       {p:'/message/metadata/state',o:'replace',v:'finished'}
     ];
     for (const frame of frames) { response.write('data: '+JSON.stringify(frame)+'\n\n'); await delay(30); }
-    response.end('data: [DONE]\n\n');
+    if (batched) response.write('data: [DONE]\n\n',()=>setTimeout(()=>response.destroy(),20));
+    else response.end('data: [DONE]\n\n');
   });
   server.listen(0,'127.0.0.1');
   await once(server,'listening');

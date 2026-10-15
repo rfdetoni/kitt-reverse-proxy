@@ -165,6 +165,20 @@ export class HybridUiResponseReader {
       await reconciler.fallback(reason);
     };
 
+    const preserveTerminalResponse = (): boolean => {
+      // CDP may report a failed connection after the provider sent its logical
+      // EOF. Only a complete assistant object plus an observed SSE DONE survives;
+      // byte limits, decode failures, cancellation and partial answers do not.
+      if (!preferRawContract || !matched || tapFailure || deliveryFailed || signal?.aborted
+          || !adapter.hasTerminalFrame() || !adapter.completedContract()) return false;
+      try { adapter.end(); } catch { return false; }
+      if (!adapter.hasTerminalFrame() || !adapter.completedContract()) return false;
+      adapterEnded = true;
+      logger.debug('ui.tap.terminal_response_preserved', { provider_id: this.provider?.id ?? 'unknown', bytes: tapBytes });
+      considerTapCompletion();
+      return true;
+    };
+
     const tapTask = (async () => {
       for await (const event of turn.events()) {
         if (event.type === 'matched') {
@@ -192,6 +206,7 @@ export class HybridUiResponseReader {
         }
         if (event.type === 'end') {
           if (!event.ok) {
+            if (preserveTerminalResponse()) continue;
             await failTap('stream_aborted');
             continue;
           }
@@ -208,6 +223,7 @@ export class HybridUiResponseReader {
           considerTapCompletion();
           continue;
         }
+        if (event.reason === 'stream_aborted' && preserveTerminalResponse()) continue;
         logger.debug('ui.tap.fallback', { provider_id: this.provider?.id ?? 'unknown', reason: event.reason, bytes: tapBytes });
         await failTap(event.reason);
       }

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -513,3 +514,24 @@ test('competing partially matched requests fail closed instead of racing the wro
   } finally { turn.cancel(); await tap.detach(); }
 });
 
+
+
+test('recorded assistant action survives batched patches, escape presentation and metadata copies', () => {
+  const action = readFileSync(new URL('../../test/fixtures/chatgpt-patch-action.json',import.meta.url),'utf8').trim();
+  const adapter = new TapStreamAdapter(undefined,true);
+  adapter.matchedResponse('https://chatgpt.com/dynamic-response','POST','text/event-stream');
+  const push = (value: unknown) => adapter.push(Buffer.from('event: delta\ndata: '+JSON.stringify(value)+'\n\n'));
+  const other = JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'metadata is not an answer',reasoning_summary:'',loop:null});
+  push({p:'',o:'add',v:{message:{id:'reasoning',author:{role:'assistant'},channel:'analysis',content:{content_type:'thoughts',thoughts:[{content:other}]}}}});
+  assert.equal(adapter.completedContract(),undefined);
+  push({p:'',o:'add',v:{message:{id:'final',author:{role:'assistant'},channel:'final',content:{parts:['<escape>'+action.slice(0,40)]}}}});
+  push({v:[{p:'/message/content/parts/0',o:'append',v:action.slice(40,-24)},
+    {p:'/message/metadata/model_dil_v2/fallbackMarkdown',o:'append',v:other}]});
+  assert.equal(adapter.completedContract(),undefined,'an unfinished presentation wrapper is not a complete reply');
+  push({v:[{p:'/message/content/parts/0',o:'append',v:action.slice(-24)+'</escape>'},
+    {p:'/message/metadata/model_dil_v2/constants',o:'append',v:{'0':other}},
+    {p:'/message/status',o:'replace',v:'finished_successfully'}]});
+  assert.equal(adapter.completedContract(),action,'only ordered assistant message bytes may supply the action');
+  push({p:'',o:'add',v:{message:{id:'competing',author:{role:'assistant'},channel:'final',content:{parts:[other]}}}});
+  assert.equal(adapter.completedContract(),undefined,'two current-turn answers remain ambiguous');
+});

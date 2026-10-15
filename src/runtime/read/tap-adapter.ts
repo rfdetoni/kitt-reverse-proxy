@@ -1,3 +1,4 @@
+import { isJsonObject } from '../../util/json.js';
 import { sameContractText } from './contract-text.js';
 import { parseContractJson } from '../../util/contract-json.js';
 import { decodeTextBody, sseEventData } from '../../discovery/decoder.js';
@@ -65,6 +66,7 @@ export class TapStreamAdapter {
   private frameBuffer = '';
   private rawText = '';
   private parsedEvents = 0;
+  private terminalFrame = false;
   private learnedText = '';
   private learnedSamples = 0;
   private learnedInvalid = false;
@@ -72,6 +74,8 @@ export class TapStreamAdapter {
   private readonly patches = new Map<string, TapTextState>();
   private patchTarget: { path: string; mode: 'delta' | 'snapshot' } | undefined;
   private patchRole: string | undefined;
+  private patchChannel: string | undefined;
+  private patchMessageId = '';
 
   constructor(private readonly profile?: TapProfile, private readonly contractMode = false) {}
 
@@ -164,7 +168,12 @@ export class TapStreamAdapter {
     const valid = new Map<string, string>();
     for (const source of sources) {
       if (source.invalid || !source.samples || source.score < 80) continue;
-      const value = source.text.trim();
+      let value = source.text.trim();
+      // Strip only the complete outer presentation wrapper. Literal tags
+      // inside JSON strings remain source data; metadata is never a fallback.
+      if (value.startsWith('<escape>') && value.endsWith('</escape>')) {
+        value = value.slice(8, -9).trim();
+      }
       try {
         const parsed = parseContractJson(value);
         if (parsed.repaired || parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) continue;
@@ -174,6 +183,8 @@ export class TapStreamAdapter {
     }
     return valid.size === 1 ? [...valid.values()][0] : undefined;
   }
+
+  hasTerminalFrame(): boolean { return this.terminalFrame; }
 
   /** Bounded failure evidence; response bytes are opt-in under full-content logging. */
   captureDiagnostics(includeText = false) {
@@ -185,7 +196,8 @@ export class TapStreamAdapter {
     return {
       framing: this.matched?.framing, parsed_events: this.parsedEvents,
       buffered_chars: this.frameBuffer.length, raw_chars: this.rawText.length,
-      patch_role: this.patchRole, candidate_count: sources.length,
+      patch_role: this.patchRole, patch_channel: this.patchChannel,
+      terminal_frame: this.terminalFrame, candidate_count: sources.length,
       candidates: sources.sort((a, b) => b.score - a.score || b.samples - a.samples)
         .slice(0, 4).map(source => ({
           path: source.path.slice(0, 256), score: source.score, samples: source.samples,
@@ -252,7 +264,9 @@ export class TapStreamAdapter {
 
   private consumeSseBlock(block: string): string[] {
     const data = sseEventData(block);
-    if (data === undefined || data === '[DONE]') return [];
+    if (data === undefined) return [];
+    if (data === '[DONE]') { this.terminalFrame = true; return []; }
+    this.terminalFrame = false;
     this.parsedEvents += 1;
     return this.consumeValue(parseJson(data) ?? data);
   }
@@ -267,15 +281,6 @@ export class TapStreamAdapter {
   }
 
   private consumeValue(value: JsonValue): string[] {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const envelope = value.v && typeof value.v === 'object' && !Array.isArray(value.v) ? value.v : value;
-      const message = envelope.message;
-      if (message && typeof message === 'object' && !Array.isArray(message)) {
-        const author = message.author;
-        const role = message.role ?? (author && typeof author === 'object' && !Array.isArray(author) ? author.role : undefined);
-        if (typeof role === 'string') this.patchRole = role;
-      }
-    }
     if (this.contractMode && this.consumePatch(value)) return [];
     if (this.profile) {
       const deltas: string[] = [];
@@ -315,18 +320,55 @@ export class TapStreamAdapter {
     return [];
   }
 
+  private observeMessage(value: Record<string, JsonValue>): boolean {
+    const envelope = isJsonObject(value.v) && (value.p === '' || (value.p === undefined && value.o === undefined))
+      ? value.v : value;
+    const message = value.p === '/message' ? value.v : envelope.message;
+    if (!isJsonObject(message)) return false;
+    const author = message.author;
+    const role = message.role ?? (isJsonObject(author) ? author.role : undefined);
+    if (typeof role !== 'string') return false;
+    this.patchRole = role;
+    this.patchChannel = typeof message.channel === 'string' ? message.channel : undefined;
+    if (typeof message.id === 'string' && message.id.length > 256) throw new Error('Tap message identity limit exceeded');
+    this.patchMessageId = typeof message.id === 'string' ? message.id : '';
+    this.patchTarget = undefined;
+    if (!/^(?:assistant|model)$/i.test(role) || /^(?:analysis|commentary)$/i.test(this.patchChannel ?? '')) return true;
+    const content = message.content;
+    if (!isJsonObject(content)) return false;
+    if (content.content_type === 'thoughts') return true;
+    if (!Array.isArray(content.parts)) return false;
+    if (content.parts.length > 128) throw new Error('Tap message part limit exceeded');
+    content.parts.forEach((part, index) => {
+      if (typeof part === 'string') this.applyPatchText('/message/content/parts/' + index, part, 'snapshot');
+    });
+    return true;
+  }
+
+  private applyPatchText(path: string, text: string, mode: 'delta' | 'snapshot', score = 100): void {
+    const key = this.patchMessageId + ':' + path;
+    if (!this.patches.has(key) && this.patches.size >= 128) throw new Error('Tap patch candidate limit exceeded');
+    const state = this.patches.get(key) ?? { text: '', score, samples: 0 };
+    applyTapPiece(state, text, mode);
+    if (state.text.length > 65_536) { state.text = ''; state.invalid = true; }
+    this.patches.set(key, state);
+  }
+
   /** Stateful text patches are not independent $.v leaves. Preserve their
    * declared target and operation, including continuation events, per turn. */
   private consumePatch(value: JsonValue, depth = 0): boolean {
-    if (!value || Array.isArray(value) || typeof value !== 'object') return false;
+    if (!isJsonObject(value)) return false;
+    if (this.observeMessage(value)) return true;
     const explicit = Object.hasOwn(value, 'p') || Object.hasOwn(value, 'o');
-    if (!explicit && (!this.patchTarget || !Object.hasOwn(value, 'v'))) return false;
-    if (value.o === 'patch') {
+    const batch = !explicit && Array.isArray(value.v) && value.v.length > 0
+      && value.v.every(part => isJsonObject(part) && (Object.hasOwn(part, 'p') || Object.hasOwn(part, 'o')));
+    if (value.o === 'patch' || batch) {
       this.patchTarget = undefined;
       if (depth >= 4 || !Array.isArray(value.v) || value.v.length > 128) throw new Error('Tap patch limit exceeded');
       for (const patch of value.v) this.consumePatch(patch, depth + 1);
       return true;
     }
+    if (!explicit && (!this.patchTarget || !Object.hasOwn(value, 'v'))) return false;
     if (explicit) {
       const target = typeof value.p === 'string' ? value.p : this.patchTarget?.path;
       const mode = value.o === 'append' ? 'delta' : value.o === 'replace' ? 'snapshot' : undefined;
@@ -334,20 +376,17 @@ export class TapStreamAdapter {
         ? { path: target, mode } : undefined;
     }
     const target = this.patchTarget;
-    // Full message snapshots inside a patch envelope still use the ordinary
-    // role-aware field extractor. Only string patches have stateful text.
+    // Message snapshots are seeded above. Only string patches update an
+    // ordered text source; metadata objects never become source text.
     if (!target || typeof value.v !== 'string') return explicit && typeof value.v === 'string';
-    if (this.patchRole && !/^(?:assistant|model)$/i.test(this.patchRole)) return true;
+    if ((this.patchRole && !/^(?:assistant|model)$/i.test(this.patchRole))
+        || /^(?:analysis|commentary)$/i.test(this.patchChannel ?? '')) return true;
     const segments = target.path.slice(1).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
-    if (segments.length > 20 || segments.some(part => /^(?:user|system|developer|tool|messages|history|prompt|input|request|metadata|citations?|attachments?)$/i.test(part))) return true;
+    if (segments.length > 20 || segments.some(part => /^(?:user|system|developer|tool|messages|history|prompt|input|request|metadata|thoughts|analysis|reasoning|citations?|attachments?)$/i.test(part))) return true;
     const path = segments.reduce((path, part) => appendJsonPath(path, /^\d+$/.test(part) ? Number(part) : part), '$');
     const score = tapPathScore(path);
     if (score < 80) return true;
-    if (!this.patches.has(target.path) && this.patches.size >= 128) throw new Error('Tap patch candidate limit exceeded');
-    const state = this.patches.get(target.path) ?? { text: '', score, samples: 0 };
-    applyTapPiece(state, value.v, target.mode);
-    if (state.text.length > 65_536) { state.text = ''; state.invalid = true; }
-    this.patches.set(target.path, state);
+    this.applyPatchText(target.path, value.v, target.mode, score);
     return true;
   }
 }

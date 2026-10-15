@@ -35,6 +35,7 @@ function terminalKey(path: string): string {
 export function tapPathScore(path: string): number {
   const lower = path.toLowerCase();
   const terminal = terminalKey(path);
+  if (/\.(thoughts|analysis|reasoning|reasoning_content)\b/i.test(lower)) return -1;
   if (STRUCTURAL_KEYS.has(terminal)) return -1;
 
   let score = PREFERRED_KEY_SCORE[terminal] ?? 0;
@@ -101,6 +102,7 @@ export function collectTapStringLeaves(value: JsonValue): Map<string, TapStringL
       // A correlated provider response may echo the submitted user message.
       // Its content is not an assistant answer, even if it is valid JSON.
       if (typeof role === 'string' && /^(?:user|system|developer|tool)$/i.test(role)) return;
+      if (typeof child.channel === 'string' && /^(?:analysis|commentary)$/i.test(child.channel)) return;
       for (const [key, item] of Object.entries(child)) {
         if (/^(?:messages|history|request|input|prompt)$/i.test(key)) continue;
         collect(item, appendJsonPath(path, key), depth + 1, jsonStringPaths);
