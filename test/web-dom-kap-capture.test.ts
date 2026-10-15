@@ -122,13 +122,14 @@ test('fresh K2 tool response survives missing assistant roles and long prompt ex
   const previous: UiTextSnapshot[] = [
     {selector:'[pre-submit-visible-text]',frameIndex:-1,count:1,text:'Old assistant turn'}
   ];
+  let rendered = prompt;
   const page = {frames: () => [{
     isDetached: () => false,
     evaluate: async (_fn: unknown) => (
       // First evaluate() reads assistant selectors; second reads the
       // mutation observer captured before the prompt was submitted.
       ++reads % 2 === 1
-        ? {count:0,structural:0,samples:['Old assistant turn',prompt]}
+        ? {count:0,structural:0,samples:['Old assistant turn',rendered]}
         : [tool]
     )
   }]} as unknown as Page;
@@ -138,6 +139,7 @@ test('fresh K2 tool response survives missing assistant roles and long prompt ex
 
   reads = 0;
   const separatePrompt = 'Inspect the current workspace without editing files.';
+  rendered = separatePrompt;
   const fresh = await inspectCompletedAssistantContract(page,previous,separatePrompt);
   assert.equal(fresh.text, tool);
   assert.equal(fresh.mutationSamples,1);
