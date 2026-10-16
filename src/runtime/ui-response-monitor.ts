@@ -204,6 +204,9 @@ export async function awaitUiResponse(
   let streaming = false;
   let activeSnapshot: UiTextSnapshot | undefined;
   let continuationResumed = false;
+  let continuedAt = 0;
+  let textAtContinuation = '';
+  let textAfterContinuation = false;
   let nextGateCheckAt = startedAt;
   let nextStreamingCheckAt = startedAt;
   let nextProgressLogAt = startedAt + 30_000;
@@ -250,6 +253,7 @@ export async function awaitUiResponse(
       if (active) activeSnapshot = active;
     }
     const activeText = active?.text ? cleanUiResponseText(active.text, provider) : '';
+    if (continuationResumed && activeText && activeText !== textAtContinuation) textAfterContinuation = true;
 
     if (activeText && activeText !== lastText) {
       lastText = activeText;
@@ -273,24 +277,38 @@ export async function awaitUiResponse(
     // A provider-owned "Continue" next to the fresh DeepSeek assistant
     // response means the answer is PAUSED, not complete. Resume once only.
     // Never press page-wide consent, login, approval or generic continue UI.
-    if (!streaming && active && !continuationResumed) {
+    if (!streaming && active) {
       const continuation = await resumeDeepseekGeneration(
-        session.page, provider, active.text, signal
+        session.page, provider, active.text, signal, !continuationResumed
       );
-      if (continuation === 'manual') {
+      if (continuation === 'manual'
+          || (continuation === 'paused' && Date.now() - continuedAt >= 5_000)) {
         throw new ManualInterventionRequiredError(
           'DeepSeek pausou a resposta e exige continuação manual no navegador.'
         );
       }
       if (continuation === 'resumed') {
         continuationResumed = true;
+        continuedAt = Date.now();
+        textAtContinuation = activeText;
         observedStreaming = true;
-        lastActivityAt = Date.now();
+        lastActivityAt = continuedAt;
         stableSince = 0;
         generationStoppedAt = 0;
         logger.event('info', 'ui.response.generation_continued', {
           provider_id: provider.id, attempt: 1
         });
+        continue;
+      }
+      // Until the provider actually appends new answer text, the pre-click
+      // content remains an uncompleted response and must never be returned.
+      if (continuationResumed && !textAfterContinuation) {
+        await abortableSleep(200, signal);
+        continue;
+      }
+      // A second continuation control must not be auto-clicked.
+      if (continuation === 'paused') {
+        await abortableSleep(200, signal);
         continue;
       }
     }
@@ -417,7 +435,8 @@ export async function awaitUiResponse(
       }
     }
 
-    if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)) {
+    if (!streaming && !tap?.receiving && lastText && !isThinkingIndicator(lastText)
+        && (!continuationResumed || textAfterContinuation)) {
       if (stableSince === 0) stableSince = Date.now();
       const contractCapture = preferRawContract && ['chatgpt', 'gemini'].includes(provider.id);
       const hasCompleteContract = contractCapture
