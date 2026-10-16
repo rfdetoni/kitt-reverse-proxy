@@ -6,7 +6,7 @@ export type ContinuationOutcome = 'absent' | 'resumed' | 'manual';
 
 /** Allowed UI-only generation continuation, never a login or approval flow. */
 export function isSafeGenerationContinuationLabel(raw: string): boolean {
-  const value = raw.trim().replace(/\\s+/g, ' ').toLowerCase();
+  const value = raw.trim().replace(/\s+/g, ' ').toLowerCase();
   return value === 'continue' || value === 'continue generating'
     || value === 'continuar' || value === 'continuar gerando'
     || value === 'continuar geração';
@@ -25,7 +25,7 @@ export async function resumeDeepseekGeneration(
   if (url.protocol !== 'https:' || url.hostname !== 'chat.deepseek.com') return 'absent';
   throwIfAborted(signal);
   const index = await page.evaluate(({ expected }) => {
-    const normalize = (value: string): string => value.replace(/\\s+/g, ' ').trim();
+    const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim();
     const eligibleLabel = (value: string): boolean => [
       'continue', 'continue generating', 'continuar', 'continuar gerando', 'continuar geração'
     ].includes(normalize(value).toLowerCase());
