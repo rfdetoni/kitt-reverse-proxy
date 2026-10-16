@@ -375,6 +375,7 @@ export function selectCompletedAssistantContract(
 ): string | undefined {
   const previous = baseline.map(item => item.text.trim());
   const knownValues = renderedJsonValues([sentPrompt, ...baseline.map(item => item.text)]);
+  const promptExamples = renderedJsonValues([sentPrompt]);
   // A proven post-submit boundary outranks unscoped page samples. Long
   // histories can contain JSON frames absent from a truncated DOM baseline.
   const regions = [...new Set(samples)].map(value => ({
@@ -390,6 +391,9 @@ export function selectCompletedAssistantContract(
       try {
         const parsed = parseContractJson(text);
         if (parsed.repaired || parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) continue;
+        // A newly rendered prompt boundary cannot authorize a copied JSON
+        // example from the user, even if whitespace changed in the DOM.
+        if (promptExamples.some(value => isDeepStrictEqual(value, parsed.value))) continue;
         if (fresh === undefined && knownValues.some(value => isDeepStrictEqual(value, parsed.value))) continue;
         valid.set(JSON.stringify(parsed.value), text);
       } catch { /* Schema validation belongs to the host, after capture. */ }

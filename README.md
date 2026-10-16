@@ -1,3 +1,9 @@
+# Reverse Proxy 5.4.6 — reject echoed prompt JSON in fresh DOM capture
+
+The current-turn capture improvement now explicitly rejects JSON examples contained in the submitted user prompt even when the browser reformats token whitespace or re-renders that example after the new prompt boundary. Only distinct unambiguous model replies are eligible; host contract validation and CDP correlation remain unchanged.
+
+[Release details](docs/RELEASE_5.4.6.md).
+
 # Reverse Proxy 5.4.5 — current-turn DOM contract selection
 
 When ChatGPT Web renders a long conversation with several historical JSON objects, a proven newly-submitted prompt boundary now scopes response capture to its own trailing region instead of mixing unrelated page frames. Long prompts tolerate a reformatted prefix while still requiring a unique sufficiently long trailing anchor and an exact pre-submit baseline delta. Ambiguous, historical and echoed JSON actions remain rejected; CDP tap authorization is unchanged. This mitigates `ui.response.capture_missing` / `ui_timeout` cases without replaying a request or executing untrusted content.

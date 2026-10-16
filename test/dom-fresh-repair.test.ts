@@ -57,3 +57,11 @@ test('two conflicting frames inside the fresh region are still rejected', () => 
     ['Header\\n'+prompt+'\\n'+first+'\\n'+second], before, prompt
   ),undefined);
 });
+
+test('a JSON example echoed from the current prompt is never promoted to a tool action', () => {
+  const example=JSON.stringify({action:'use_tool',tool:'kitt_runtime',tool_input:{operation:'repo.list',arguments:{path:'.'}},content:null,reasoning_summary:'',loop:null});
+  const sent=prompt+'\\nExample only, do not execute this command: '+example;
+  assert.equal(selectCompletedAssistantContract(
+    ['Current prompt\\n'+sent+'\\n'+example], before, sent
+  ),undefined);
+});
