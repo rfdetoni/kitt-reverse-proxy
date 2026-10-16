@@ -35,8 +35,9 @@ function syntheticPage(thought: FakeElement, final: FakeElement): Page {
       const priorDoc = globalState.document;
       const priorWindow = globalState.window;
       globalState.document = {
-        querySelectorAll: (selector: string) => selector.includes('ds-markdown')
-          ? [thought, final] : []
+        querySelectorAll: (selector: string) => selector.includes('ds-assistant-message-main-content')
+          ? (final === thought ? [] : [final])
+          : selector === '.ds-markdown' ? [thought, final] : []
       };
       globalState.window = {
         getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' })
@@ -57,6 +58,8 @@ test('DeepSeek plugin uses narrow answer leaves and explicitly excludes thinking
   assert.equal(DEEPSEEK_PLUGIN.version, '1.1.0');
   assert.equal(provider.ui.selectorVersion, 2);
   assert.equal(provider.ui.responseSelectors.some(s => s === '[data-role="assistant"]'), false);
+  assert.equal(provider.ui.responseSelectors.some(s => s === '.ds-markdown'), false);
+  assert.ok(provider.ui.responseSelectors.every(s => s.includes('ds-assistant-message-main-content')));
   assert.equal(provider.ui.responseSelectors.some(s => s === '[data-testid*="assistant" i]'), false);
   assert.ok(provider.ui.responseExcludeSelectors?.some(s => s.includes('thinking')));
 });
