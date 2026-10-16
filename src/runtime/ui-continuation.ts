@@ -42,6 +42,9 @@ export async function resumeDeepseekGeneration(
     for (let depth = 0; ancestor && depth < 5; depth++, ancestor = ancestor.parentElement) {
       if (ancestor === document.body || ancestor === document.documentElement
           || ancestor.matches('main, form, dialog, [role="dialog"], [role="alertdialog"]')) break;
+      // Refuse broader thread containers with multiple assistant answers.
+      // A stale "Continue" button on an older message must never be clicked.
+      if (ancestor.querySelectorAll('.ds-assistant-message-main-content').length !== 1) break;
       const eligible = Array.from(ancestor.querySelectorAll('button'))
         .filter(button => {
           if (button.closest('form, dialog, [role="dialog"], [role="alertdialog"], [data-role="user"]')) return false;
