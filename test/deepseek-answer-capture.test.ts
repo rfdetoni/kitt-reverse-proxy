@@ -55,7 +55,7 @@ function syntheticPage(thought: FakeElement, final: FakeElement): Page {
 
 test('DeepSeek plugin uses narrow answer leaves and explicitly excludes thinking panels', () => {
   const provider = DEEPSEEK_PLUGIN.provider;
-  assert.equal(DEEPSEEK_PLUGIN.version, '1.2.0');
+  assert.equal(DEEPSEEK_PLUGIN.version, '1.2.1');
   assert.equal(provider.ui.selectorVersion, 2);
   assert.equal(provider.ui.responseSelectors.some(s => s === '[data-role="assistant"]'), false);
   assert.equal(provider.ui.responseSelectors.some(s => s === '.ds-markdown'), false);
