@@ -25,7 +25,8 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
     parentElement: null as any,
     matches: (_selector: string) => false,
     querySelectorAll: (selector: string) => selector === 'button'
-      ? (opts.multiple ? [button, button] : [button]) : []
+      ? (opts.multiple ? [button, button] : [button])
+      : selector === '.ds-assistant-message-main-content' ? [response] : []
   };
   response.parentElement = card;
   const documentFixture = {
