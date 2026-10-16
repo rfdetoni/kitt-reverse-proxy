@@ -12,6 +12,7 @@ import {
 } from './ui-dom.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { browserGate, waitForUiReady } from './ui-interaction.js';
+import { resumeDeepseekGeneration } from './ui-continuation.js';
 import { ManualInterventionRequiredError, UiTimeoutError, UiUncorrelatedCaptureError } from './ui-errors.js';
 import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
@@ -202,6 +203,7 @@ export async function awaitUiResponse(
   let observedTap = false;
   let streaming = false;
   let activeSnapshot: UiTextSnapshot | undefined;
+  let continuationResumed = false;
   let nextGateCheckAt = startedAt;
   let nextStreamingCheckAt = startedAt;
   let nextProgressLogAt = startedAt + 30_000;
@@ -265,6 +267,31 @@ export async function awaitUiResponse(
             retainedDeltaChars += delta.length;
           }
         }
+      }
+    }
+
+    // A provider-owned "Continue" next to the fresh DeepSeek assistant
+    // response means the answer is PAUSED, not complete. Resume once only.
+    // Never press page-wide consent, login, approval or generic continue UI.
+    if (!streaming && active && !continuationResumed) {
+      const continuation = await resumeDeepseekGeneration(
+        session.page, provider, active.text, signal
+      );
+      if (continuation === 'manual') {
+        throw new ManualInterventionRequiredError(
+          'DeepSeek pausou a resposta e exige continuação manual no navegador.'
+        );
+      }
+      if (continuation === 'resumed') {
+        continuationResumed = true;
+        observedStreaming = true;
+        lastActivityAt = Date.now();
+        stableSince = 0;
+        generationStoppedAt = 0;
+        logger.event('info', 'ui.response.generation_continued', {
+          provider_id: provider.id, attempt: 1
+        });
+        continue;
       }
     }
 
