@@ -6,7 +6,8 @@ import {
   ConversationStateConflictError,
   ManualInterventionRequiredError,
   UiAutomationError,
-  UiTimeoutError
+  UiTimeoutError,
+  UiUncorrelatedCaptureError
 } from '../runtime/ui-errors.js';
 import { UpstreamHttpError, UpstreamRedirectError, UpstreamResponseTooLargeError } from '../runtime/upstream.js';
 import { QueueFullError, RequestAbortedError } from '../runtime/serial-queue.js';
@@ -108,6 +109,10 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof ConversationStateConflictError) return { status: 409, code: 'conversation_state_conflict', message };
   if (error instanceof QueueFullError) return { status: 429, code: 'queue_full', message };
   if (error instanceof ManualInterventionRequiredError) return { status: 503, code: 'manual_intervention_required', message };
+  if (error instanceof UiUncorrelatedCaptureError) return {
+    status: 409, code: 'ui_capture_unverified', message,
+    recoverable: true, recoveryAction: 'continue'
+  };
   if (error instanceof UiTimeoutError) return { status: 504, code: 'ui_timeout', message };
   if (error instanceof UiAutomationError) return { status: 502, code: 'ui_automation_error', message };
   if (error instanceof UpstreamResponseTooLargeError) return { status: 502, code: 'upstream_response_too_large', message };
