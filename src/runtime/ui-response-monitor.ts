@@ -35,6 +35,8 @@ export interface UiTransportActivity {
   receiving: boolean;
   /** Strictly parsed current-turn JSON object from a pretrusted, correlated CDP tap. */
   completedContract?: string;
+  /** Failure of correlation, not evidence that the provider did not answer. */
+  failureReason?: string;
 }
 
 export interface UiResponseResult {
@@ -371,9 +373,15 @@ export async function awaitUiResponse(
           });
         }
       }
-      if (Date.now() - generationStoppedAt >= 20_000) {
-        throw new UiTimeoutError(
-          'O ChatGPT terminou de gerar, mas o proxy não conseguiu extrair a resposta do assistente.'
+      // When CDP never correlated the submitted request, waiting another
+      // twenty seconds cannot make unrelated old JSON trustworthy. Give the
+      // browser a short post-generation DOM grace period, then fail with an
+      // actionable, non-replayable capture error instead of a generic timeout.
+      const uncorrelated = tap?.failureReason === 'no_matching_request';
+      if (Date.now() - generationStoppedAt >= (uncorrelated ? 8_000 : 20_000)) {
+        throw new UiTimeoutError(uncorrelated
+          ? 'O envio ao ChatGPT foi confirmado, mas nenhuma resposta CDP correspondeu ao prompt atual e o DOM não comprovou uma resposta nova. Nenhuma ação foi inferida ou reenviada. Verifique o Chrome autenticado, inicie um novo turno ou faça /v1/kitt/reset.'
+          : 'O ChatGPT terminou de gerar, mas o proxy não conseguiu extrair a resposta do assistente.'
         );
       }
     }
