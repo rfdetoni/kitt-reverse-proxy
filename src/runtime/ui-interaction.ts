@@ -274,7 +274,7 @@ async function waitForSubmissionConfirmation(
     let confirmation = remainingChars === 0 ? 'composer_cleared' : '';
     if (!confirmation && await anyVisible(session.page, streamingSelectors)) confirmation = 'generation_started';
     if (!confirmation) {
-      const responses = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
+      const responses = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors, provider.ui.responseExcludeSelectors);
       if (selectChangedSnapshot(baseline, responses, prompt)) confirmation = 'response_changed';
     }
     if (confirmation) {
@@ -398,7 +398,7 @@ export async function sendUiPrompt(
     frame_index: resolution.frameIndex
   });
 
-  const baseline = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
+  const baseline = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors, provider.ui.responseExcludeSelectors);
   await writeComposerText(session.page, input, prompt);
 
   await abortableSleep(150, signal);
