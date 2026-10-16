@@ -637,7 +637,13 @@ function validateContractShape(parsed: unknown): AgentContractResponse {
   }
   const value = parsed as unknown as AgentContractResponse;
   if (sentenceCount(value.reasoning_summary) > 2) {
-    throw new AgentContractValidationError('reasoning_summary must contain at most 2 sentences.', 'shape', ['$/reasoning_summary']);
+    // This is public-facing presentation metadata, not authorization, tool
+    // input, execution evidence or result data. Normalize only this field
+    // mechanically: needless model retries on a third sentence must not
+    // replay a large WebChat request or replace an otherwise valid action.
+    const sentences = value.reasoning_summary.trim().split(/(?<=[.!?])\\s+/u)
+      .filter(part => part.trim());
+    return { ...value, reasoning_summary: sentences.slice(0, 2).join(' ') };
   }
   return value;
 }
