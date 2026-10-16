@@ -22,7 +22,7 @@ const provider = {
 } as ProviderPreset;
 
 test('concurrent retained children receive unique browser tabs in one authenticated context', async () => {
-  const pages: Array<{ readonly index: number; url?: string; closed: boolean; goto(url: string): Promise<void>; close(): Promise<void>; isClosed(): boolean }> = [];
+  const pages: Array<{ readonly index: number; url: string | undefined; closed: boolean; goto(url: string): Promise<void>; close(): Promise<void>; isClosed(): boolean }> = [];
   const context = {
     async newPage() {
       const page = {
