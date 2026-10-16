@@ -303,6 +303,11 @@ export async function awaitUiResponse(
       // Until the provider actually appends new answer text, the pre-click
       // content remains an uncompleted response and must never be returned.
       if (continuationResumed && !textAfterContinuation) {
+        if (Date.now() - continuedAt >= Math.min(20_000, watchdog.inactivityMs)) {
+          throw new ManualInterventionRequiredError(
+            'DeepSeek recebeu o clique de continuação, mas não produziu novos dados. Verifique a resposta no navegador.'
+          );
+        }
         await abortableSleep(200, signal);
         continue;
       }
