@@ -31,3 +31,29 @@ test('valid JSON goes through strict completion rather than serialization repair
   assert.equal(selectFreshRenderedFrameForRepair([old+'\n'+valid],before),undefined);
   assert.equal(selectCompletedAssistantContract([valid],before),valid);
 });
+
+test('explicit current-prompt boundary excludes unrelated JSON from old page history', () => {
+  const current=JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'current',reasoning_summary:'',loop:null});
+  const oldFrame=JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'old page',reasoning_summary:'',loop:null});
+  assert.equal(selectCompletedAssistantContract(
+    [oldFrame, 'Page\\n'+prompt+'\\n'+current], before, prompt
+  ),current);
+});
+
+test('long prompt can be identified by its unchanged distinctive suffix', () => {
+  const prefix=Array.from({length: 12}, (_, i) => 'originalintroduction'+i).join(' ');
+  const suffix=Array.from({length: 12}, (_, i) => 'distinctiveconclusion'+i).join(' ');
+  const sent=prefix+' '+suffix;
+  const result=JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'fresh',reasoning_summary:'',loop:null});
+  assert.equal(selectCompletedAssistantContract(
+    ['Reformatted introduction\\n'+suffix+'\\n'+result], before, sent
+  ),result);
+});
+
+test('two conflicting frames inside the fresh region are still rejected', () => {
+  const first=JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'one',reasoning_summary:'',loop:null});
+  const second=JSON.stringify({action:'final_response',tool:null,tool_input:null,content:'two',reasoning_summary:'',loop:null});
+  assert.equal(selectCompletedAssistantContract(
+    ['Header\\n'+prompt+'\\n'+first+'\\n'+second], before, prompt
+  ),undefined);
+});
