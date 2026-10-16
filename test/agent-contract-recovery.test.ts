@@ -249,7 +249,7 @@ test('a repair cannot turn a partially written JSON TOOL into a successful final
 });
 
 test('stalled repairs stop early and respect the same upstream budget', async () => {
-  const echoedWithFence = await executeRecovery(['broken', '```json\\nbroken\\n```', writeContract], 3);
+  const echoedWithFence = await executeRecovery(['broken', '```json\nbroken\n```', writeContract], 3);
   assert.equal(echoedWithFence.status, 409);
   assert.equal(echoedWithFence.attempts, 2, 'fenced echo is not progress and must not consume a third attempt');
   const stalled = await executeRecovery(['broken']);
