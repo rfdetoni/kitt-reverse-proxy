@@ -60,7 +60,7 @@ export async function resumeDeepseekGeneration(
       stoppedWithServerError ||= serverError && stopped
         && !expectedLower.includes('servidor está temporariamente indisponível')
         && !expectedLower.includes('server is temporarily unavailable');
-      const eligible = Array.from(ancestor.querySelectorAll(controlSelector))
+      const eligible = Array.from(ancestor.querySelectorAll<HTMLElement>(controlSelector))
         .filter(button => {
           if (button.closest('form, dialog, [role="dialog"], [role="alertdialog"], [data-role="user"], [contenteditable="true"], .ds-markdown, .ds-assistant-message-main-content')) return false;
           const ariaLabel = button.getAttribute('aria-label')?.trim() || '';
