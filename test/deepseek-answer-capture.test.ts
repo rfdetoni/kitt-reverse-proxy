@@ -77,8 +77,11 @@ test('DeepSeek reasoning is never selected, including when an active snapshot is
   assert.match(selected.text, /final_response/);
   const reRead = await readVisibleSnapshotSlot(page, selected, ui.responseExcludeSelectors);
   assert.equal(reRead?.text, selected.text);
+  // Simulate a stale snapshot from the old generic Markdown selector;
+  // even if retained across a provider refresh it cannot expose thoughts.
   const oldReasoning = {
-    ...selected, index: 0, identity: 'thought', text: thought.innerText
+    ...selected, selector: '.ds-markdown', count: 2,
+    index: 0, identity: 'thought', text: thought.innerText
   };
   assert.equal(await readVisibleSnapshotSlot(page, oldReasoning, ui.responseExcludeSelectors), undefined);
 });
