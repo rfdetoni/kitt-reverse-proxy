@@ -23,3 +23,18 @@ same generation. The screenshot is visual evidence, not an inspected HTML DOM.
 Live authenticated DeepSeek DOM behavior must still be tested on the
 operator's browser. GitHub Chromium tests cannot verify the exact upstream
 markup from the provided screenshot.
+
+## Contract resilience from 2026-10-16 logs
+
+Two operator logs (Agent CLI and DeepSeek Reverse Proxy 5.4.8) showed 72 contract validations: 55 valid and 17 invalid; seven requests exited with `agent_contract_invalid`. Failures were mainly malformed/incomplete JSON or ambiguous repairs. The browser also reported an RSS warning (934 MB above 805 MB configured limit).
+
+To reduce amplification without bypassing validation:
+
+- Serialization repair uses a dedicated **serializer-only system instruction**, rather than inviting execution or re-planning.
+- Source task is included as a bounded 1,200-character **untrusted excerpt** plus its SHA-256, not the entire roughly 60 KiB original mission. Host owns the original context; the candidate remains the repair source.
+- Only the selected already-declared tool schema (when identifiable) is sent; otherwise tool **names** are supplied as hints, not capabilities.
+- Identical malformed responses wrapped in code fences no longer consume an extra retry. Recovery remains bounded and fail-closed.
+- Existing strict checks still reject changed stable fields, competing JSON interpretations, unknown tool calls or unauthorized data. No model can grant permissions.
+- Regression tests cover large task-context trimming and non-progressing fenced repairs.
+
+WebChat live DOM and upstream model behavior cannot be proven by synthetic/Chromium CI alone.
