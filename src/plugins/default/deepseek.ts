@@ -32,10 +32,12 @@ export const DEEPSEEK_PLUGIN = defineProviderPlugin({
     // Only read leaf answer text. Selecting an entire assistant wrapper can
     // accidentally include the DeepThink reasoning panel before the final reply.
     responseSelectors: [
-      '[data-role="assistant"] .ds-markdown',
-      '[data-testid*="assistant" i] .ds-markdown',
-      '[class*="assistant" i] .ds-markdown',
-      '.ds-markdown'
+      // DeepSeek distinguishes the answer leaf from the Thinking panel here.
+      // Never fall back to generic '.ds-markdown': it can be model reasoning.
+      '.ds-markdown.ds-assistant-message-main-content',
+      '.ds-assistant-message-main-content',
+      '[data-role="assistant"] .ds-assistant-message-main-content',
+      '[data-testid*="assistant" i] .ds-assistant-message-main-content'
     ],
     // Provider reasoning panels are not assistant final answers. Only reject
     // nodes inside these regions, not later answer siblings.
