@@ -3,7 +3,7 @@ import { BASE_CAPABILITIES, model } from './shared.js';
 
 export const DEEPSEEK_PLUGIN = defineProviderPlugin({
   apiVersion: 1,
-  version: '1.0.0',
+  version: '1.1.0',
   provider: {
   id: 'deepseek',
   name: 'DeepSeek Web',
@@ -15,7 +15,7 @@ export const DEEPSEEK_PLUGIN = defineProviderPlugin({
   capabilities: BASE_CAPABILITIES,
   models: [model('deepseek-web', ['deepseek'])],
   ui: {
-    selectorVersion: 1,
+    selectorVersion: 2,
     inputSelectors: [
       'textarea[placeholder*="message" i]',
       'textarea',
@@ -29,12 +29,26 @@ export const DEEPSEEK_PLUGIN = defineProviderPlugin({
       'div[role="button"][aria-label*="send" i]',
       'button[type="submit"]'
     ],
+    // Only read leaf answer text. Selecting an entire assistant wrapper can
+    // accidentally include the DeepThink reasoning panel before the final reply.
     responseSelectors: [
-      '[data-role="assistant"]',
-      '[data-testid*="assistant" i]',
+      '[data-role="assistant"] .ds-markdown',
+      '[data-testid*="assistant" i] .ds-markdown',
       '[class*="assistant" i] .ds-markdown',
-      '[class*="assistant" i] [class*="markdown" i]',
       '.ds-markdown'
+    ],
+    // Provider reasoning panels are not assistant final answers. Only reject
+    // nodes inside these regions, not later answer siblings.
+    responseExcludeSelectors: [
+      '[class*="thinking" i]',
+      '[class*="reasoning" i]',
+      '[class*="thought" i]',
+      '[data-testid*="think" i]',
+      '[data-testid*="reason" i]',
+      '[data-role="reasoning"]',
+      '[aria-label*="thinking" i]',
+      '[aria-label*="thought" i]',
+      'details[open]'
     ],
     streamingSelectors: [
       '[data-is-streaming="true"]',
