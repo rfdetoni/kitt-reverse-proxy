@@ -318,6 +318,21 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
   assert.match(resultMessage.content, /README contents from the host/);
 });
 
+test('public three-sentence summary is bounded without retrying or changing the result', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'shorten-public-summary' });
+  const payload = {
+    action: 'final_response', tool: null, tool_input: null,
+    content: { verdict: 'OK', evidence: ['fixed-frame'] },
+    reasoning_summary: 'First evidence. Second conclusion. Third redundant sentence.',
+    loop: null
+  };
+  const result = transformAgentContractCompletion(completion(JSON.stringify(payload)), plan);
+  const message = result.choices[0]?.message;
+  assert.equal(message?.content, 'First evidence. Second conclusion.');
+  assert.ok(result.choices[0]?.message);
+  assert.equal(payload.content.evidence[0], 'fixed-frame');
+});
+
 test('rejects oversized reasoning while wrapped JSON normalization is covered separately', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'sessionC' });
   assert.throws(
