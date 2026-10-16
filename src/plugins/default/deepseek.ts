@@ -3,7 +3,7 @@ import { BASE_CAPABILITIES, model } from './shared.js';
 
 export const DEEPSEEK_PLUGIN = defineProviderPlugin({
   apiVersion: 1,
-  version: '1.2.0',
+  version: '1.2.1',
   provider: {
   id: 'deepseek',
   name: 'DeepSeek Web',
