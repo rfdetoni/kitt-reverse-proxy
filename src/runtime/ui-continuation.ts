@@ -56,7 +56,7 @@ export async function resumeDeepseekGeneration(
       const expectedLower = normalize(expected).toLowerCase();
       const serverError = surrounding.includes('servidor está temporariamente indisponível')
         || surrounding.includes('server is temporarily unavailable');
-      const stopped = /(?:^|\\s)(?:parado|stopped)(?:$|\\s)/u.test(surrounding);
+      const stopped = /(?:^|\s)(?:parado|stopped)(?:$|\s)/u.test(surrounding);
       stoppedWithServerError ||= serverError && stopped
         && !expectedLower.includes('servidor está temporariamente indisponível')
         && !expectedLower.includes('server is temporarily unavailable');
