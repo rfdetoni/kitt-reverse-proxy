@@ -42,12 +42,24 @@ export async function resumeDeepseekGeneration(
     const controlSelector = 'button, [role="button"]';
     const buttons = Array.from(document.querySelectorAll(controlSelector)) as HTMLElement[];
     let ancestor = block.parentElement;
+    let stoppedWithServerError = false;
     for (let depth = 0; ancestor && depth < 10; depth++, ancestor = ancestor.parentElement) {
       if (ancestor === document.body || ancestor === document.documentElement
           || ancestor.matches('main, form, dialog, [role="dialog"], [role="alertdialog"]')) break;
       // Stop at any broader thread container (or an unrelated user message).
       // The current assistant card must be the *only* assistant answer here.
       if (ancestor.querySelectorAll('.ds-assistant-message-main-content').length !== 1) break;
+      // "Parado" plus "Servidor está temporariamente indisponível" is a
+      // provider-side interruption, NOT a finished answer. If the button
+      // cannot be located safely, ask the operator instead of returning JSON.
+      const surrounding = normalize(ancestor.innerText || ancestor.textContent || '').toLowerCase();
+      const expectedLower = normalize(expected).toLowerCase();
+      const serverError = surrounding.includes('servidor está temporariamente indisponível')
+        || surrounding.includes('server is temporarily unavailable');
+      const stopped = /(?:^|\\s)(?:parado|stopped)(?:$|\\s)/u.test(surrounding);
+      stoppedWithServerError ||= serverError && stopped
+        && !expectedLower.includes('servidor está temporariamente indisponível')
+        && !expectedLower.includes('server is temporarily unavailable');
       const eligible = Array.from(ancestor.querySelectorAll(controlSelector))
         .filter(button => {
           if (button.closest('form, dialog, [role="dialog"], [role="alertdialog"], [data-role="user"], [contenteditable="true"], .ds-markdown, .ds-assistant-message-main-content')) return false;
@@ -66,8 +78,9 @@ export async function resumeDeepseekGeneration(
       if (eligible.length > 1) return -1; // ambiguous controls: fail closed
       if (eligible.length === 1) return buttons.indexOf(eligible[0]!);
     }
-    return -1;
+    return stoppedWithServerError ? -2 : -1;
   }, { expected: freshAssistantText }).catch(() => -1);
+  if (index === -2) return 'manual';
   if (index < 0) return 'absent';
   const button = page.locator('button, [role="button"]').nth(index);
   if (!await button.isVisible().catch(() => false)) return 'manual';
