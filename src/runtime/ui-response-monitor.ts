@@ -12,7 +12,7 @@ import {
 } from './ui-dom.js';
 import { abortableSleep, throwIfAborted } from './cancellation.js';
 import { browserGate, waitForUiReady } from './ui-interaction.js';
-import { ManualInterventionRequiredError, UiTimeoutError } from './ui-errors.js';
+import { ManualInterventionRequiredError, UiTimeoutError, UiUncorrelatedCaptureError } from './ui-errors.js';
 import { deltaFromCumulative } from './ui-history.js';
 import { selectorCandidates } from './semantic-locator.js';
 import { logger } from '../logger.js';
@@ -35,6 +35,8 @@ export interface UiTransportActivity {
   receiving: boolean;
   /** Strictly parsed current-turn JSON object from a pretrusted, correlated CDP tap. */
   completedContract?: string;
+  /** Failure of correlation, not evidence that the provider did not answer. */
+  failureReason?: string;
 }
 
 export interface UiResponseResult {
@@ -371,7 +373,17 @@ export async function awaitUiResponse(
           });
         }
       }
-      if (Date.now() - generationStoppedAt >= 20_000) {
+      // When CDP never correlated the submitted request, waiting another
+      // twenty seconds cannot make unrelated old JSON trustworthy. Give the
+      // browser a short post-generation DOM grace period, then fail with an
+      // actionable, non-replayable capture error instead of a generic timeout.
+      const uncorrelated = tap?.failureReason === 'no_matching_request';
+      if (Date.now() - generationStoppedAt >= (uncorrelated ? 8_000 : 20_000)) {
+        if (uncorrelated) {
+          throw new UiUncorrelatedCaptureError(
+            'O envio ao ChatGPT foi confirmado, mas nenhuma resposta CDP correspondeu ao prompt atual e o DOM não comprovou uma resposta nova. Nenhuma ação foi inferida ou reenviada. Verifique o Chrome autenticado e continue explicitamente; use /v1/kitt/reset se necessário.'
+          );
+        }
         throw new UiTimeoutError(
           'O ChatGPT terminou de gerar, mas o proxy não conseguiu extrair a resposta do assistente.'
         );

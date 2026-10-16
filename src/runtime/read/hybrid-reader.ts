@@ -249,7 +249,8 @@ export class HybridUiResponseReader {
         (delta) => reconciler.domDelta(delta),
         signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal,
         () => ({ ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }),
-          receiving: matched && !adapterEnded && !tapFailure }),
+          receiving: Boolean(matched && !adapterEnded && !tapFailure),
+          ...(tapFailure ? { failureReason: tapFailure } : {}) }),
         preferRawContract
       );
       // Race valid completions, not network transports. Neither observer

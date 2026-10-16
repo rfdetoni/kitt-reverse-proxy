@@ -318,6 +318,25 @@ test('normalizes synthesized native tool continuity before the UI executor', () 
   assert.match(resultMessage.content, /README contents from the host/);
 });
 
+test('public three-sentence tool summary is bounded without changing tool arguments', () => {
+  const plan = prepareAgentContractRequest(
+    body('code-edit', { files: ['README.md'] }, false),
+    { sessionId: 'shorten-public-summary' }
+  );
+  const input = { operation: 'repo.read', arguments: { path: 'README.md' } };
+  const payload = {
+    action: 'use_tool', tool: 'kitt_runtime', tool_input: input,
+    content: null,
+    reasoning_summary: 'First evidence. Second conclusion. Third redundant sentence.',
+    loop: null
+  };
+  const result = transformAgentContractCompletion(completion(JSON.stringify(payload)), plan);
+  const message = result.choices[0]?.message;
+  assert.equal(message?.content, 'First evidence. Second conclusion.');
+  assert.deepEqual(JSON.parse(message?.tool_calls?.[0]?.function.arguments ?? '{}'), input);
+  assert.equal(message?.tool_calls?.[0]?.function.name, 'kitt_runtime');
+});
+
 test('rejects oversized reasoning while wrapped JSON normalization is covered separately', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'sessionC' });
   assert.throws(
