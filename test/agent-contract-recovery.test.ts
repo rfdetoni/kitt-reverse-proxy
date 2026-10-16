@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import express from 'express';
 
-import { createOpenAiRouter } from '../src/proxy/openai-router.js';
+import { buildAgentContractSerializationRepairBody, createOpenAiRouter } from '../src/proxy/openai-router.js';
+import { AgentContractValidationError, prepareAgentContractRequest } from '../src/runtime/agent-contract.js';
 import type { SessionExecutionLease, SessionManager } from '../src/runtime/session-manager.js';
 import type { ChatExecutionOptions, ChatExecutionResult, JsonObject } from '../src/types.js';
 
@@ -24,6 +25,25 @@ function result(content: string): ChatExecutionResult {
     deltas: []
   };
 }
+
+test('syntax repair receives a bounded original-task excerpt, not a 60 KiB mission replay', () => {
+  const longTask = 'keep this task context ' + 'MISSION-PADDING-'.repeat(5_000);
+  const plan = prepareAgentContractRequest({
+    messages: [{role:'user', content:longTask}],
+    tools:[{type:'function',function:{name:'kitt_runtime',parameters:{type:'object',properties:{operation:{type:'string'}}}}}]
+  }, {sessionId:'repair-context-test', contextKey:'repair-context-test'});
+  const candidate = '{"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.list"';
+  const error = new AgentContractValidationError('Incomplete JSON', 'syntax');
+  const repaired = buildAgentContractSerializationRepairBody(plan,error,candidate);
+  const serialized = JSON.stringify(repaired.messages);
+  assert.ok(serialized.length < 8_000, 'repair must not repeat the entire user mission');
+  assert.match(serialized, /keep this task context/);
+  assert.match(serialized, /task_sha256/);
+  assert.match(serialized, /task_truncated/);
+  assert.match(serialized, /CONTRACT REPAIR MODE/);
+  assert.match(serialized, /repo.list/);
+  assert.doesNotMatch(serialized, /MISSION-PADDING-(?:MISSION-PADDING-){100}/);
+});
 
 test('contract repair keeps the same session lease and original task context', async () => {
   const executedBodies: JsonObject[] = [];
@@ -229,6 +249,9 @@ test('a repair cannot turn a partially written JSON TOOL into a successful final
 });
 
 test('stalled repairs stop early and respect the same upstream budget', async () => {
+  const echoedWithFence = await executeRecovery(['broken', '```json\nbroken\n```', writeContract], 3);
+  assert.equal(echoedWithFence.status, 409);
+  assert.equal(echoedWithFence.attempts, 2, 'fenced echo is not progress and must not consume a third attempt');
   const stalled = await executeRecovery(['broken']);
   assert.equal(stalled.status, 409); assert.equal(stalled.attempts, 2);
   const exhausted = await executeRecovery(['broken'], 1);

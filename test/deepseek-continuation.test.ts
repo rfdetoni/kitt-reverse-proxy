@@ -7,7 +7,8 @@ import { resumeDeepseekGeneration, isSafeGenerationContinuationLabel } from '../
 const provider = DEEPSEEK_PLUGIN.provider;
 
 function pageFixture(opts: { label?: string; output?: string; current?: string;
-    approved?: boolean; enabled?: boolean; url?: string; multiple?: boolean } = {}) {
+    enabled?: boolean; url?: string; multiple?: boolean; footerLevels?: number;
+    roleButton?: boolean; ariaLabel?: string; stoppedError?: boolean; noButton?: boolean } = {}) {
   const calls: string[] = [];
   const label = opts.label ?? 'Continue';
   const output = opts.output ?? '{"action":"final_response",';
@@ -17,22 +18,41 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
   };
   const button = {
     textContent: label,
-    getAttribute: (key: string) => key === 'aria-label' ? label : null,
+    getAttribute: (key: string) => key === 'aria-label' ? (opts.ariaLabel ?? label) : null,
+    hasAttribute: (_key: string) => false,
     getBoundingClientRect: () => ({width: 80, height: 32}),
     closest: (_selector: string) => null
   };
+  const statusText = opts.stoppedError ? 'Servidor está temporariamente indisponível.\nParado' : '';
   const card = {
+    innerText: output + '\n' + statusText,
+    textContent: output + '\n' + statusText,
     parentElement: null as any,
     matches: (_selector: string) => false,
-    querySelectorAll: (selector: string) => selector === 'button'
-      ? (opts.multiple ? [button, button] : [button])
+    querySelectorAll: (selector: string) => selector === 'button, [role="button"]'
+      ? (opts.noButton ? [] : opts.multiple ? [button, button] : [button])
       : selector === '.ds-assistant-message-main-content' ? [response] : []
   };
   response.parentElement = card;
+  if (opts.footerLevels) {
+    let next = card;
+    for (let level = 0; level < opts.footerLevels; level++) {
+      const previous = next;
+      next = {
+        innerText: output + '\n' + statusText,
+        textContent: output + '\n' + statusText,
+        parentElement: previous,
+        matches: (_selector: string) => false,
+        querySelectorAll: (selector: string) =>
+          selector === '.ds-assistant-message-main-content' ? [response] : []
+      };
+    }
+    response.parentElement = next;
+  }
   const documentFixture = {
     body: {}, documentElement: {},
     querySelectorAll: (selector: string) => selector === '.ds-assistant-message-main-content'
-      ? [response] : selector === 'button' ? [button] : []
+      ? [response] : selector === 'button, [role="button"]' ? (opts.noButton ? [] : [button]) : []
   };
   const page = {
     url: () => opts.url ?? 'https://chat.deepseek.com/',
@@ -47,13 +67,13 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
       }
     },
     locator: (selector: string) => {
-      assert.equal(selector, 'button');
+      assert.equal(selector, 'button, [role="button"]');
       return {nth: (index: number) => {
         assert.equal(index, 0);
         return {
           isVisible: async () => true,
           isEnabled: async () => opts.enabled ?? true,
-          getAttribute: async () => label,
+          getAttribute: async () => (opts.ariaLabel ?? label),
           textContent: async () => label,
           click: async () => { calls.push('click'); }
         };
@@ -93,6 +113,26 @@ test('do not click stale assistant content, unrelated prompts or unsafe origins'
     assert.equal(await resumeDeepseekGeneration(page, provider, current), 'absent');
     assert.deepEqual(calls, []);
   }
+});
+
+test('screenshot layout: stopped DeepSeek response with footer Continue seven wrappers away', async () => {
+  const {page, output, calls} = pageFixture({label: 'Continuar', footerLevels: 7});
+  assert.equal(await resumeDeepseekGeneration(page, provider, output), 'resumed');
+  assert.deepEqual(calls, ['click']);
+});
+
+test('a server-unavailable stopped answer cannot be returned as final if its Continue footer is missing', async () => {
+  const {page, output, calls} = pageFixture({
+    label: 'Continuar', footerLevels: 7, stoppedError: true, noButton: true
+  });
+  assert.equal(await resumeDeepseekGeneration(page, provider, output), 'manual');
+  assert.deepEqual(calls, []);
+});
+
+test('footer candidate cannot disguise an unsafe aria label', async () => {
+  const {page, output, calls} = pageFixture({label: 'Continuar', ariaLabel: 'Continue with Google', footerLevels: 7});
+  assert.equal(await resumeDeepseekGeneration(page, provider, output), 'absent');
+  assert.deepEqual(calls, []);
 });
 
 test('disabled generation continuation requires manual intervention, never retries', async () => {
