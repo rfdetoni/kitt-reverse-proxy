@@ -23,10 +23,10 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
     getBoundingClientRect: () => ({width: 80, height: 32}),
     closest: (_selector: string) => null
   };
-  const statusText = opts.stoppedError ? 'Servidor está temporariamente indisponível.\\nParado' : '';
+  const statusText = opts.stoppedError ? 'Servidor está temporariamente indisponível.\nParado' : '';
   const card = {
-    innerText: output + '\\n' + statusText,
-    textContent: output + '\\n' + statusText,
+    innerText: output + '\n' + statusText,
+    textContent: output + '\n' + statusText,
     parentElement: null as any,
     matches: (_selector: string) => false,
     querySelectorAll: (selector: string) => selector === 'button, [role="button"]'
@@ -39,8 +39,8 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
     for (let level = 0; level < opts.footerLevels; level++) {
       const previous = next;
       next = {
-        innerText: output + '\\n' + statusText,
-        textContent: output + '\\n' + statusText,
+        innerText: output + '\n' + statusText,
+        textContent: output + '\n' + statusText,
         parentElement: previous,
         matches: (_selector: string) => false,
         querySelectorAll: (selector: string) =>
