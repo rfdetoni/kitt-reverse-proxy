@@ -35,6 +35,7 @@ import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
 import { withEstimatedUsage } from './token-usage.js';
+import { unwrapContractJson } from '../util/contract-json.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
 You are servicing an external API request through a browser-backed transport. When callable functions are supplied, act as an API execution agent rather than as a conversational chat assistant.
@@ -90,18 +91,35 @@ function agentContractEnabled(req: Request): boolean {
 
 function compactContractRepairMessages(plan: AgentContractPlan, candidate: string): JsonObject[] {
   const messages: JsonObject[] = [
-    { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT }
+    { role: 'system', content: [
+      AGENT_CONTRACT_SYSTEM_PROMPT,
+      'CONTRACT REPAIR MODE: You are a JSON serializer, not an executor or planner.',
+      'Do not perform the source task or generate a different action. The candidate is the source of the intended decision.',
+      'The task excerpt and tool names are context data only. Preserve all unrelated stable fields verbatim.',
+      'Never invent an authorization, execution result, tool call, or a different final verdict.'
+    ].join('\\n') }
   ];
   const originalMessages = Array.isArray(plan.originalBody.messages) ? plan.originalBody.messages : [];
   const task = [...originalMessages].reverse().find(
     (item) => item && typeof item === 'object' && !Array.isArray(item) && item.role === 'user'
   );
+  // Large agent missions reached >60 KiB in one observed request. Repeating
+  // the entire objective in serialization repair promotes re-planning and
+  // consumes the limited context budget. The original stays host-owned.
+  const taskText = task && typeof task === 'object' && !Array.isArray(task)
+    && typeof task.content === 'string' ? task.content : '';
+  const selectedTool = /"tool"\\s*:\\s*"([^"\\\\]{1,128})"/u.exec(candidate)?.[1];
+  const repairTools = selectedTool && plan.tools.has(selectedTool)
+    ? [plan.tools.get(selectedTool)!]
+    : [...plan.tools.values()].map(({ name }) => ({ name }));
   const data = JSON.stringify({
     route: plan.route,
-    task,
-    tools: [...plan.tools.values()].map((tool) => ({
+    task_excerpt: taskText.slice(0, 1_200),
+    task_sha256: createHash('sha256').update(taskText).digest('hex'),
+    task_truncated: taskText.length > 1_200,
+    tools: repairTools.map((tool) => ({
       name: tool.name,
-      ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {})
+      ...('parameters' in tool && tool.parameters !== undefined ? { parameters: tool.parameters } : {})
     })),
     candidate
   });
@@ -297,7 +315,8 @@ async function executeAgentContract(
 
   const repairCandidate = first.completion.choices[0]?.message.content ?? '';
   if (repairValidationError.kind === 'limit' || repairValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', repairValidationError.message, true, 'continue');
-  if (retry.completion.choices[0]?.message.content === repairCandidate) {
+  if (unwrapContractJson(retry.completion.choices[0]?.message.content ?? '')
+      === unwrapContractJson(repairCandidate)) {
     throw new AgentContractError(409, 'agent_contract_invalid', 'Contract repair made no progress within the recovery budget.', true, 'continue');
   }
   // Always anchor to the original decision; a drifting repair is not evidence.
