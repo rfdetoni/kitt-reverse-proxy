@@ -65,13 +65,15 @@ export async function anyVisible(page: Page, selectors: readonly string[]): Prom
   return false;
 }
 
-export async function collectVisibleSnapshots(page: Page, selectors: readonly string[]): Promise<UiTextSnapshot[]> {
+export async function collectVisibleSnapshots(
+  page: Page, selectors: readonly string[], responseExcludeSelectors: readonly string[] = []
+): Promise<UiTextSnapshot[]> {
   const output: UiTextSnapshot[] = [];
   const pageFrames = frames(page);
   for (let frameIndex = 0; frameIndex < pageFrames.length; frameIndex += 1) {
     const frame = pageFrames[frameIndex]!;
     try {
-      const raw = await frame.evaluate(({ selectorList, maxChars }) => {
+      const raw = await frame.evaluate(({ selectorList, maxChars, excludeSelectors }) => {
         const isVisible = (node: Element): boolean => {
           const element = node as HTMLElement;
           const style = window.getComputedStyle(element);
@@ -87,6 +89,11 @@ export async function collectVisibleSnapshots(page: Page, selectors: readonly st
             for (let index = nodes.length - 1; index >= Math.max(0, nodes.length - 4); index -= 1) {
               const element = nodes[index] as HTMLElement | undefined;
               if (!element || !isVisible(element)) continue;
+              // Do not classify provider reasoning/Thinking panels as final answers.
+              // Test ancestry per node; a visible answer can follow a thought sibling.
+              if (excludeSelectors.some((excluded: string) => {
+                try { return Boolean(element.closest(excluded)); } catch { return false; }
+              })) continue;
               const value = (element.innerText || element.textContent || '').trim().slice(0, maxChars);
               if (!value) continue;
               const domIdentity = element.getAttribute('data-message-id') || element.getAttribute('data-turn-id') || element.id || '';
@@ -99,7 +106,7 @@ export async function collectVisibleSnapshots(page: Page, selectors: readonly st
           } catch {}
         }
         return results;
-      }, { selectorList: selectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
+      }, { selectorList: selectors as string[], excludeSelectors: responseExcludeSelectors as string[], maxChars: MAX_SNAPSHOT_CHARS });
       for (const snapshot of raw) output.push({ ...snapshot, frameIndex });
     } catch {}
   }
@@ -149,17 +156,21 @@ export function selectChangedSnapshot(
 
 export async function readVisibleSnapshotSlot(
   page: Page,
-  snapshot: UiTextSnapshot
+  snapshot: UiTextSnapshot,
+  responseExcludeSelectors: readonly string[] = []
 ): Promise<UiTextSnapshot | undefined> {
   const pageFrames = frames(page);
   const frame = pageFrames[snapshot.frameIndex];
   if (!frame || frame.isDetached() || !snapshot.selector) return undefined;
   try {
     const raw = await frame.evaluate(
-      ({ selector, index, maxChars }) => {
+      ({ selector, index, maxChars, excludeSelectors }) => {
         const nodes = Array.from(document.querySelectorAll(selector));
         const element = nodes[index] as HTMLElement | undefined;
         if (!element) return undefined;
+        if (excludeSelectors.some((excluded: string) => {
+          try { return Boolean(element.closest(excluded)); } catch { return false; }
+        })) return undefined;
         const style = window.getComputedStyle(element);
         if (
           style.display === 'none'
@@ -185,7 +196,8 @@ export async function readVisibleSnapshotSlot(
       {
         selector: snapshot.selector,
         index: snapshot.index ?? Math.max(0, snapshot.count - 1),
-        maxChars: MAX_SNAPSHOT_CHARS
+        maxChars: MAX_SNAPSHOT_CHARS,
+        excludeSelectors: responseExcludeSelectors as string[]
       }
     );
     if (!raw) return undefined;

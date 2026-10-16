@@ -237,11 +237,11 @@ export async function awaitUiResponse(
 
     let active: UiTextSnapshot | undefined;
     if (activeSnapshot) {
-      active = await readVisibleSnapshotSlot(session.page, activeSnapshot);
+      active = await readVisibleSnapshotSlot(session.page, activeSnapshot, provider.ui.responseExcludeSelectors);
       if (!active) activeSnapshot = undefined;
     }
     if (!active) {
-      const current = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors);
+      const current = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors, provider.ui.responseExcludeSelectors);
       active = selectChangedSnapshot(baseline, current, sentPrompt);
       if (active) activeSnapshot = active;
     }
