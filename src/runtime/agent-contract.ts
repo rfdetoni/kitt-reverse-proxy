@@ -641,7 +641,7 @@ function validateContractShape(parsed: unknown): AgentContractResponse {
     // input, execution evidence or result data. Normalize only this field
     // mechanically: needless model retries on a third sentence must not
     // replay a large WebChat request or replace an otherwise valid action.
-    const sentences = value.reasoning_summary.trim().split(/(?<=[.!?])\\s+/u)
+    const sentences = value.reasoning_summary.trim().split(/(?<=[.!?])\s+/u)
       .filter(part => part.trim());
     return { ...value, reasoning_summary: sentences.slice(0, 2).join(' ') };
   }
