@@ -8,7 +8,7 @@ const provider = DEEPSEEK_PLUGIN.provider;
 
 function pageFixture(opts: { label?: string; output?: string; current?: string;
     enabled?: boolean; url?: string; multiple?: boolean; footerLevels?: number;
-    roleButton?: boolean; ariaLabel?: string } = {}) {
+    roleButton?: boolean; ariaLabel?: string; stoppedError?: boolean; noButton?: boolean } = {}) {
   const calls: string[] = [];
   const label = opts.label ?? 'Continue';
   const output = opts.output ?? '{"action":"final_response",';
@@ -23,11 +23,14 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
     getBoundingClientRect: () => ({width: 80, height: 32}),
     closest: (_selector: string) => null
   };
+  const statusText = opts.stoppedError ? 'Servidor está temporariamente indisponível.\\nParado' : '';
   const card = {
+    innerText: output + '\\n' + statusText,
+    textContent: output + '\\n' + statusText,
     parentElement: null as any,
     matches: (_selector: string) => false,
     querySelectorAll: (selector: string) => selector === 'button, [role="button"]'
-      ? (opts.multiple ? [button, button] : [button])
+      ? (opts.noButton ? [] : opts.multiple ? [button, button] : [button])
       : selector === '.ds-assistant-message-main-content' ? [response] : []
   };
   response.parentElement = card;
@@ -36,6 +39,8 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
     for (let level = 0; level < opts.footerLevels; level++) {
       const previous = next;
       next = {
+        innerText: output + '\\n' + statusText,
+        textContent: output + '\\n' + statusText,
         parentElement: previous,
         matches: (_selector: string) => false,
         querySelectorAll: (selector: string) =>
@@ -47,7 +52,7 @@ function pageFixture(opts: { label?: string; output?: string; current?: string;
   const documentFixture = {
     body: {}, documentElement: {},
     querySelectorAll: (selector: string) => selector === '.ds-assistant-message-main-content'
-      ? [response] : selector === 'button, [role="button"]' ? [button] : []
+      ? [response] : selector === 'button, [role="button"]' ? (opts.noButton ? [] : [button]) : []
   };
   const page = {
     url: () => opts.url ?? 'https://chat.deepseek.com/',
@@ -114,6 +119,14 @@ test('screenshot layout: stopped DeepSeek response with footer Continue seven wr
   const {page, output, calls} = pageFixture({label: 'Continuar', footerLevels: 7});
   assert.equal(await resumeDeepseekGeneration(page, provider, output), 'resumed');
   assert.deepEqual(calls, ['click']);
+});
+
+test('a server-unavailable stopped answer cannot be returned as final if its Continue footer is missing', async () => {
+  const {page, output, calls} = pageFixture({
+    label: 'Continuar', footerLevels: 7, stoppedError: true, noButton: true
+  });
+  assert.equal(await resumeDeepseekGeneration(page, provider, output), 'manual');
+  assert.deepEqual(calls, []);
 });
 
 test('footer candidate cannot disguise an unsafe aria label', async () => {
