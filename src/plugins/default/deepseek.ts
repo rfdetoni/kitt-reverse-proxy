@@ -3,7 +3,7 @@ import { BASE_CAPABILITIES, model } from './shared.js';
 
 export const DEEPSEEK_PLUGIN = defineProviderPlugin({
   apiVersion: 1,
-  version: '1.1.0',
+  version: '1.2.0',
   provider: {
   id: 'deepseek',
   name: 'DeepSeek Web',
@@ -52,6 +52,8 @@ export const DEEPSEEK_PLUGIN = defineProviderPlugin({
       '[aria-label*="thought" i]',
       'details[open]'
     ],
+    // Paused generation is continued once by the host UI monitor, only from
+    // the current assistant card; no login/authorization buttons are used.
     streamingSelectors: [
       '[data-is-streaming="true"]',
       'button[data-testid="stop-button"]',
