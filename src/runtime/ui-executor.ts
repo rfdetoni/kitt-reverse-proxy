@@ -161,7 +161,7 @@ export class UiChatExecutor implements ChatExecutor {
 
   private async captureResponseBaseline(signal?: AbortSignal): Promise<UiTextSnapshot[]> {
     await waitForUiIdle(this.session, this.provider, this.config, signal);
-    const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors);
+    const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors, this.provider.ui.responseExcludeSelectors);
     if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
       // Snapshot before *every* send, including repair attempts. The prior
       // assistant response must not be mistaken for the new repaired output.
