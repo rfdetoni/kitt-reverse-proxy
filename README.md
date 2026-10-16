@@ -1,3 +1,9 @@
+# Reverse Proxy 5.4.5 — current-turn DOM contract selection
+
+When ChatGPT Web renders a long conversation with several historical JSON objects, a proven newly-submitted prompt boundary now scopes response capture to its own trailing region instead of mixing unrelated page frames. Long prompts tolerate a reformatted prefix while still requiring a unique sufficiently long trailing anchor and an exact pre-submit baseline delta. Ambiguous, historical and echoed JSON actions remain rejected; CDP tap authorization is unchanged. This mitigates `ui.response.capture_missing` / `ui_timeout` cases without replaying a request or executing untrusted content.
+
+[Release details](docs/RELEASE_5.4.5.md).
+
 # Reverse Proxy 5.4.4 — local result wrapping and provider message provenance
 
 A complete strict JSON result with none of the Agent envelope fields is mechanically wrapped in `final_response.content`. Its parsed data is preserved exactly; no model repair/copy turn is needed, and it cannot become a tool call or loop. Partial envelopes, duplicate keys, ambiguous objects and invalid JSON still fail validation.

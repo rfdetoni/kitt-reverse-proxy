@@ -375,9 +375,15 @@ export function selectCompletedAssistantContract(
 ): string | undefined {
   const previous = baseline.map(item => item.text.trim());
   const knownValues = renderedJsonValues([sentPrompt, ...baseline.map(item => item.text)]);
+  // A proven post-submit boundary outranks unscoped page samples. Long
+  // histories can contain JSON frames absent from a truncated DOM baseline.
+  const regions = [...new Set(samples)].map(value => ({
+    value, fresh: afterSubmittedPrompt(value, sentPrompt, baseline)
+  }));
+  const bounded = regions.filter(region => region.fresh !== undefined
+    && region.fresh.length > 0);
   const valid = new Map<string, string>();
-  for (const value of new Set(samples)) {
-    const fresh = afterSubmittedPrompt(value, sentPrompt, baseline);
+  for (const { value, fresh } of (bounded.length ? bounded : regions)) {
     for (const text of jsonCandidatesFromRenderedText(fresh ?? value)) {
       if (fresh === undefined && (previous.some(old => old.includes(text))
           || (sentPrompt && sentPrompt.includes(text)))) continue;
@@ -408,17 +414,21 @@ export function selectCompletedAssistantContract(
 function afterSubmittedPrompt(
   current: string, sentPrompt: string, baseline: readonly UiTextSnapshot[] = []
 ): string | undefined {
-  const words = sentPrompt.trim().split(/\s+/).slice(-24);
-  if (words.length < 8 || words.join(' ').length < 96) return undefined;
+  const words = sentPrompt.trim().split(/\s+/);
   const escape = (word: string): string => word.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
-  const pattern = new RegExp(words.map(escape).join('\\s+'), 'g');
-  const matches = [...current.matchAll(pattern)];
-  const previousCount = Math.max(0, ...baseline.map(item => [...item.text.matchAll(pattern)].length));
-  // Only one newly rendered prompt establishes the current-turn boundary.
-  // A prior occurrence plus a sidebar mutation must never replay an action.
-  if (matches.length !== previousCount + 1) return undefined;
-  const last = matches.at(-1)!;
-  return current.slice(last.index! + last[0].length).trim();
+  // WebChat may reformat the start of a long prompt but preserve its tail.
+  // Keep the original baseline-count proof for every sufficiently long anchor.
+  for (const count of [24, 16, 12, 8]) {
+    const tail = words.slice(-count);
+    if (tail.length < 8 || tail.join(' ').length < 96) continue;
+    const pattern = new RegExp(tail.map(escape).join('\\s+'), 'g');
+    const matches = [...current.matchAll(pattern)];
+    const previousCount = Math.max(0, ...baseline.map(item => [...item.text.matchAll(pattern)].length));
+    if (matches.length !== previousCount + 1) continue;
+    const last = matches.at(-1)!;
+    return current.slice(last.index! + last[0].length).trim();
+  }
+  return undefined;
 }
 
 /**
