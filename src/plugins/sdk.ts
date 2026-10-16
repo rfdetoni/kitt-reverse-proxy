@@ -7,6 +7,8 @@ export interface UiProviderConfig {
   inputSelectors: string[];
   sendSelectors: string[];
   responseSelectors: string[];
+  /** Ancestors matching these selectors are non-answer regions (e.g. DeepSeek Thinking). */
+  responseExcludeSelectors?: string[];
   streamingSelectors: string[];
   newChatUrl?: string;
   uploadSelector?: string;
@@ -102,6 +104,9 @@ export function validateProviderPlugin(value: unknown): ProviderPlugin {
   assertStringArray(provider.ui.inputSelectors, 'provider.ui.inputSelectors', false);
   assertStringArray(provider.ui.sendSelectors, 'provider.ui.sendSelectors', false);
   assertStringArray(provider.ui.responseSelectors, 'provider.ui.responseSelectors', false);
+  if (provider.ui.responseExcludeSelectors !== undefined) {
+    assertStringArray(provider.ui.responseExcludeSelectors, 'provider.ui.responseExcludeSelectors', false);
+  }
   assertStringArray(provider.ui.streamingSelectors, 'provider.ui.streamingSelectors');
   if (typeof provider.ui.supportsImageUpload !== 'boolean') {
     throw new TypeError('Provider plugin ui.supportsImageUpload must be boolean.');
