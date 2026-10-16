@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import type { ProviderPreset } from '../providers/catalog.js';
 import { throwIfAborted } from './cancellation.js';
 
-export type ContinuationOutcome = 'absent' | 'resumed' | 'manual';
+export type ContinuationOutcome = 'absent' | 'resumed' | 'manual' | 'paused';
 
 /** Allowed UI-only generation continuation, never a login or approval flow. */
 export function isSafeGenerationContinuationLabel(raw: string): boolean {
@@ -18,7 +18,8 @@ export function isSafeGenerationContinuationLabel(raw: string): boolean {
  * Requires a new answer snapshot selected against the pre-submit baseline.
  */
 export async function resumeDeepseekGeneration(
-  page: Page, provider: ProviderPreset, freshAssistantText: string, signal?: AbortSignal
+  page: Page, provider: ProviderPreset, freshAssistantText: string, signal?: AbortSignal,
+  allowClick = true
 ): Promise<ContinuationOutcome> {
   if (provider.id !== 'deepseek' || !freshAssistantText.trim()) return 'absent';
   const url = new URL(page.url());
@@ -63,6 +64,7 @@ export async function resumeDeepseekGeneration(
     || await button.textContent().catch(() => '') || '';
   if (!isSafeGenerationContinuationLabel(label)) return 'manual';
   if (!await button.isEnabled().catch(() => false)) return 'manual';
+  if (!allowClick) return 'paused';
   throwIfAborted(signal);
   try {
     await button.click({ timeout: 2_000 });
