@@ -6,8 +6,10 @@ Based on operator logs from 2026-10-16 (Agent CLI and ChatGPT Web v5.4.5):
   The final request was submitted successfully but yielded
   `no_matching_request` (three decoded POST bodies, zero matched anchors).
   DOM did not provide an unambiguous fresh assistant result.
-- Explicit capture-recovery error now identifies **uncorrelated CDP +
-  unverified DOM** after a bounded post-generation grace interval. Never
+- Explicit `ui_capture_unverified` (409) now identifies **uncorrelated
+  CDP + unverified DOM** after a bounded post-generation grace interval.
+  This error is recoverable via **explicit continue** in the Agent CLI,
+  preserving task state; the provider request is never replayed automatically. Never
   trust old conversation JSON, auto-replay a possibly submitted request or
   silently promote content as the current action.
 - The public `reasoning_summary` field is deterministically limited to two
