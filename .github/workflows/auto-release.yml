@@ -107,7 +107,7 @@ jobs:
               release_changes=()
               while IFS= read -r changed_path; do
                 case "$changed_path" in
-                  .github/*|docs/*|test/*|README.md|SECURITY.md|LICENSE)
+                  .github/*|docs/*|test/*|README.md|CHANGELOG.md|SECURITY.md|LICENSE)
                     ;;
                   *)
                     release_changes+=("$changed_path")
