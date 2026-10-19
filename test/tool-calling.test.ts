@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildToolProtocolPlan, extractToolCalls, formatToolsInstruction, injectToolsIntoPrompt, ToolProtocolError } from '../src/mapping/tool-calling.js';
+import { buildToolProtocolPlan, extractToolCalls, extractStructuredToolCalls, formatToolsInstruction, injectToolsIntoPrompt, ToolProtocolError } from '../src/mapping/tool-calling.js';
 import { validateOpenAiChatRequest } from '../src/proxy/request-validation.js';
 
 test('formatToolsInstruction formats tool definitions', () => {
@@ -177,4 +177,14 @@ test('provider-native function arguments reject duplicate keys before normalizat
   assert.throws(() => extractToolCalls(
     '<tool_call>{"name":"read_file","arguments":"{\\\"path\\\":\\\"safe\\\",\\\"path\\\":\\\"unsafe\\\"}"}</tool_call>', plan
   ), /inválida|inválido|fora da allowlist/i);
+});
+
+test('malformed typed native function call is rejected instead of dropped as text', () => {
+  const plan = buildToolProtocolPlan({
+    tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }]
+  });
+  assert.throws(() => extractStructuredToolCalls({
+    type: 'function_call', name: 'read_file',
+    arguments: '{"path":"one","path":"other"}'
+  }, plan), /function_call nativa inválida/);
 });

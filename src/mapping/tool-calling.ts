@@ -624,6 +624,12 @@ export function extractStructuredToolCalls(
     ) {
       const call = normalizedCall(record, plan);
       if (call) found.push(call);
+      else if (record.type === 'function_call') {
+        // A native function call is a requested action, never ignorable prose.
+        // Reject it instead of triggering a fresh model decision without
+        // the original malformed arguments.
+        throw new ToolProtocolError('Upstream retornou function_call nativa inválida.', 'model');
+      }
     }
 
     for (const child of Object.values(record)) walk(child, depth + 1);
