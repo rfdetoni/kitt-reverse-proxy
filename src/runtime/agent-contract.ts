@@ -571,7 +571,7 @@ export function prepareAgentContractRequest(
   delete body.kitt_meta;
   if (nativeToolCalling) {
     // Only the active network profile can opt into function-capable transport.
-    body.tools = originalBody.tools;
+    if (originalBody.tools !== undefined) body.tools = originalBody.tools;
     if (originalBody.tool_choice !== undefined) body.tool_choice = originalBody.tool_choice;
   }
   body.messages = [
