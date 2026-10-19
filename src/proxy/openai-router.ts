@@ -132,7 +132,7 @@ function compactContractRepairMessages(plan: AgentContractPlan, candidate: strin
 function prepareContract(req: Request, body: JsonObject, lease: SessionExecutionLease, network: boolean): AgentContractPlan {
   const route = req.get(AGENT_ROUTE_HEADER);
   return prepareAgentContractRequest(body, { sessionId: lease.sessionId,
-    contextKey: lease.contextKey, forceBootstrap: network, ...(route ? { route } : {}) });
+    contextKey: lease.contextKey, forceBootstrap: network, nativeToolCalling: network, ...(route ? { route } : {}) });
 }
 
 export function buildAgentContractRepairBody(

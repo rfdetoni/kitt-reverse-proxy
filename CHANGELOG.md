@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.12 — native function calls for network-backed Agent requests
+
+Offer previously declared host tools to network transports, allowing native provider function calls without a six-field textual JSON action. Network adapters continue to choose native calling where supported and the existing textual tool bridge otherwise. WebChat remains JSON-only. Validate calls through the existing allowlist and argument schema, forbid multiple host actions until the CLI supports them, and reject ambiguous or malformed native responses. Bump the npm lock; KAP/2 stays archived.
+
+
 ## 5.4.11 — reject empty completions, constrain repair, split validation
 
 Reject blank and empty-object final agent responses instead of accepting false task completion. Restrict JSON contract repair from replacing an entire host tool input on coarse schema errors. Extract stateless Agent contract validation from session orchestration, keeping the current external interfaces. Bump package lock and add a focused regression case. [Notas](docs/RELEASE_5.4.11.md).

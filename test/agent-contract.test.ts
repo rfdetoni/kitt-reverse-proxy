@@ -805,3 +805,52 @@ test('coarse schema errors cannot authorize replacing the host tool input', asyn
     new AgentContractValidationError('tool input invalid', 'schema', ['$/tool_input'])),
     /entire host tool input/);
 });
+
+test('network Agent contract exposes functions without changing WebChat JSON-only mode', () => {
+  const request = body();
+  const ui = prepareAgentContractRequest(request, { sessionId: 'native-disabled-ui' });
+  const network = prepareAgentContractRequest(request, { sessionId: 'native-enabled-network', nativeToolCalling: true });
+  assert.equal(ui.body.tools, undefined);
+  assert.equal(ui.nativeToolCalling, false);
+  assert.ok(Array.isArray(network.body.tools));
+  assert.equal(network.body.tool_choice, 'auto');
+  assert.equal(network.body.parallel_tool_calls, false);
+  assert.match((network.body.messages as any[])[0].content, /call exactly one declared function directly/);
+});
+
+test('network Agent contract passes through validated provider-native function calls', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'native-pass-through', nativeToolCalling: true });
+  const response = completion('');
+  response.choices[0]!.message.content = null;
+  response.choices[0]!.message.tool_calls = [{
+    id: 'call_provider_123', type: 'function',
+    function: { name: 'kitt_runtime', arguments: JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }) }
+  }];
+  const result = transformAgentContractCompletion(response, plan);
+  assert.equal(result.choices[0]!.message.tool_calls?.[0]?.id, 'call_provider_123');
+  assert.equal(result.choices[0]!.message.content, null);
+  assert.equal(result.choices[0]!.finish_reason, 'tool_calls');
+});
+
+test('network Agent native calls enforce allowlists and reject malformed or ambiguous actions', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'native-rejected', nativeToolCalling: true });
+  const make = (name: string, args: string) => {
+    const response = completion('');
+    response.choices[0]!.message.content = null;
+    response.choices[0]!.message.tool_calls = [
+      { id: 'call_valid', type: 'function', function: { name, arguments: args } }
+    ];
+    return response;
+  };
+  assert.throws(() => transformAgentContractCompletion(make('unlisted_tool', '{}'), plan), /unavailable/);
+  assert.throws(() => transformAgentContractCompletion(make('kitt_runtime', '{bad'), plan), /valid JSON object/);
+  assert.throws(() => transformAgentContractCompletion(make('kitt_runtime', '{"operation":"repo.read","operation":"repo.write_file"}'), plan), /valid JSON object/);
+  const two = make('kitt_runtime', '{}');
+  two.choices[0]!.message.tool_calls!.push({
+    id: 'call_other', type: 'function', function: { name: 'kitt_runtime', arguments: '{}' }
+  });
+  assert.throws(() => transformAgentContractCompletion(two, plan), /one host tool call/);
+  const competing = make('kitt_runtime', '{}');
+  competing.choices[0]!.message.content = '{"action":"final_response"}';
+  assert.throws(() => transformAgentContractCompletion(competing, plan), /Competing textual action/);
+});
