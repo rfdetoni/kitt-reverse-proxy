@@ -786,3 +786,22 @@ test('agent contract bounds serialized UTF-8 tool arguments before returning a c
   assert.throws(() => transformAgentContractCompletion(response(input('x'.repeat(65537))), plan), /64 KiB/);
   assert.throws(() => transformAgentContractCompletion(response(input('á'.repeat(32768))), plan), /64 KiB/);
 });
+
+
+test('an empty completion cannot silently finish an agent task', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'empty-final-response' });
+  assert.throws(() => transformAgentContractCompletion(completion('{}'), plan), /Invalid Agent response/);
+  const empty = { action: 'final_response', tool: null, tool_input: null, content: {}, reasoning_summary: '', loop: null };
+  assert.throws(() => transformAgentContractCompletion(completion(JSON.stringify(empty)), plan), /non-empty content/);
+});
+
+test('coarse schema errors cannot authorize replacing the host tool input', async () => {
+  const { assertAgentRepairContinuity } = await import('../src/runtime/agent-contract.js');
+  const candidate = JSON.stringify({ action: 'use_tool', tool: 'kitt_runtime',
+    tool_input: { operation: 'repo.read', arguments: { path: 'safe.txt' } },
+    content: null, reasoning_summary: '', loop: null });
+  const replaced = candidate.replace('safe.txt', 'other.txt');
+  assert.throws(() => assertAgentRepairContinuity(candidate, replaced,
+    new AgentContractValidationError('tool input invalid', 'schema', ['$/tool_input'])),
+    /entire host tool input/);
+});
