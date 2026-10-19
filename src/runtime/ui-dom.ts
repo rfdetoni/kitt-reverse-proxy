@@ -423,6 +423,11 @@ export function selectCompletedAssistantContract(
       continue;
     }
     for (const text of jsonCandidatesFromRenderedText(visible)) {
+      // A tool-shaped JSON object inside a surrounding explicit envelope is
+      // *not* a standalone final. Ignore its interior unless the complete
+      // frame was independently captured above.
+      const prefix = visible.slice(0, visible.indexOf(text));
+      if (prefix.lastIndexOf('<tool_call>') > prefix.lastIndexOf('</tool_call>')) continue;
       if (fresh === undefined && (previous.some(old => old.includes(text))
           || (sentPrompt && sentPrompt.includes(text)))) continue;
       try {
