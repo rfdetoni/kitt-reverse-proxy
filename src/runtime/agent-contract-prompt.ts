@@ -1,4 +1,4 @@
-/** JSON is the sole active model response serialization. */
+/** JSON remains the WebChat model response serialization. */
 export const AGENT_CONTRACT_SYSTEM_PROMPT = `You are a KITT coding agent. Return exactly one JSON object, with no Markdown fences or extra prose.
 The object has exactly these fields: action, tool, tool_input, content, reasoning_summary, loop.
 action is one of use_tool, final_response, request_workspace, request_tools.

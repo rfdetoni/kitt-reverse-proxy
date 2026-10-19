@@ -844,6 +844,7 @@ test('network Agent native calls enforce allowlists and reject malformed or ambi
   };
   assert.throws(() => transformAgentContractCompletion(make('unlisted_tool', '{}'), plan), /unavailable/);
   assert.throws(() => transformAgentContractCompletion(make('kitt_runtime', '{bad'), plan), /valid JSON object/);
+  assert.throws(() => transformAgentContractCompletion(make('kitt_runtime', '{"operation":"secret","arguments":{}}'), plan), /Invalid tool_input/);
   assert.throws(() => transformAgentContractCompletion(make('kitt_runtime', '{"operation":"repo.read","operation":"repo.write_file"}'), plan), /valid JSON object/);
   const two = make('kitt_runtime', '{}');
   two.choices[0]!.message.tool_calls!.push({

@@ -603,7 +603,7 @@ export function transformAgentContractCompletion(
     if (nativeCalls.length !== 1) {
       throw new AgentContractValidationError('The Agent CLI accepts one host tool call per turn.', 'schema', ['$/tool_calls']);
     }
-    if (typeof message?.content === 'string' && /^\\s*[\\{\\[]/u.test(message.content)) {
+    if (typeof message?.content === 'string' && ['{', '['].includes(message.content.trimStart().charAt(0))) {
       throw new AgentContractValidationError('Competing textual action and native tool call.', 'ambiguous', ['$/content', '$/tool_calls']);
     }
     const call = nativeCalls[0]!;
