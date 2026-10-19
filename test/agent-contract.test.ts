@@ -308,7 +308,7 @@ test('native tool capability forwards only declared schemas for network transpor
   assert.match(messages[0]!.content, /native provider function calls/);
   assert.doesNotMatch(messages[0]!.content, /<tool_call>/);
   assert.match(messages[1]!.content, /TOOLS_AVAILABLE_NAMES:/);
-  assert.doesNotMatch(messages[1]!.content, /TOOLS_AVAILABLE: \\[/);
+  assert.ok(!messages[1]!.content.includes('TOOLS_AVAILABLE: ['));
   const webPlan = prepareAgentContractRequest(body(), { sessionId: 'native-profile-inactive' });
   assert.equal(webPlan.nativeToolCalling, false);
   assert.equal(webPlan.body.tools, undefined);
