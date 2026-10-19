@@ -1,4 +1,4 @@
-import { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
+import { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT, AGENT_NETWORK_SYSTEM_PROMPT } from './agent-contract-prompt.js';
 export { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
 import { ContractJsonError, parseContractJson } from '../util/contract-json.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -63,6 +63,7 @@ export interface AgentContractPlan {
   originalBody: JsonObject;
   route: string;
   tools: Map<string, ToolDescriptor>;
+  nativeToolCalling: boolean;
   sessionId: string;
 }
 
@@ -445,13 +446,14 @@ export function commitAgentContractContext(plan: AgentContractPlan): void {
 
 export function prepareAgentContractRequest(
   originalBody: JsonObject,
-  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean } = {}
+  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean; nativeToolCalling?: boolean } = {}
 ): AgentContractPlan {
   const sessionId = options.sessionId?.trim() || 'default';
   const contextKey = options.contextKey ?? sessionId;
   const stats = ensureStats(contextKey);
 
   const tools = extractTools(originalBody);
+  const nativeToolCalling = options.nativeToolCalling === true && tools.size > 0;
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
   const hasTypedContext = originalBody.kitt_context !== undefined;
   const typedEnvelope = parseTypedContextEnvelope(originalBody.kitt_context);
@@ -541,7 +543,7 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
-    ...(toolsChanged
+    ...(toolsChanged && !nativeToolCalling
       ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
       : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
     ...(changedWorkspace !== 'not_provided'
@@ -564,8 +566,15 @@ export function prepareAgentContractRequest(
   delete body.response_format;
   delete body.kitt_context;
   delete body.kitt_meta;
+  if (nativeToolCalling) {
+    // Only network transport receives provider-level functions; its existing
+    // capability detection selects native calling or text emulation.
+    body.tools = originalBody.tools!;
+    body.tool_choice = 'auto';
+    body.parallel_tool_calls = false; // The CLI currently handles one host action per turn.
+  }
   body.messages = [
-    { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT },
+    { role: 'system', content: nativeToolCalling ? AGENT_NETWORK_SYSTEM_PROMPT : AGENT_CONTRACT_SYSTEM_PROMPT },
     ...prependDynamicUserTurn(forwardedMessages, dynamicParts.join('\n'))
   ] as JsonValue[];
 
@@ -577,6 +586,7 @@ export function prepareAgentContractRequest(
     originalBody,
     route,
     tools,
+    nativeToolCalling,
     sessionId
   };
 }
@@ -585,7 +595,41 @@ export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
   plan: AgentContractPlan
 ): OpenAiCompletion {
-  const source = completion.choices[0]?.message.content;
+  const message = completion.choices[0]?.message;
+  const nativeCalls = message?.tool_calls;
+  if (plan.nativeToolCalling && nativeCalls?.length) {
+    // Native function calls are structured values, never commands inferred
+    // from prose. Validate through the same allowlist, schema and size checks.
+    if (nativeCalls.length !== 1) {
+      throw new AgentContractValidationError('The Agent CLI accepts one host tool call per turn.', 'schema', ['$/tool_calls']);
+    }
+    if (typeof message?.content === 'string' && ['{', '['].includes(message.content.trimStart().charAt(0))) {
+      throw new AgentContractValidationError('Competing textual action and native tool call.', 'ambiguous', ['$/content', '$/tool_calls']);
+    }
+    const call = nativeCalls[0]!;
+    if (call.type !== 'function' || !call.id || typeof call.function?.name !== 'string'
+        || typeof call.function.arguments !== 'string') {
+      throw new AgentContractValidationError('Invalid native tool call.', 'shape', ['$/tool_calls']);
+    }
+    let input: JsonObject;
+    try {
+      const parsed = parseContractJson(call.function.arguments);
+      if (parsed.repaired || !isRecord(parsed.value)) throw new Error('Arguments must be an exact JSON object.');
+      input = parsed.value as JsonObject;
+    } catch {
+      throw new AgentContractValidationError('Native tool arguments must be a valid JSON object.', 'syntax', ['$/tool_calls/0/function/arguments']);
+    }
+    validateContractResponse({
+      action: 'use_tool', tool: call.function.name, tool_input: input,
+      content: null, reasoning_summary: '', loop: null
+    }, plan);
+    const next = structuredClone(completion);
+    next.choices[0]!.message.content = null;
+    next.choices[0]!.finish_reason = 'tool_calls';
+    return next;
+  }
+
+  const source = message?.content;
   if (typeof source !== 'string') {
     throw new AgentContractValidationError('Model response has no textual JSON content.');
   }
