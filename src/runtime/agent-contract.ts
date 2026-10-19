@@ -569,7 +569,7 @@ export function prepareAgentContractRequest(
   if (nativeToolCalling) {
     // Only network transport receives provider-level functions; its existing
     // capability detection selects native calling or text emulation.
-    body.tools = originalBody.tools;
+    body.tools = originalBody.tools!;
     body.tool_choice = 'auto';
     body.parallel_tool_calls = false; // The CLI currently handles one host action per turn.
   }
