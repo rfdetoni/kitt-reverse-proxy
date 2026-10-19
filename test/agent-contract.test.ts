@@ -267,6 +267,56 @@ test('converts a valid use_tool contract into a native OpenAI tool call', () => 
   assert.equal(result.choices[0]?.finish_reason, 'tool_calls');
 });
 
+
+test('accepts a single explicit compact tool envelope without introducing a new protocol', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'compact-native-tool' });
+  const candidate = '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</tool_call>';
+  const result = transformAgentContractCompletion(completion(candidate), plan);
+  const call = result.choices[0]?.message.tool_calls?.[0];
+  assert.equal(result.choices[0]?.finish_reason, 'tool_calls');
+  assert.equal(call?.function.name, 'kitt_runtime');
+  assert.deepEqual(JSON.parse(call?.function.arguments ?? '{}'), {
+    operation: 'repo.read', arguments: { path: 'README.md' }
+  });
+});
+
+test('compact calls are not discovered inside prose or code, and cannot bypass host schemas', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'compact-fail-closed' });
+  const candidate = '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</tool_call>';
+  for (const text of [`Here is a call: ${candidate}`, `${candidate} and continue`, `${candidate}\n${candidate}`]) {
+    assert.throws(() => transformAgentContractCompletion(completion(text), plan), AgentContractValidationError);
+  }
+  assert.throws(
+    () => transformAgentContractCompletion(completion('<tool_call>{"name":"not_allowed","arguments":{}}</tool_call>'), plan),
+    /unavailable/
+  );
+  assert.throws(
+    () => transformAgentContractCompletion(completion('<tool_call>{"name":"kitt_runtime","arguments":{"operation":"not_allowed","arguments":{}}}</tool_call>'), plan),
+    /Invalid tool_input/
+  );
+});
+
+test('validates native function calls without reparsing model commentary', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'provider-native-call' });
+  const native = completion('Reading the file.');
+  native.choices[0]!.message.tool_calls = [{
+    id: 'call_native123', type: 'function',
+    function: { name: 'kitt_runtime', arguments: JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }) }
+  }];
+  const result = transformAgentContractCompletion(native, plan);
+  assert.equal(result.choices[0]?.finish_reason, 'tool_calls');
+  assert.equal(result.choices[0]?.message.tool_calls?.[0]?.id, 'call_native123');
+  assert.deepEqual(JSON.parse(result.choices[0]!.message.tool_calls![0]!.function.arguments), {
+    operation: 'repo.read', arguments: { path: 'README.md' }
+  });
+  const malformed = structuredClone(native);
+  malformed.choices[0]!.message.tool_calls![0]!.function.arguments = '{"operation":"repo.read",';
+  assert.throws(() => transformAgentContractCompletion(malformed, plan), /native function arguments/i);
+  const multi = structuredClone(native);
+  multi.choices[0]!.message.tool_calls!.push(structuredClone(multi.choices[0]!.message.tool_calls![0]!));
+  assert.throws(() => transformAgentContractCompletion(multi, plan), /one host tool action/);
+});
+
 test('normalizes synthesized native tool continuity before the UI executor', () => {
   const firstPlan = prepareAgentContractRequest(body(), { sessionId: 'sessionToolContinuity' });
   const firstResult = transformAgentContractCompletion(completion(JSON.stringify({
