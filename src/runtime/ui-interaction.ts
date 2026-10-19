@@ -162,14 +162,11 @@ async function setComposerTextThroughDom(
   }, { text: prompt, replaceRichText }, { timeout: 5_000 });
 }
 
-async function writeComposerText(page: Page, input: Locator, prompt: string): Promise<void> {
+async function writeComposerText(input: Locator, prompt: string): Promise<void> {
   const expected = normalizeComposerText(prompt);
 
   const startedAt = Date.now();
   const largePrompt = prompt.length >= 16_384;
-  // A long (but sub-16 KiB) task prompt can also be changed by ChatGPT's
-  // rich-text editor. Its content must never be blindly retyped/submitted.
-  const integrityCritical = prompt.length >= 8_192;
   const native = largePrompt && await isNativeComposer(input);
   const strategy = native ? 'native_input' : 'fill';
   let writeFailed = false;
@@ -200,11 +197,11 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     }
   }
 
-  if (integrityCritical) {
-    // Rich text may autoformat even below the previous 16 KiB threshold.
-    // Reset the editor once without typing a long second copy; verify again
-    // after its controlled-state reconciliation. Native inputs use their
-    // value setter on this recovery path.
+  // A rich editor can append or transform even a small (e.g. 1695-char)
+  // tool-result prompt. Attempt one bounded DOM replacement for every length,
+  // not only prompts above 8 KiB. Do not retype into an already-corrupted
+  // draft: keyboard replay can duplicate content and potentially submit it.
+  if (!native) {
     await setComposerTextThroughDom(input, prompt, true).catch(() => undefined);
     await abortableSleep(250);
     if (await composerHasExpectedText(input, expected)) {
@@ -219,38 +216,27 @@ async function writeComposerText(page: Page, input: Locator, prompt: string): Pr
     }
   }
 
-  // Never keyboard-retype a multi-KiB corrupted draft.
-  if (integrityCritical) {
-    const actual = normalizeComposerText(await readComposerText(input) ?? '');
-    const target = await describeComposerTarget(input);
-    logger.event('warn', 'ui.composer.write', {
-      outcome: 'integrity_failure', strategy,
-      prompt_chars: prompt.length, actual_chars: actual.length,
-      duration_ms: Date.now() - startedAt, write_failed: writeFailed,
-      write_error_type: writeErrorType || null
-    });
-    throw new UiAutomationError(
-      `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. Texto grande não foi redigitado automaticamente.`
-    );
+  // For native inputs only, a setter-based retry is safe and bounded.
+  if (native) {
+    await setComposerTextThroughDom(input, prompt, true).catch(() => undefined);
+    await abortableSleep(150);
+    if (await composerHasExpectedText(input, expected)) {
+      await abortableSleep(150);
+      if (await composerHasExpectedText(input, expected)) return;
+    }
   }
-
-  await input.focus().catch(() => undefined);
-  await input.click({ force: true, timeout: 2_000 }).catch(() => undefined);
-  await input.press('ControlOrMeta+A').catch(() => undefined);
-  await input.press('Backspace').catch(() => undefined);
-  await page.keyboard.insertText(prompt).catch(() => undefined);
-
-  if (await composerHasExpectedText(input, expected)) return;
-
-  await setComposerTextThroughDom(input, prompt).catch(() => undefined);
 
   const actual = normalizeComposerText(await readComposerText(input) ?? '');
-  if (!await composerHasExpectedText(input, expected)) {
-    const target = await describeComposerTarget(input);
-    throw new UiAutomationError(
-      `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}.`
-    );
-  }
+  const target = await describeComposerTarget(input);
+  logger.event('warn', 'ui.composer.write', {
+    outcome: 'integrity_failure', strategy,
+    prompt_chars: prompt.length, actual_chars: actual.length,
+    duration_ms: Date.now() - startedAt, write_failed: writeFailed,
+    write_error_type: writeErrorType || null
+  });
+  throw new UiAutomationError(
+    `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. O texto não foi enviado e não será redigitado automaticamente.`
+  );
 }
 
 async function waitForSubmissionConfirmation(
@@ -399,7 +385,7 @@ export async function sendUiPrompt(
   });
 
   const baseline = await collectVisibleSnapshots(session.page, provider.ui.responseSelectors, provider.ui.responseExcludeSelectors);
-  await writeComposerText(session.page, input, prompt);
+  await writeComposerText(input, prompt);
 
   await abortableSleep(150, signal);
   // A controlled editor can reconcile with an old value after a successful
