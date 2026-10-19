@@ -816,6 +816,9 @@ test('network Agent contract exposes functions without changing WebChat JSON-onl
   assert.equal(network.body.tool_choice, 'auto');
   assert.equal(network.body.parallel_tool_calls, false);
   assert.match((network.body.messages as any[])[0].content, /call exactly one declared function directly/);
+  const dynamicText = (network.body.messages as any[]).map(message => message.content).join('\n');
+  assert.match(dynamicText, /TOOLS_AVAILABLE_NAMES:/);
+  assert.doesNotMatch(dynamicText, /TOOLS_AVAILABLE: \[/);
 });
 
 test('network Agent contract passes through validated provider-native function calls', () => {

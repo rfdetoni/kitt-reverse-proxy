@@ -543,7 +543,7 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
-    ...(toolsChanged
+    ...(toolsChanged && !nativeToolCalling
       ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
       : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
     ...(changedWorkspace !== 'not_provided'

@@ -169,3 +169,12 @@ test('unsupported tool and structured schemas fail at the request boundary', () 
   assert.throws(() => validateOpenAiChatRequest({messages,tools:[{type:'function',function:{name:'tool',parameters:{type:'object',unsupportedConstraint:true}}}]}), /unsupported JSON Schema/);
   assert.throws(() => validateOpenAiChatRequest({messages,response_format:{type:'json_schema',json_schema:{schema:{$ref:'https://external.invalid/schema'}}}}), /unsupported JSON Schema/);
 });
+
+test('provider-native function arguments reject duplicate keys before normalization', () => {
+  const plan = buildToolProtocolPlan({
+    tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }]
+  });
+  assert.throws(() => extractToolCalls(
+    '<tool_call>{"name":"read_file","arguments":"{\\\"path\\\":\\\"safe\\\",\\\"path\\\":\\\"unsafe\\\"}"}</tool_call>', plan
+  ), /inválida|inválido|fora da allowlist/i);
+});

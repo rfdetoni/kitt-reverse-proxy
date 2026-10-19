@@ -373,7 +373,11 @@ function normalizeArguments(value: unknown): string | undefined {
   if (value === undefined || value === null || value === '') parsed = {};
   else if (typeof value === 'string') {
     if (Buffer.byteLength(value, 'utf8') > MAX_TOOL_ARGUMENT_BYTES) return undefined;
-    try { parsed = JSON.parse(value); } catch { return undefined; }
+    try {
+      const decoded = parseContractJson(value);
+      if (decoded.repaired) return undefined;
+      parsed = decoded.value;
+    } catch { return undefined; }
   } else {
     parsed = value;
   }

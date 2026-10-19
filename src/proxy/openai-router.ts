@@ -279,7 +279,12 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  if (firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  // A native function call has no textual six-field candidate to repair.
+  // Never ask a second model turn to invent or replace that executable action.
+  if (first.completion.choices[0]?.message.tool_calls?.length
+      || firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') {
+    throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  }
   const buildFirstRepair = firstValidationError.kind === 'syntax'
     ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
   const repairBody = buildFirstRepair(plan, firstValidationError, first.completion.choices[0]?.message.content ?? '');
