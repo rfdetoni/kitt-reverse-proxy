@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.11 — reject empty completions, constrain repair, split validation
+
+Reject blank and empty-object final agent responses instead of accepting false task completion. Restrict JSON contract repair from replacing an entire host tool input on coarse schema errors. Extract stateless Agent contract validation from session orchestration, keeping the current external interfaces. Bump package lock and add a focused regression case. [Notas](docs/RELEASE_5.4.11.md).
+
+
 ## 5.4.10 — ChatGPT composer integrity for short tool continuations
 
 Fixes 1695→1696-character rich-editor mutation after a KITT tool result: a bounded verified DOM replacement now covers all prompt sizes and never replays the corrupted draft via keyboard. Adds adversarial tests and bumps npm lock. [Notas](docs/RELEASE_5.4.10.md).
