@@ -235,7 +235,7 @@ async function writeComposerText(input: Locator, prompt: string): Promise<void> 
     write_error_type: writeErrorType || null
   });
   throw new UiAutomationError(
-    `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. O texto não foi enviado e não será redigitado automaticamente.`
+    `Falha ao preencher o campo do chat: esperado ${expected.length} caracteres, encontrado ${actual.length}; alvo=${target}. ${largePrompt ? 'Texto grande não foi redigitado automaticamente.' : 'O texto não foi enviado e não será redigitado automaticamente.'}`
   );
 }
 
