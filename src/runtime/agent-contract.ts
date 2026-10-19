@@ -643,9 +643,9 @@ export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
   plan: AgentContractPlan
 ): OpenAiCompletion {
-  const choice = completion.choices[0];
+  const sourceChoice = completion.choices[0];
   const nativeResponse = nativeAgentToolAction(completion);
-  const source = choice?.message.content;
+  const source = sourceChoice?.message.content;
   if (!nativeResponse && typeof source !== 'string') {
     throw new AgentContractValidationError('Model response has no textual contract content.');
   }
