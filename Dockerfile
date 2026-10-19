@@ -5,7 +5,7 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --strict-allow-scripts
+RUN --mount=type=cache,id=kitt-proxy-npm,target=/root/.npm npm ci --strict-allow-scripts
 
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
@@ -35,6 +35,10 @@ USER kitt
 
 VOLUME ["/data/browser"]
 EXPOSE 3000
+
+# Node's built-in fetch avoids adding curl to the minimal runtime.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/cli.js"]
 CMD ["start", "chatgpt", "--host", "0.0.0.0", "--port", "3000", "--user-data-dir", "/data/browser"]
