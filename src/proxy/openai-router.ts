@@ -131,8 +131,11 @@ function compactContractRepairMessages(plan: AgentContractPlan, candidate: strin
 
 function prepareContract(req: Request, body: JsonObject, lease: SessionExecutionLease, network: boolean): AgentContractPlan {
   const route = req.get(AGENT_ROUTE_HEADER);
+  const nativeToolCalling = lease.nativeToolCalling === true
+    && (body.tool_choice === undefined || body.tool_choice === 'auto')
+    && body.parallel_tool_calls !== false;
   return prepareAgentContractRequest(body, { sessionId: lease.sessionId,
-    contextKey: lease.contextKey, forceBootstrap: network, ...(route ? { route } : {}) });
+    contextKey: lease.contextKey, forceBootstrap: network, nativeToolCalling, ...(route ? { route } : {}) });
 }
 
 export function buildAgentContractRepairBody(
@@ -155,7 +158,12 @@ export function buildAgentContractRepairBody(
       '[END KITT CONTRACT REPAIR]'
     ].join('\n')
   });
-  return { ...plan.body, messages };
+  const repaired: JsonObject = { ...plan.body, messages };
+  // Serialization repair must not trigger another native function call.
+  delete repaired.tools;
+  delete repaired.tool_choice;
+  delete repaired.parallel_tool_calls;
+  return repaired;
 }
 
 export function buildAgentContractSerializationRepairBody(
@@ -178,7 +186,12 @@ export function buildAgentContractSerializationRepairBody(
       '[END KITT CONTRACT SERIALIZATION REPAIR]'
     ].join('\n')
   });
-  return { ...plan.body, messages };
+  const repaired: JsonObject = { ...plan.body, messages };
+  // Serialization repair must not trigger another native function call.
+  delete repaired.tools;
+  delete repaired.tool_choice;
+  delete repaired.parallel_tool_calls;
+  return repaired;
 }
 
 export function contractExecutionOptions(
@@ -279,7 +292,13 @@ async function executeAgentContract(
     firstValidationError = error;
   }
 
-  if (firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  // Never use a model repair call to rewrite an already-identified native or
+  // compact tool action. Fail closed instead of changing tool arguments.
+  const firstChoice = first.completion.choices[0]?.message;
+  if (firstChoice?.tool_calls?.length || firstChoice?.content?.trimStart().startsWith('<tool_call>')
+      || firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') {
+    throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
+  }
   const buildFirstRepair = firstValidationError.kind === 'syntax'
     ? buildAgentContractSerializationRepairBody : buildAgentContractRepairBody;
   const repairBody = buildFirstRepair(plan, firstValidationError, first.completion.choices[0]?.message.content ?? '');

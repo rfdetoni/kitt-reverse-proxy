@@ -151,6 +151,7 @@ export class NetworkChatExecutor implements ChatExecutor {
       requestCodec: this.capture.requestCodec.kind,
       followRedirects: this.config.followRedirects,
       toolCalling: 'native-or-protocol-emulated',
+      nativeToolCalling: this.profile.request.bindings.some((binding) => binding.source === 'openai.tools_json'),
       toolExecution: 'client-side',
       cancellation: 'cooperative'
     };

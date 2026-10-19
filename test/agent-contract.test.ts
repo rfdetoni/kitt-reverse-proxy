@@ -296,6 +296,24 @@ test('compact calls are not discovered inside prose or code, and cannot bypass h
   );
 });
 
+
+test('native tool capability forwards only declared schemas for network transport', () => {
+  const request = body();
+  const nativePlan = prepareAgentContractRequest(request, {
+    sessionId: 'native-profile-active', nativeToolCalling: true
+  });
+  assert.equal(nativePlan.nativeToolCalling, true);
+  assert.deepEqual(nativePlan.body.tools, request.tools);
+  const messages = nativePlan.body.messages as Array<{ role: string; content: string }>;
+  assert.match(messages[0]!.content, /native provider function calls/);
+  assert.doesNotMatch(messages[0]!.content, /<tool_call>/);
+  assert.match(messages[1]!.content, /TOOLS_AVAILABLE_NAMES:/);
+  assert.doesNotMatch(messages[1]!.content, /TOOLS_AVAILABLE: \\[/);
+  const webPlan = prepareAgentContractRequest(body(), { sessionId: 'native-profile-inactive' });
+  assert.equal(webPlan.nativeToolCalling, false);
+  assert.equal(webPlan.body.tools, undefined);
+});
+
 test('validates native function calls without reparsing model commentary', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'provider-native-call' });
   const native = completion('Reading the file.');

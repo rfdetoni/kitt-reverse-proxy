@@ -1,5 +1,5 @@
-import { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
-export { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
+import { AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT, AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
+export { AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT, AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
 import { ContractJsonError, parseContractJson } from '../util/contract-json.js';
 import { isDeepStrictEqual } from 'node:util';
 import { transportPayload } from './read/contract-text.js';
@@ -65,6 +65,7 @@ export interface AgentContractPlan {
   route: string;
   tools: Map<string, ToolDescriptor>;
   sessionId: string;
+  nativeToolCalling: boolean;
 }
 
 interface ContractStats {
@@ -446,13 +447,14 @@ export function commitAgentContractContext(plan: AgentContractPlan): void {
 
 export function prepareAgentContractRequest(
   originalBody: JsonObject,
-  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean } = {}
+  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean; nativeToolCalling?: boolean } = {}
 ): AgentContractPlan {
   const sessionId = options.sessionId?.trim() || 'default';
   const contextKey = options.contextKey ?? sessionId;
   const stats = ensureStats(contextKey);
 
   const tools = extractTools(originalBody);
+  const nativeToolCalling = options.nativeToolCalling === true && tools.size > 0;
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
   const hasTypedContext = originalBody.kitt_context !== undefined;
   const typedEnvelope = parseTypedContextEnvelope(originalBody.kitt_context);
@@ -542,9 +544,11 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
-    ...(toolsChanged
-      ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
-      : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
+    ...(nativeToolCalling
+      ? [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]
+      : toolsChanged
+        ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
+        : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
     ...(changedWorkspace !== 'not_provided'
       ? [`WORKSPACE_CONTEXT:\nUNTRUSTED_WORKSPACE_DATA: ${boundedJson(changedWorkspace, 'WORKSPACE_CONTEXT')}`]
       : [bootstrapContext ? 'WORKSPACE_CONTEXT: not_provided' : 'WORKSPACE_CONTEXT: session_cached']),
@@ -565,8 +569,13 @@ export function prepareAgentContractRequest(
   delete body.response_format;
   delete body.kitt_context;
   delete body.kitt_meta;
+  if (nativeToolCalling) {
+    // Only the active network profile can opt into function-capable transport.
+    body.tools = originalBody.tools;
+    if (originalBody.tool_choice !== undefined) body.tool_choice = originalBody.tool_choice;
+  }
   body.messages = [
-    { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT },
+    { role: 'system', content: nativeToolCalling ? AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT : AGENT_CONTRACT_SYSTEM_PROMPT },
     ...prependDynamicUserTurn(forwardedMessages, dynamicParts.join('\n'))
   ] as JsonValue[];
 
@@ -578,7 +587,8 @@ export function prepareAgentContractRequest(
     originalBody,
     route,
     tools,
-    sessionId
+    sessionId,
+    nativeToolCalling
   };
 }
 
