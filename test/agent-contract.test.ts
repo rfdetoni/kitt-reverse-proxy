@@ -856,6 +856,14 @@ test('agent contract bounds serialized UTF-8 tool arguments before returning a c
 });
 
 
+test('renderer-stripped tool markup cannot become a bare structured final', () => {
+  const plan = prepareAgentContractRequest(body(), { sessionId: 'renderer-stripped-tool' });
+  assert.throws(() => transformAgentContractCompletion(
+    completion('{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}'),
+    plan
+  ), AgentContractValidationError);
+});
+
 test('an empty completion cannot silently finish an agent task', () => {
   const plan = prepareAgentContractRequest(body(), { sessionId: 'empty-final-response' });
   assert.throws(() => transformAgentContractCompletion(completion('{}'), plan), /Invalid Agent response/);

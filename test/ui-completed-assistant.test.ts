@@ -28,3 +28,12 @@ test('completed compact JSON assistant output is recoverable but truncated outpu
   assert.equal(selectCompletedAssistantContract([compact.slice(0,-1)], []), undefined);
   assert.equal(selectCompletedAssistantContract([compact], [{ selector: 'old', frameIndex: 0, count: 1, text: compact }]), undefined);
 });
+
+test('DOM contract selection keeps complete explicit tool envelopes', () => {
+  const payload = '<tool_call>{"name":"kitt_runtime","arguments":{"operation":"repo.read","arguments":{"path":"README.md"}}}</tool_call>';
+  const selected = selectCompletedAssistantContract([payload], [], 'Read README.md');
+  assert.equal(selected, payload);
+  assert.equal(selectCompletedAssistantContract([`Here is the tool: ${payload}`], [], 'Read README.md'), undefined);
+  assert.equal(selectCompletedAssistantContract([`${payload}\n${payload}`], [], 'Read README.md'), undefined);
+  assert.equal(selectCompletedAssistantContract([payload], [{selector:'baseline',frameIndex:0,count:1,text:payload}], 'Read README.md'), undefined);
+});

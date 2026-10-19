@@ -8,7 +8,7 @@
 - Tool availability, argument size, schema checks, authorization and approvals remain enforced by the existing proxy/host boundary.
 - Host execution remains **one action per agent turn**. Independent reads may be grouped using the already-supported `repo.batch_read`. Free-form prose and quoted tool examples never trigger execution.
 - Invalid compact and native tool requests fail closed without model-driven repair of tool arguments.
-- Existing WebChat DOM/raw capture reconciliation stays unchanged. This release does not claim improved authenticated WebChat capture reliability or measured token/latency savings.
+- The DOM completed-contract selector now preserves a full explicit tool envelope, rather than extracting the internal JSON as a false final; renderer-stripped tool-shaped objects are rejected as non-finals. Correlated DOM/raw reconciliation stays intact. This release does not claim improved authenticated WebChat capture reliability or measured token/latency savings.
 
 ## Validation
 
