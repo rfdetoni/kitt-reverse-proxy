@@ -388,3 +388,18 @@ test('cancelled automation closes only its tab and does not click after a pendin
     assert.equal(providerClosed, false);
   } finally { release(); await manager.close(); }
 });
+
+test('failed browser dispatch invalidates logical session exactly once', async () => {
+  const fail = executor('default');
+  fail.execute = async () => { throw new Error('provider unavailable'); };
+  const manager = new SessionManager({ defaultExecutor: fail, provider: 'chatgpt', config });
+  const key = () => manager.transaction(undefined, {}, async lease => lease.contextKey);
+  try {
+    const before = Number((await key()).split(':').at(-1));
+    await assert.rejects(manager.execute(undefined, { messages: [] }), /provider unavailable/);
+    const after = Number((await key()).split(':').at(-1));
+    assert.equal(after - before, 1);
+  } finally {
+    await manager.close();
+  }
+});

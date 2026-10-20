@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.15 — single session invalidation on transport failure
+
+A single failed named or default WebChat request now increments the session generation exactly once, rather than once in `lease.execute` and again in the enclosing transaction. This keeps context-key rotation and session diagnostic counters stable without changing browser isolation, request idempotency, contract v5 or retry authority. A focused regression checks the generation boundary. [Notes](docs/RELEASE_5.4.15.md).
+
+
 ## 5.4.14 — bounded request_tools recovery
 
 If the model asks for a tool catalog that the host already supplied, retry once with a terse catalog reminder instead of ending the turn. Never synthesize privileges for a request without host tools; repeated requests fail closed. [Notes](docs/RELEASE_5.4.14.md).

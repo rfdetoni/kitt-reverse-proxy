@@ -293,8 +293,7 @@ export class SessionManager {
             const before = lifecycle.attempts; const executorStarted = Date.now();
             // Third-party adapters must also obey the attempt grant before dispatch.
             if (before >= lifecycle.maxAttempts) { lifecycle.beforeSubmit(''); }
-            try {
-              const result = await session.executor.execute(body, { ...options, ...executionOptions, lifecycle, signal });
+            const result = await session.executor.execute(body, { ...options, ...executionOptions, lifecycle, signal });
               if (lifecycle.attempts === before) {
                 lifecycle.beforeSubmit(JSON.stringify(body)); lifecycle.received(JSON.stringify(result.completion.choices[0]?.message ?? {}));
               }
@@ -304,7 +303,6 @@ export class SessionManager {
                 ...(result.metadata?.timing !== undefined ? { executor_timing: result.metadata.timing } : {}) };
               logger.event('info', 'chat.timing', timing);
               return { ...result, completion: { ...result.completion, usage: lifecycle.usage() }, metadata: { ...result.metadata, timing } };
-            } catch (error) { session.generation = ++this.generation; throw error; }
           }
         };
         try { return await operation(lease); }
