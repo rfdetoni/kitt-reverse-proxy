@@ -230,7 +230,7 @@ function contractResponseDigest(result: ChatExecutionResult): { response_sha256:
 
 function recordContractAttempt(
   plan: AgentContractPlan,
-  attempt: 'initial' | 'repair' | 'serialization-repair' | 'regeneration',
+  attempt: 'initial' | 'repair' | 'serialization-repair' | 'regeneration' | 'tools-reminder',
   result: ChatExecutionResult,
   validationError?: AgentContractValidationError
 ): void {
@@ -282,6 +282,40 @@ async function executeAgentContract(
     recordContractAttempt(plan, 'initial', first);
     return transformed;
   } catch (error) {
+    if (error instanceof AgentContractError && error.code === 'tools_context_required') {
+      if (!plan.tools.size) {
+        throw new AgentContractError(409, 'tools_context_required',
+          'No host tools were declared. The proxy cannot invent or authorize tools.', true, 'continue');
+      }
+      // One model-only reminder; no host operation was executed by request_tools.
+      const retryMessages = Array.isArray(plan.body.messages) ? [...plan.body.messages] : [];
+      retryMessages.push({
+        role: 'user',
+        content: '[KITT HOST TOOLS REMINDER]\\n'
+          + 'Use a declared host function or return a final_response with concrete blockers. '
+          + 'Do not request_tools again. No tool was executed by the prior request_tools action.\\n'
+          + 'TOOLS_AVAILABLE_NAMES: ' + JSON.stringify([...plan.tools.keys()])
+          + '\\n[END KITT HOST TOOLS REMINDER]'
+      });
+      const reminder = await lease.execute(
+        { ...plan.body, messages: retryMessages },
+        contractRepairExecutionOptions(plan, options)
+      );
+      try {
+        const transformed = transform(reminder);
+        recordAgentContractValidation(plan.contextKey, true);
+        recordContractAttempt(plan, 'tools-reminder', reminder);
+        return transformed;
+      } catch (retryError) {
+        recordAgentContractValidation(plan.contextKey, false);
+        if (retryError instanceof AgentContractError && retryError.code === 'tools_context_required') {
+          throw new AgentContractError(409, 'tools_context_required',
+            'The model requested the already-declared tools again after one bounded reminder.',
+            true, 'continue');
+        }
+        throw retryError;
+      }
+    }
     if (!(error instanceof AgentContractValidationError)) {
       recordAgentContractValidation(plan.contextKey, true);
       throw error;

@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.14 — bounded request_tools recovery
+
+If the model asks for a tool catalog that the host already supplied, retry once with a terse catalog reminder instead of ending the turn. Never synthesize privileges for a request without host tools; repeated requests fail closed. [Notes](docs/RELEASE_5.4.14.md).
+
+
 ## 5.4.13 — native tool calls with sequential host execution
 
 The Agent CLI requires `parallel_tool_calls=false`. Honor it as a host-output limit rather than falling back to WebChat emulation for native-capable network profiles. Keep single-action validation and explicit host approval. Add a network-style HTTP integration regression. [Release notes](docs/RELEASE_5.4.13.md).
