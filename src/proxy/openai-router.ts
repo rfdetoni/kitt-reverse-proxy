@@ -132,8 +132,7 @@ function compactContractRepairMessages(plan: AgentContractPlan, candidate: strin
 function prepareContract(req: Request, body: JsonObject, lease: SessionExecutionLease, network: boolean): AgentContractPlan {
   const route = req.get(AGENT_ROUTE_HEADER);
   const nativeToolCalling = lease.nativeToolCalling === true
-    && (body.tool_choice === undefined || body.tool_choice === 'auto')
-    && body.parallel_tool_calls !== false;
+    && (body.tool_choice === undefined || body.tool_choice === 'auto');
   return prepareAgentContractRequest(body, { sessionId: lease.sessionId,
     contextKey: lease.contextKey, forceBootstrap: network, nativeToolCalling, ...(route ? { route } : {}) });
 }

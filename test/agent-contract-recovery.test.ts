@@ -169,6 +169,54 @@ test('structured results cross the HTTP contract without model-side double seria
   assert.equal((incompatible.body.error as {code:string}).code, 'agent_contract_version_mismatch');
 });
 
+test('agent contract forwards native tools with parallel_tool_calls=false without reparsing', async () => {
+  const calls: JsonObject[] = [];
+  const client = {
+    transport: 'network',
+    modelId: 'fixture',
+    describe: () => ({ nativeToolCalling: true }),
+    execute: async (body: JsonObject) => {
+      calls.push(body);
+      const completion = result('');
+      completion.completion.choices[0]!.message.tool_calls = [{
+        id: 'call_native_fixture', type: 'function',
+        function: { name: 'kitt_runtime',
+          arguments: JSON.stringify({ operation: 'repo.read', arguments: { path: 'README.md' } }) }
+      }];
+      return completion;
+    }
+  };
+  // A network-capable session is simulated, while validation and HTTP
+  // conversion execute through the actual router.
+  const manager = {
+    transport: 'network', modelId: 'fixture', normalizeSessionId: (id: string | undefined) => id || 'fixture',
+    transaction: async (_id: string, _options: unknown, handler: (lease: unknown) => Promise<unknown>) =>
+      handler({sessionId:'fixture',contextKey:'fixture',generation:1,nativeToolCalling:true,
+        execute: (body: JsonObject) => client.execute(body)}),
+  } as any;
+  const app = express(); app.use(express.json()); app.use(createOpenAiRouter(manager));
+  const server = app.listen(0);
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+    const http = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method:'POST', headers:{'content-type':'application/json','x-kitt-agent-contract':'v5'},
+      body:JSON.stringify({
+        model:'fixture',stream:false,messages:[{role:'user',content:'Read README'}],
+        parallel_tool_calls:false,tool_choice:'auto',
+        tools:[{type:'function',function:{name:'kitt_runtime',
+          parameters:{type:'object',properties:{operation:{type:'string',enum:['repo.read']},
+          arguments:{type:'object'}},required:['operation','arguments']}}}]
+      })
+    });
+    assert.equal(http.status, 200);
+    const payload = await http.json() as {choices:Array<{message:{tool_calls:Array<{id:string}>}}>};
+    assert.equal(payload.choices[0]?.message.tool_calls[0]?.id, 'call_native_fixture');
+    assert.equal(calls.length, 1);
+    assert.ok(Array.isArray(calls[0]?.tools));
+  } finally { server.close(); }
+});
+
 test('JSON Gemini action is executed without an upstream JSON repair', async () => {
   const candidate = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"Inspeção inicial do diretório de trabalho para verificar estrutura existente.\",\"loop\":null}";
   const recovered = await executeRecovery([candidate], 1, [{

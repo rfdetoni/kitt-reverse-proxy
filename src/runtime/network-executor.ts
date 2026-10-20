@@ -89,7 +89,7 @@ export class NetworkChatExecutor implements ChatExecutor {
     const emulateTools = requestMayReturnToolCalls(body) && (
       !supportsNativeTools
       || !supportsNativeChoice
-      || body.parallel_tool_calls === false
+      // parallel_tool_calls=false limits host calls but does not disable native tool support.
       || body.functions !== undefined
     );
     const emulateSystem = Boolean(systemPrompt) && !supportsNativeSystem;

@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.13 — native tool calls with sequential host execution
+
+The Agent CLI requires `parallel_tool_calls=false`. Honor it as a host-output limit rather than falling back to WebChat emulation for native-capable network profiles. Keep single-action validation and explicit host approval. Add a network-style HTTP integration regression. [Release notes](docs/RELEASE_5.4.13.md).
+
+
 ## 5.4.12 — compact explicit tool actions and validated native calls
 
 Agent contract v5 accepts a single explicit `<tool_call>` envelope from WebChat or a native provider `tool_calls` completion without model-side JSON re-serialization. Both use the existing tool allowlist, argument schema and host approvals. Prose extraction and multi-action batches remain intentionally disabled. Adds focused regressions for malformed and unauthorized calls. [Release notes](docs/RELEASE_5.4.12.md).
