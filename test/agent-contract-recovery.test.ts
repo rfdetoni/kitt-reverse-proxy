@@ -360,3 +360,29 @@ test('bare structured JSON is wrapped locally without another provider turn or h
   assert.equal(rejected.attempts,1);
   assert.equal((rejected.body.choices as Array<{message:{tool_calls?:unknown}}>)[0]!.message.tool_calls,undefined);
 });
+
+test('Agent contract rejects a provider/model mismatch before submitting the browser request', async () => {
+  let submitted = false;
+  const manager = {
+    modelId: 'chatgpt-web',
+    transport: 'ui',
+    transaction: async () => { submitted = true; throw new Error('unexpected submission'); },
+  } as unknown as SessionManager;
+  const app = express(); app.use(express.json()); app.use(createOpenAiRouter(manager));
+  const server = app.listen(0);
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+    const result = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-kitt-agent-contract': 'v5' },
+      body: JSON.stringify({
+        model: 'gemini-web', stream: true,
+        messages: [{ role: 'user', content: 'Inspect a file' }],
+      })
+    });
+    assert.equal(result.status, 409);
+    assert.match(await result.text(), /agent_model_mismatch/);
+    assert.equal(submitted, false);
+  } finally { server.close(); }
+});

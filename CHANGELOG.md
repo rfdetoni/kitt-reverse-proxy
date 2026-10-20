@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.16 — prevent silent Agent provider substitution
+
+Agent Contract v5 requests now verify that the requested model ID matches the instance's actual model before any browser submission. Misbound Gemini/ChatGPT roles return a clear `agent_model_mismatch` 409 rather than silently executing with a different provider. Regular non-Agent OpenAI-compatible calls are unchanged. Adds a real HTTP regression covering the no-submission guarantee. [Notes](docs/RELEASE_5.4.16.md).
+
+
 ## 5.4.15 — single session invalidation on transport failure
 
 A single failed named or default WebChat request now increments the session generation exactly once, rather than once in `lease.execute` and again in the enclosing transaction. This keeps context-key rotation and session diagnostic counters stable without changing browser isolation, request idempotency, contract v5 or retry authority. A focused regression checks the generation boundary. [Notes](docs/RELEASE_5.4.15.md).

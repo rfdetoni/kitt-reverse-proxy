@@ -453,6 +453,16 @@ async function executeAgentContractIdempotent(req: Request, manager: SessionMana
   } finally { lifecycle.dispose(); }
 }
 
+function verifyAgentModelIdentity(body: JsonObject, manager: SessionManager): void {
+  const requested = typeof body.model === 'string' ? body.model.trim() : '';
+  const actual = manager.modelId;
+  if (requested && actual && requested !== actual) {
+    throw new AgentContractError(409, 'agent_model_mismatch',
+      `Agent requests model '${requested}', but this Reverse Proxy instance serves '${actual}'. ` +
+      'Rebind the Agent role to the correct instance; no WebChat request was submitted.');
+  }
+}
+
 export function createOpenAiRouter(manager: SessionManager): Router {
   const router = Router();
 
@@ -478,6 +488,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           reasoning_effort: reasoningEffort ?? null
         });
         const contract = agentContractEnabled(req);
+        if (contract) verifyAgentModelIdentity(validatedBody, manager);
         const body = contract ? validatedBody : ensureAgentExecutionContext(validatedBody);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = {
@@ -527,6 +538,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           session_id: sessionId ?? null
         });
         const contract = agentContractEnabled(req);
+        if (contract) verifyAgentModelIdentity(converted, manager);
         const body = contract ? converted : ensureAgentExecutionContext(converted);
         const bufferTools = Boolean(contract) || requestMayReturnToolCalls(body) || Boolean(body.response_format);
         const baseOptions: ChatExecutionOptions = { signal };
