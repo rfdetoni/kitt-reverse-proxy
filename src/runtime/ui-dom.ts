@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { Frame, Locator, Page } from 'playwright';
 import { parseContractJson } from '../util/contract-json.js';
+import { transportPayload } from './read/contract-text.js';
 
 export interface UiTextSnapshot {
   selector: string;
@@ -382,6 +383,21 @@ function renderedJsonValues(samples: readonly string[]): unknown[] {
   return values;
 }
 
+/** Preserve a single explicit browser action as a unit. Pulling out only
+ * its inner JSON would discard intent and could fabricate a final response. */
+function completedExplicitToolEnvelope(text: string): string | undefined {
+  const candidate = text.trim();
+  if (!candidate.startsWith('<tool_call>') || !candidate.endsWith('</tool_call>')) return undefined;
+  try {
+    const payload = transportPayload(candidate, true);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+    const data = payload as Record<string, unknown>;
+    if (typeof data.name !== 'string' || !data.arguments || typeof data.arguments !== 'object'
+        || Array.isArray(data.arguments)) return undefined;
+    return candidate;
+  } catch { return undefined; }
+}
+
 export function selectCompletedAssistantContract(
   samples: readonly string[], baseline: readonly UiTextSnapshot[], sentPrompt = ''
 ): string | undefined {
@@ -396,7 +412,22 @@ export function selectCompletedAssistantContract(
     && region.fresh.length > 0);
   const valid = new Map<string, string>();
   for (const { value, fresh } of (bounded.length ? bounded : regions)) {
-    for (const text of jsonCandidatesFromRenderedText(fresh ?? value)) {
+    const visible = (fresh ?? value).trim();
+    if (visible.startsWith('<tool_call>')) {
+      const envelope = completedExplicitToolEnvelope(visible);
+      if (envelope && (fresh !== undefined || (!previous.some(old => old.includes(envelope))
+          && !sentPrompt.includes(envelope)))) {
+        valid.set(envelope, envelope);
+      }
+      // Never promote the JSON inside a tool envelope to a standalone final.
+      continue;
+    }
+    for (const text of jsonCandidatesFromRenderedText(visible)) {
+      // A tool-shaped JSON object inside a surrounding explicit envelope is
+      // *not* a standalone final. Ignore its interior unless the complete
+      // frame was independently captured above.
+      const prefix = visible.slice(0, visible.indexOf(text));
+      if (prefix.lastIndexOf('<tool_call>') > prefix.lastIndexOf('</tool_call>')) continue;
       if (fresh === undefined && (previous.some(old => old.includes(text))
           || (sentPrompt && sentPrompt.includes(text)))) continue;
       try {

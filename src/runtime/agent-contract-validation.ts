@@ -40,7 +40,12 @@ function sentenceCount(text: string): number {
 }
 
 export function isBareStructuredResult(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && Object.keys(value).length > 0 && !Object.keys(AGENT_RESPONSE_SCHEMA.properties).some(key => Object.hasOwn(value, key));
+  return isRecord(value) && Object.keys(value).length > 0
+    && !Object.keys(AGENT_RESPONSE_SCHEMA.properties).some(key => Object.hasOwn(value, key))
+    // WebChat may strip formatting tags. A naked tool-shaped object is never
+    // evidence of a final answer or permission to execute a host tool.
+    && !(typeof value.name === 'string' && Object.hasOwn(value, 'arguments'))
+    && !Object.hasOwn(value, 'tool_calls') && !Object.hasOwn(value, 'function_call');
 }
 
 export function parseStrictContract(text: string, normalizeResult = false): AgentContractResponse {

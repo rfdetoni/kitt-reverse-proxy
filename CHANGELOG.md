@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.12 — compact explicit tool actions and validated native calls
+
+Agent contract v5 accepts a single explicit `<tool_call>` envelope from WebChat or a native provider `tool_calls` completion without model-side JSON re-serialization. Both use the existing tool allowlist, argument schema and host approvals. Prose extraction and multi-action batches remain intentionally disabled. Adds focused regressions for malformed and unauthorized calls. [Release notes](docs/RELEASE_5.4.12.md).
+
 ## 5.4.11 — reject empty completions, constrain repair, split validation
 
 Reject blank and empty-object final agent responses instead of accepting false task completion. Restrict JSON contract repair from replacing an entire host tool input on coarse schema errors. Extract stateless Agent contract validation from session orchestration, keeping the current external interfaces. Bump package lock and add a focused regression case. [Notas](docs/RELEASE_5.4.11.md).

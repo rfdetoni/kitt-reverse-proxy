@@ -115,6 +115,7 @@ export interface SessionCapacitySnapshot {
 
 export interface SessionExecutionLease {
   sessionId: string; contextKey: string; generation: number;
+  nativeToolCalling?: boolean;
   execute(body: JsonObject, options?: ChatExecutionOptions): Promise<ChatExecutionResult>;
 }
 
@@ -286,6 +287,7 @@ export class SessionManager {
         session.activeOperations += 1; session.status = 'busy';
         const lease: SessionExecutionLease = {
           sessionId: session.id, generation: session.generation, contextKey: `${this.instanceId}:${session.id}:${session.generation}`,
+          nativeToolCalling: session.executor.transport === 'network' && session.executor.describe().nativeToolCalling === true,
           execute: async (body, executionOptions = {}) => {
             throwIfAborted(signal);
             const before = lifecycle.attempts; const executorStarted = Date.now();

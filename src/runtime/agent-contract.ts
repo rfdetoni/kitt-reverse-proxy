@@ -1,7 +1,8 @@
-import { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
-export { AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
+import { AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT, AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
+export { AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT, AGENT_CONTRACT_RETRY_PROMPT, AGENT_CONTRACT_SYSTEM_PROMPT } from './agent-contract-prompt.js';
 import { ContractJsonError, parseContractJson } from '../util/contract-json.js';
 import { isDeepStrictEqual } from 'node:util';
+import { transportPayload } from './read/contract-text.js';
 import {
   AgentContractError, AgentContractValidationError, isBareStructuredResult,
   parseStrictContract, validateContractResponse
@@ -64,6 +65,7 @@ export interface AgentContractPlan {
   route: string;
   tools: Map<string, ToolDescriptor>;
   sessionId: string;
+  nativeToolCalling: boolean;
 }
 
 interface ContractStats {
@@ -445,13 +447,14 @@ export function commitAgentContractContext(plan: AgentContractPlan): void {
 
 export function prepareAgentContractRequest(
   originalBody: JsonObject,
-  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean } = {}
+  options: { sessionId?: string; route?: string; contextKey?: string; forceBootstrap?: boolean; nativeToolCalling?: boolean } = {}
 ): AgentContractPlan {
   const sessionId = options.sessionId?.trim() || 'default';
   const contextKey = options.contextKey ?? sessionId;
   const stats = ensureStats(contextKey);
 
   const tools = extractTools(originalBody);
+  const nativeToolCalling = options.nativeToolCalling === true && tools.size > 0;
   const originalMessages = Array.isArray(originalBody.messages) ? originalBody.messages : [];
   const hasTypedContext = originalBody.kitt_context !== undefined;
   const typedEnvelope = parseTypedContextEnvelope(originalBody.kitt_context);
@@ -541,9 +544,11 @@ export function prepareAgentContractRequest(
     '[KITT ORCHESTRATOR TURN DATA]',
     `ROUTE: ${route}`,
     `CONTEXT_MODE: ${bootstrapContext ? 'bootstrap' : 'delta'}`,
-    ...(toolsChanged
-      ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
-      : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
+    ...(nativeToolCalling
+      ? [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]
+      : toolsChanged
+        ? [`TOOLS_AVAILABLE: ${boundedJson(toolPrompt, 'TOOLS_AVAILABLE')}`]
+        : [`TOOLS_AVAILABLE_NAMES: ${boundedJson([...tools.keys()], 'TOOLS_AVAILABLE_NAMES')}`]),
     ...(changedWorkspace !== 'not_provided'
       ? [`WORKSPACE_CONTEXT:\nUNTRUSTED_WORKSPACE_DATA: ${boundedJson(changedWorkspace, 'WORKSPACE_CONTEXT')}`]
       : [bootstrapContext ? 'WORKSPACE_CONTEXT: not_provided' : 'WORKSPACE_CONTEXT: session_cached']),
@@ -564,8 +569,13 @@ export function prepareAgentContractRequest(
   delete body.response_format;
   delete body.kitt_context;
   delete body.kitt_meta;
+  if (nativeToolCalling) {
+    // Only the active network profile can opt into function-capable transport.
+    if (originalBody.tools !== undefined) body.tools = originalBody.tools;
+    if (originalBody.tool_choice !== undefined) body.tool_choice = originalBody.tool_choice;
+  }
   body.messages = [
-    { role: 'system', content: AGENT_CONTRACT_SYSTEM_PROMPT },
+    { role: 'system', content: nativeToolCalling ? AGENT_CONTRACT_NATIVE_SYSTEM_PROMPT : AGENT_CONTRACT_SYSTEM_PROMPT },
     ...prependDynamicUserTurn(forwardedMessages, dynamicParts.join('\n'))
   ] as JsonValue[];
 
@@ -577,7 +587,65 @@ export function prepareAgentContractRequest(
     originalBody,
     route,
     tools,
-    sessionId
+    sessionId,
+    nativeToolCalling
+  };
+}
+
+/** A compact, explicit browser tool envelope is an alternative model serialization,
+ * not a new wire protocol or permission grant. Never extract tools from prose. */
+function compactAgentToolAction(source: string): AgentContractResponse | undefined {
+  if (!source.trimStart().startsWith('<tool_call>')) return undefined;
+  let value: unknown;
+  try {
+    value = transportPayload(source, true);
+  } catch (error) {
+    throw new AgentContractValidationError(
+      `Invalid compact tool envelope: ${error instanceof Error ? error.message : String(error)}`,
+      error instanceof ContractJsonError ? error.kind : 'shape'
+    );
+  }
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== 'name' && key !== 'arguments')
+      || typeof value.name !== 'string' || !isRecord(value.arguments)) {
+    throw new AgentContractValidationError(
+      'Compact tool envelope requires exactly one name and object arguments.', 'shape'
+    );
+  }
+  return {
+    action: 'use_tool', tool: value.name, tool_input: value.arguments as JsonObject,
+    content: null, reasoning_summary: '', loop: null
+  };
+}
+
+/** Native calls are already structured: validate them without asking for JSON repair.
+ * A KITT agent turn remains one host action; batch reads use repo.batch_read. */
+function nativeAgentToolAction(completion: OpenAiCompletion): AgentContractResponse | undefined {
+  const calls = completion.choices[0]?.message.tool_calls;
+  if (!calls?.length) return undefined;
+  if (calls.length !== 1) {
+    throw new AgentContractValidationError('KITT accepts one host tool action per turn; use repo.batch_read for independent reads.', 'shape');
+  }
+  const call = calls[0]!;
+  if (call.type !== 'function' || typeof call.function?.name !== 'string'
+      || typeof call.function.arguments !== 'string') {
+    throw new AgentContractValidationError('Invalid native function call.', 'shape');
+  }
+  let input: unknown;
+  try {
+    const parsed = parseContractJson(call.function.arguments);
+    if (parsed.repaired) throw new Error('Native function arguments must be exact JSON.');
+    input = parsed.value;
+  } catch (error) {
+    throw new AgentContractValidationError(
+      `Invalid native function arguments: ${error instanceof Error ? error.message : String(error)}`, 'syntax'
+    );
+  }
+  if (!isRecord(input)) throw new AgentContractValidationError('Native function arguments must be an object.', 'shape');
+  const summary = completion.choices[0]?.message.content?.trim() ?? '';
+  if (summary.length > 400) throw new AgentContractValidationError('Native tool commentary exceeds 400 characters.', 'shape');
+  return {
+    action: 'use_tool', tool: call.function.name, tool_input: input as JsonObject,
+    content: null, reasoning_summary: summary, loop: null
   };
 }
 
@@ -585,12 +653,15 @@ export function transformAgentContractCompletion(
   completion: OpenAiCompletion,
   plan: AgentContractPlan
 ): OpenAiCompletion {
-  const source = completion.choices[0]?.message.content;
-  if (typeof source !== 'string') {
-    throw new AgentContractValidationError('Model response has no textual JSON content.');
+  const sourceChoice = completion.choices[0];
+  const nativeResponse = nativeAgentToolAction(completion);
+  const source = sourceChoice?.message.content;
+  if (!nativeResponse && typeof source !== 'string') {
+    throw new AgentContractValidationError('Model response has no textual contract content.');
   }
 
-  const response = parseStrictContract(source, true);
+  const response = nativeResponse ?? compactAgentToolAction(source as string)
+    ?? parseStrictContract(source as string, true);
   validateContractResponse(response, plan);
 
   if (response.action === 'request_workspace') {
@@ -608,8 +679,12 @@ export function transformAgentContractCompletion(
     const tool = response.tool!;
     const input = response.tool_input!;
     choice.message.content = response.reasoning_summary.trim() || null;
+    // Preserve the provider's call ID when it is safe, so API tool-result
+    // correlation is not broken by normalization.
+    const original = nativeResponse ? choice.message.tool_calls?.[0] : undefined;
     choice.message.tool_calls = [{
-      id: `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      id: original && /^[A-Za-z0-9_-]{1,128}$/u.test(original.id)
+        ? original.id : `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
       type: 'function',
       function: { name: tool, arguments: JSON.stringify(input) }
     }];
