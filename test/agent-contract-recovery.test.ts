@@ -189,7 +189,7 @@ test('agent contract forwards native tools with parallel_tool_calls=false withou
   // A network-capable session is simulated, while validation and HTTP
   // conversion execute through the actual router.
   const manager = {
-    transport: 'network', modelId: 'fixture',
+    transport: 'network', modelId: 'fixture', normalizeSessionId: (id: string | undefined) => id || 'fixture',
     transaction: async (_id: string, _options: unknown, handler: (lease: unknown) => Promise<unknown>) =>
       handler({sessionId:'fixture',contextKey:'fixture',generation:1,nativeToolCalling:true,
         execute: (body: JsonObject) => client.execute(body)}),
