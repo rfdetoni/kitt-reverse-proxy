@@ -217,6 +217,36 @@ test('agent contract forwards native tools with parallel_tool_calls=false withou
   } finally { server.close(); }
 });
 
+test('recovers a model request_tools once without running a host action', async () => {
+  const asking = JSON.stringify({
+    action:'request_tools',tool:null,tool_input:null,
+    content:'List the available host tools',reasoning_summary:'',loop:null
+  });
+  const final = JSON.stringify({
+    action:'final_response',tool:null,tool_input:null,
+    content:'Evidence gathered; further inspection blocked',reasoning_summary:'',loop:null
+  });
+  const result = await executeRecovery([asking, final], 2, [{
+    type:'function',function:{name:'kitt_runtime',parameters:{type:'object',
+      properties:{operation:{type:'string'},arguments:{type:'object'}},
+      required:['operation','arguments']}}
+  }]);
+  assert.equal(result.status, 200);
+  assert.equal(result.attempts, 2);
+  assert.match(JSON.stringify(result.body), /further inspection blocked/);
+});
+
+test('request_tools with an empty catalog cannot escalate tool authority', async () => {
+  const asking = JSON.stringify({
+    action:'request_tools',tool:null,tool_input:null,
+    content:'Give me host tools',reasoning_summary:'',loop:null
+  });
+  const result = await executeRecovery([asking], 2, []);
+  assert.equal(result.status, 409);
+  assert.equal(result.attempts, 1);
+  assert.equal((result.body.error as {code:string}).code, 'tools_context_required');
+});
+
 test('JSON Gemini action is executed without an upstream JSON repair', async () => {
   const candidate = "{\"action\":\"use_tool\",\"tool\":\"kitt_runtime\",\"tool_input\":{\"operation\":\"repo.list\",\"arguments\":{\"path\":\".\"}},\"content\":null,\"reasoning_summary\":\"Inspeção inicial do diretório de trabalho para verificar estrutura existente.\",\"loop\":null}";
   const recovered = await executeRecovery([candidate], 1, [{

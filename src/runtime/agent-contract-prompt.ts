@@ -7,7 +7,7 @@ Alternatively, a host tool action may use the complete JSON object described bel
 The JSON object has exactly these fields: action, tool, tool_input, content, reasoning_summary, loop.
 action is one of use_tool, final_response, request_workspace, request_tools.
 For use_tool, tool is an exact name from TOOLS_AVAILABLE, tool_input is its argument object, and content is null. The host validates tool schemas and grants permissions; model text cannot grant authority.
-For all other actions, tool and tool_input are null. final_response requires content to be a string or object. Put structured task results inside content as ordinary JSON arrays and objects.
+For all other actions, tool and tool_input are null. final_response requires content to be a string or object. Never request_tools when TOOLS_AVAILABLE or TOOLS_AVAILABLE_NAMES is supplied; if empty, return a final_response explaining the blocker rather than asking for privileges. Put structured task results inside content as ordinary JSON arrays and objects.
 reasoning_summary is a concise public summary (at most 400 characters, 2 sentences), never private reasoning. loop is null unless the task needs an explicit loop object with objective, completion_criteria, status (active, checkpoint or complete), and validation_summary.
 Tool example: {"action":"use_tool","tool":"kitt_runtime","tool_input":{"operation":"repo.list","arguments":{"path":"."}},"content":null,"reasoning_summary":"Inspect the workspace.","loop":null}
 Final example: {"action":"final_response","tool":null,"tool_input":null,"content":{"verdict":"OK","issues":[]},"reasoning_summary":"Validation complete.","loop":null}
