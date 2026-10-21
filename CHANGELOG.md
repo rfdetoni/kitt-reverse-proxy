@@ -1,5 +1,11 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.21 — bounded child session under high Chromium startup memory
+
+The 2026-10-21 Wine-MBS logs show the primary agent executing in a named ChatGPT Web session while a diagnostic child received `session_limit_exceeded`: Chromium startup RSS was already over the configured budget (768 MiB), and both the default session and the busy primary could not be recycled. The existing baseline exception only admitted one named session.
+
+When the **captured startup baseline itself** exceeds the configured RSS cap, admit at most two named sessions total (one agent and one child) under the original fixed 512 MiB baseline headroom. The usual max-session and max-browser-pages limits still apply; later RSS growth past headroom and additional concurrent children are rejected. This exception never adjusts the baseline dynamically, does not recycle busy conversations and leaves the background idle grace unchanged. Tests cover active parent+child, third denial and headroom overflow. Runtime users with larger deliberate concurrency still need sufficient browser memory or a higher configured budget.
+
 ## 5.4.20 — retain on-demand LRU for isolated planning sessions
 
 Keep the bounded five-minute **background** resource-pressure eviction grace introduced in 5.4.19, protecting the current agent session between host-tool and model calls. Unlike background sweeps, on-demand admission must still recycle a finished idle named session immediately: the Agent CLI creates distinct isolated session IDs for consecutive planning turns before the executor session. Reusing the original count-and-resource LRU admission behavior prevents premature `session_limit_exceeded` during those planning turns. Add a regression reproducing two isolated plan sessions, one executor session and a pressure sweep before tool-result continuation. The startup baseline bound, busy-session protection and resource quotas remain enforced. Synchronize package and lock at 5.4.20.
