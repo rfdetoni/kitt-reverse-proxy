@@ -372,7 +372,7 @@ test('resource pressure preserves a named agent session during the host-tool gap
     // Same-session continuation needs no admission despite high RSS.
     await manager.execute('agent', { messages: [{ role: 'user', content: 'tool result' }] });
     await assert.rejects(
-      manager.execute('different-agent', { messages: [{ role: 'user', content: 'x' }] }),
+      manager.execute('differentagent', { messages: [{ role: 'user', content: 'x' }] }),
       SessionLimitExceededError
     );
     assert.deepEqual(closed, []);
@@ -404,21 +404,21 @@ test('resource eviction rechecks RSS before creating another Chromium session', 
     })
   });
   try {
-    await manager.execute('stale-agent', {});
+    await manager.execute('staleagent', {});
     const internal = manager as unknown as {
       baselineRssBytes: number;
       sessions: Map<string, { lastActivity: number }>;
       memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
     };
-    internal.sessions.get('stale-agent')!.lastActivity -= 6 * 60 * 1000;
+    internal.sessions.get('staleagent')!.lastActivity -= 6 * 60 * 1000;
     internal.memorySampler = {
       snapshot: () => ({
         bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
         mode: 'test', partial: false, processes: 1
       })
     };
-    await assert.rejects(manager.execute('new-agent', {}), SessionLimitExceededError);
-    assert.deepEqual(closed, ['stale-agent']);
+    await assert.rejects(manager.execute('newagent', {}), SessionLimitExceededError);
+    assert.deepEqual(closed, ['staleagent']);
     assert.deepEqual(manager.list().map(session => session.id), ['default']);
   } finally {
     await manager.close();
