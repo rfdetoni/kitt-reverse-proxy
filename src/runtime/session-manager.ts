@@ -24,6 +24,8 @@ import { traceSpan } from '../observability/tracing.js';
 const SESSION_ID = /^[A-Za-z0-9]{1,64}$/;
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 const BASELINE_RSS_HEADROOM_BYTES = 512 * 1024 * 1024;
+// Do not discard a conversation between model calls and host tool execution.
+const RESOURCE_PRESSURE_IDLE_GRACE_MS = 5 * 60 * 1000;
 
 function combinedSignal(primary: AbortSignal | undefined, shutdown: AbortSignal): AbortSignal {
   return primary ? AbortSignal.any([primary, shutdown]) : shutdown;
@@ -468,7 +470,8 @@ export class SessionManager {
     // Reap at most one additional idle session per sweep so RSS lag after
     // browser/page teardown cannot cascade into aggressive over-eviction.
     if (this.resourcePressure()) {
-      const candidate = this.oldestRecyclableSession();
+      const graceMs = Math.min(timeout, RESOURCE_PRESSURE_IDLE_GRACE_MS);
+      const candidate = this.oldestRecyclableSession(graceMs, now);
       if (candidate) await this.removeSession(candidate);
     }
   }
@@ -558,15 +561,29 @@ export class SessionManager {
   }
 
   private async ensureCapacity(): Promise<void> {
-    const atCountLimit =
+    let atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-    const underResourcePressure = this.resourcePressure();
+    let underResourcePressure = this.resourcePressure();
     if (!atCountLimit && !underResourcePressure) return;
 
-    const candidate = this.oldestRecyclableSession();
+    // Under RSS/page pressure, retain recently active conversation sessions.
+    // Admission can fail for a different session while its owner can still
+    // continue using the existing session ID without extra browser pages.
+    const graceMs = underResourcePressure && !atCountLimit
+      ? Math.min(this.options.config.sessionIdleTimeoutMs, RESOURCE_PRESSURE_IDLE_GRACE_MS)
+      : 0;
+    const candidate = this.oldestRecyclableSession(graceMs);
     if (candidate) {
       await this.removeSession(candidate);
-      return;
+      // A hard session-count cap allows one-for-one replacement after the
+      // old browser is closed; preserve existing LRU admission semantics.
+      if (atCountLimit) return;
+      // Closing a Chromium page does not synchronously reclaim process RSS.
+      // Recheck actual pressure rather than immediately admitting a new one.
+      atCountLimit =
+        this.sessions.size + this.creating.size >= this.options.config.maxSessions;
+      underResourcePressure = this.resourcePressure();
+      if (!atCountLimit && !underResourcePressure) return;
     }
 
     // A headed Chromium baseline can legitimately exceed the RSS budget before
@@ -597,10 +614,17 @@ export class SessionManager {
       return;
     }
 
+    if (underResourcePressure) {
+      logger.event('warn', 'session.capacity.resource_pressure_rejection', {
+        ...this.capacity(),
+        at_count_limit: atCountLimit,
+        recent_session_grace_ms: graceMs
+      });
+    }
     throw new SessionLimitExceededError();
   }
 
-  private oldestRecyclableSession(): ManagedSession | undefined {
+  private oldestRecyclableSession(minIdleMs = 0, now = Date.now()): ManagedSession | undefined {
     return [...this.sessions.values()]
       .filter((session) =>
         !session.isDefault
@@ -609,6 +633,7 @@ export class SessionManager {
         && session.queue.depth === 0
         && session.automationQueue.depth === 0
         && !awaitsToolResult(session)
+        && now - session.lastActivity >= minIdleMs
       )
       .sort((left, right) =>
         left.lastActivity - right.lastActivity || left.createdAt - right.createdAt
