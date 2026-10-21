@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.18 — bounded Chromium baseline memory-pressure admission
+
+A headed Chromium instance may exceed the configured RSS limit before a named session starts. The existing one-session admission exception now uses the startup memory baseline plus at most 512 MiB of additional growth (or the configured limit, whichever is higher), instead of allowing unbounded memory increase. The guard prevents creating another session under excessive pressure; it does not claim to eliminate Chromium's memory footprint or diagnose a leak. Admission logs expose the captured baseline and headroom. Regression coverage and `package-lock.json` are synchronized with 5.4.18.
+
 ## 5.4.17 — typed manual continuation for unattributed completed WebChat replies
 
 When the ChatGPT UI finishes generating but neither CDP nor DOM provenance can associate a response with the current submitted turn, return a typed `UiUncorrelatedCaptureError` (409 `ui_capture_unverified`, explicit continue) rather than a generic 504 timeout. No old DOM candidate is trusted and the prompt is never automatically replayed. Bounded capture diagnostics now include tap correlation state, time since generation stopped, and the required recovery mode without exposing prompt bytes. Existing request idempotence and model/provider boundaries remain unchanged. [Notes](docs/RELEASE_5.4.17.md).

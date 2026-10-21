@@ -334,6 +334,36 @@ test('resource pressure admits the first named session but protects an active on
 });
 
 
+test('baseline resource exception cannot admit new sessions after excessive memory growth', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
+    factory: async (id) => ({ executor: executor(id) })
+  });
+  try {
+    const internal = manager as unknown as {
+      baselineRssBytes: number;
+      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
+    };
+    // Model the Chromium tree growing >512 MiB *after* manager startup.
+    internal.memorySampler = {
+      snapshot: () => ({
+        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
+        mode: 'test', partial: false, processes: 1
+      })
+    };
+    await assert.rejects(
+      manager.execute('excessive', { messages: [{ role: 'user', content: 'x' }] }),
+      SessionLimitExceededError
+    );
+    assert.deepEqual(manager.list().map((session) => session.id), ['default']);
+  } finally {
+    await manager.close();
+  }
+});
+
+
 test('admitted idle-session reuse cannot be evicted by concurrent creation', async () => {
   const closed: string[] = [];
   const manager = new SessionManager({
