@@ -329,13 +329,27 @@ test('high Chromium baseline admits one active parent and one child, but never a
 });
 
 test('high-baseline child admission refuses growth beyond the fixed RSS headroom', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
   const manager = new SessionManager({
     defaultExecutor: executor('default'), provider: 'chatgpt',
     config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
-    factory: async id => ({ executor: executor(id) })
+    factory: async id => {
+      const named = executor(id);
+      const original = named.execute.bind(named);
+      named.execute = async body => {
+        markStarted();
+        await gate;
+        return original(body);
+      };
+      return { executor: named };
+    }
   });
+  const parent = manager.execute('parent', {});
   try {
-    await manager.execute('parent', {});
+    await started;
     const internal = manager as unknown as {
       baselineRssBytes: number;
       memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
@@ -346,8 +360,11 @@ test('high-baseline child admission refuses growth beyond the fixed RSS headroom
         mode: 'test', partial: false, processes: 1
       })
     };
+    // The parent is busy and cannot be recycled to hide a failed admission.
     await assert.rejects(manager.execute('child', {}), SessionLimitExceededError);
   } finally {
+    release();
+    await parent;
     await manager.close();
   }
 });
