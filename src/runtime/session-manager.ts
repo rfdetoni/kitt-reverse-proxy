@@ -575,20 +575,22 @@ export class SessionManager {
       return;
     }
 
-    // A headed Chromium baseline can legitimately exceed the RSS budget before
-    // the first named session exists. Admit exactly one named session so the
-    // proxy remains usable while startup RSS exceeds the configured cap.
-    // The one-time allowance is bounded by the baseline captured at startup;
-    // growth beyond that headroom fails closed instead of admitting a new browser.
+    // Headed Chromium can start above a strict RSS budget. Allow the first
+    // named session, plus one concurrent child if the *startup* baseline was
+    // already above budget. This is bounded by fixed startup headroom, not
+    // by a moving RSS baseline; normal count/page caps still apply.
+    const rssBudget = this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
+    const namedCount = this.sessions.size - (this.sessions.has('default') ? 1 : 0);
+    const baselineSlots = this.baselineRssBytes >= rssBudget ? 2 : 1;
     if (
       !atCountLimit
       && underResourcePressure
-      && this.sessions.size === 1
+      && namedCount < baselineSlots
       && this.sessions.has('default')
       && this.creating.size === 0
+      && this.browserPageCount() < this.options.config.maxBrowserPages
       && this.memorySampler.snapshot().bytes <= Math.max(
-        this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024,
-        this.baselineRssBytes + BASELINE_RSS_HEADROOM_BYTES
+        rssBudget, this.baselineRssBytes + BASELINE_RSS_HEADROOM_BYTES
       )
     ) {
       const capacity = this.capacity();
@@ -597,6 +599,8 @@ export class SessionManager {
         max_resident_rss_bytes: capacity.max_resident_rss_bytes,
         baseline_resident_rss_bytes: this.baselineRssBytes,
         baseline_admission_headroom_bytes: BASELINE_RSS_HEADROOM_BYTES,
+        baseline_named_slots: baselineSlots,
+        admitted_named_slot: namedCount + 1,
         browser_pages: capacity.browser_pages,
         max_browser_pages: capacity.max_browser_pages
       });
