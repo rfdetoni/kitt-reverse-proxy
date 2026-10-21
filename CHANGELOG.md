@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.17 — typed manual continuation for unattributed completed WebChat replies
+
+When the ChatGPT UI finishes generating but neither CDP nor DOM provenance can associate a response with the current submitted turn, return a typed `UiUncorrelatedCaptureError` (409 `ui_capture_unverified`, explicit continue) rather than a generic 504 timeout. No old DOM candidate is trusted and the prompt is never automatically replayed. Bounded capture diagnostics now include tap correlation state, time since generation stopped, and the required recovery mode without exposing prompt bytes. Existing request idempotence and model/provider boundaries remain unchanged. [Notes](docs/RELEASE_5.4.17.md).
+
+
 ## 5.4.16 — prevent silent Agent provider substitution
 
 Agent Contract v5 requests now verify that the requested model ID matches the instance's actual model before any browser submission. Misbound Gemini/ChatGPT roles return a clear `agent_model_mismatch` 409 rather than silently executing with a different provider. Regular non-Agent OpenAI-compatible calls are unchanged. Adds a real HTTP regression covering the no-submission guarantee. [Notes](docs/RELEASE_5.4.16.md).
