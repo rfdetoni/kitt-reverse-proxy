@@ -23,6 +23,7 @@ import { traceSpan } from '../observability/tracing.js';
 
 const SESSION_ID = /^[A-Za-z0-9]{1,64}$/;
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+const BASELINE_RSS_HEADROOM_BYTES = 512 * 1024 * 1024;
 
 function combinedSignal(primary: AbortSignal | undefined, shutdown: AbortSignal): AbortSignal {
   return primary ? AbortSignal.any([primary, shutdown]) : shutdown;
@@ -151,6 +152,9 @@ function awaitsToolResult(session: ManagedSession): boolean {
 
 export class SessionManager {
   private readonly memorySampler = new ProcessMemorySampler();
+  // Capture Chromium's already-running baseline once; do not let admission
+  // drift upward with every subsequent request or browser memory growth.
+  private readonly baselineRssBytes = this.memorySampler.snapshot().bytes;
   private readonly circuitStates = new Map<string, ProviderCircuitState>();
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
@@ -567,19 +571,26 @@ export class SessionManager {
 
     // A headed Chromium baseline can legitimately exceed the RSS budget before
     // the first named session exists. Admit exactly one named session so the
-    // proxy remains usable; subsequent pressure still fails closed while that
-    // session is busy/protected and recycles it once idle.
+    // proxy remains usable while startup RSS exceeds the configured cap.
+    // The one-time allowance is bounded by the baseline captured at startup;
+    // growth beyond that headroom fails closed instead of admitting a new browser.
     if (
       !atCountLimit
       && underResourcePressure
       && this.sessions.size === 1
       && this.sessions.has('default')
       && this.creating.size === 0
+      && this.memorySampler.snapshot().bytes <= Math.max(
+        this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024,
+        this.baselineRssBytes + BASELINE_RSS_HEADROOM_BYTES
+      )
     ) {
       const capacity = this.capacity();
       logger.event('warn', 'session.capacity.baseline_pressure_admission', {
         resident_rss_bytes: capacity.resident_rss_bytes,
         max_resident_rss_bytes: capacity.max_resident_rss_bytes,
+        baseline_resident_rss_bytes: this.baselineRssBytes,
+        baseline_admission_headroom_bytes: BASELINE_RSS_HEADROOM_BYTES,
         browser_pages: capacity.browser_pages,
         max_browser_pages: capacity.max_browser_pages
       });
