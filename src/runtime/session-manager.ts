@@ -588,7 +588,7 @@ export class SessionManager {
       && namedCount < baselineSlots
       && this.sessions.has('default')
       && this.creating.size === 0
-      && this.browserPageCount() < this.options.config.maxBrowserPages
+      && this.browserPageCount() < (this.options.config.maxBrowserPages ?? 12)
       && this.memorySampler.snapshot().bytes <= Math.max(
         rssBudget, this.baselineRssBytes + BASELINE_RSS_HEADROOM_BYTES
       )
