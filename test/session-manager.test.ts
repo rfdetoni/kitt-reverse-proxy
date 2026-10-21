@@ -371,10 +371,6 @@ test('resource pressure preserves a named agent session during the host-tool gap
 
     // Same-session continuation needs no admission despite high RSS.
     await manager.execute('agent', { messages: [{ role: 'user', content: 'tool result' }] });
-    await assert.rejects(
-      manager.execute('differentagent', { messages: [{ role: 'user', content: 'x' }] }),
-      SessionLimitExceededError
-    );
     assert.deepEqual(closed, []);
 
     // Still release truly idle named sessions after the bounded grace window.
@@ -386,7 +382,7 @@ test('resource pressure preserves a named agent session during the host-tool gap
   }
 });
 
-test('resource eviction rechecks RSS before creating another Chromium session', async () => {
+test('isolated planning sessions recycle on admission but tool-loop session survives a sweep', async () => {
   const closed: string[] = [];
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
@@ -404,22 +400,29 @@ test('resource eviction rechecks RSS before creating another Chromium session', 
     })
   });
   try {
-    await manager.execute('staleagent', {});
+    await manager.execute('planone', {});
     const internal = manager as unknown as {
       baselineRssBytes: number;
-      sessions: Map<string, { lastActivity: number }>;
       memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
     };
-    internal.sessions.get('staleagent')!.lastActivity -= 6 * 60 * 1000;
     internal.memorySampler = {
       snapshot: () => ({
         bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
         mode: 'test', partial: false, processes: 1
       })
     };
-    await assert.rejects(manager.execute('newagent', {}), SessionLimitExceededError);
-    assert.deepEqual(closed, ['staleagent']);
-    assert.deepEqual(manager.list().map(session => session.id), ['default']);
+
+    // Two isolated plan turns must make room for each other without failing
+    // admission; neither one is the host-tool conversation to preserve.
+    await manager.execute('plantwo', {});
+    await manager.execute('executor', {});
+    assert.deepEqual(closed, ['planone', 'plantwo']);
+
+    // Only periodic pressure recycling applies the short active-session grace.
+    await manager.sweepIdle(Date.now() + 60_000);
+    assert.deepEqual(manager.list().map(session => session.id), ['default', 'executor']);
+    await manager.execute('executor', { messages: [{ role: 'user', content: 'host result' }] });
+    assert.deepEqual(closed, ['planone', 'plantwo']);
   } finally {
     await manager.close();
   }
