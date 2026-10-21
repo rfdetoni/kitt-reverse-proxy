@@ -334,6 +334,58 @@ test('resource pressure admits the first named session but protects an active on
 });
 
 
+test('resource pressure preserves a named agent session during the host-tool gap', async () => {
+  const closed: string[] = [];
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config, maxSessions: 4, sessionIdleTimeoutMs: 30 * 60 * 1000,
+      maxResidentRssBytes: 1, maxBrowserPages: 100
+    },
+    factory: async id => ({
+      executor: executor(id),
+      browserSession: {
+        context: { pages: () => [] },
+        async close() { closed.push(id); }
+      } as unknown as LiveBrowserSession
+    })
+  });
+  try {
+    // The baseline allowance initially admits the sole named session.
+    await manager.execute('agent', { messages: [{ role: 'user', content: 'tool request' }] });
+    const internals = manager as unknown as {
+      baselineRssBytes: number;
+      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
+    };
+    internals.memorySampler = {
+      snapshot: () => ({
+        bytes: internals.baselineRssBytes + 512 * 1024 * 1024 + 1,
+        mode: 'test', partial: false, processes: 1
+      })
+    };
+
+    // A pending host action can leave the UI session idle for one sweep.
+    await manager.sweepIdle(Date.now() + 60_000);
+    assert.deepEqual(manager.list().map(session => session.id), ['default', 'agent']);
+
+    // Same-session continuation needs no admission despite high RSS.
+    await manager.execute('agent', { messages: [{ role: 'user', content: 'tool result' }] });
+    await assert.rejects(
+      manager.execute('different-agent', { messages: [{ role: 'user', content: 'x' }] }),
+      SessionLimitExceededError
+    );
+    assert.deepEqual(closed, []);
+
+    // Still release truly idle named sessions after the bounded grace window.
+    await manager.sweepIdle(Date.now() + 6 * 60 * 1000);
+    assert.deepEqual(manager.list().map(session => session.id), ['default']);
+    assert.deepEqual(closed, ['agent']);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('baseline resource exception cannot admit new sessions after excessive memory growth', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
