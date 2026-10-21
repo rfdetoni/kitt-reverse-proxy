@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.19 — preserve active agent sessions under Chromium memory pressure
+
+Protect recently used named sessions for up to five minutes of idle time when recycling under browser RSS/page pressure, without extending their normal configured idle expiration. This preserves a session ID across host tool execution and prevents the next model call from failing after immediate pressure eviction. Creating a *different* session remains subject to memory and page limits; the proxy rechecks resource pressure after evicting a stale browser session instead of assuming RSS is immediately released. The existing bounded startup baseline allowance remains intact. Regression coverage proves same-session continuation, new-session refusal and safe stale-session recycling. Synchronizes package.json and package-lock.json at 5.4.19.
+
 ## 5.4.18 — bounded Chromium baseline memory-pressure admission
 
 A headed Chromium instance may exceed the configured RSS limit before a named session starts. The existing one-session admission exception now uses the startup memory baseline plus at most 512 MiB of additional growth (or the configured limit, whichever is higher), instead of allowing unbounded memory increase. The guard prevents creating another session under excessive pressure; it does not claim to eliminate Chromium's memory footprint or diagnose a leak. Admission logs expose the captured baseline and headroom. Regression coverage and `package-lock.json` are synchronized with 5.4.18.
