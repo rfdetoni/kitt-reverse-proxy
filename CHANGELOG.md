@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.20 — retain on-demand LRU for isolated planning sessions
+
+Keep the bounded five-minute **background** resource-pressure eviction grace introduced in 5.4.19, protecting the current agent session between host-tool and model calls. Unlike background sweeps, on-demand admission must still recycle a finished idle named session immediately: the Agent CLI creates distinct isolated session IDs for consecutive planning turns before the executor session. Reusing the original count-and-resource LRU admission behavior prevents premature `session_limit_exceeded` during those planning turns. Add a regression reproducing two isolated plan sessions, one executor session and a pressure sweep before tool-result continuation. The startup baseline bound, busy-session protection and resource quotas remain enforced. Synchronize package and lock at 5.4.20.
+
 ## 5.4.19 — preserve active agent sessions under Chromium memory pressure
 
 Protect recently used named sessions for up to five minutes of idle time when recycling under browser RSS/page pressure, without extending their normal configured idle expiration. This preserves a session ID across host tool execution and prevents the next model call from failing after immediate pressure eviction. Creating a *different* session remains subject to memory and page limits; the proxy rechecks resource pressure after evicting a stale browser session instead of assuming RSS is immediately released. The existing bounded startup baseline allowance remains intact. Regression coverage proves same-session continuation, new-session refusal and safe stale-session recycling. Synchronizes package.json and package-lock.json at 5.4.19.
