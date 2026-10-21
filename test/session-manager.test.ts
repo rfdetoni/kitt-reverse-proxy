@@ -290,6 +290,8 @@ test('capacity reports resource-aware eviction budgets', async () => {
 test('high Chromium baseline admits one active parent and one child, but never a third', async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
   let markBothStarted!: () => void;
   const bothStarted = new Promise<void>((resolve) => { markBothStarted = resolve; });
   let runningCount = 0;
@@ -301,7 +303,9 @@ test('high Chromium baseline admits one active parent and one child, but never a
       const named = executor(id);
       const run = named.execute.bind(named);
       named.execute = async (body: JsonObject) => {
-        if (++runningCount === 2) markBothStarted();
+        runningCount += 1;
+        if (runningCount === 1) markFirstStarted();
+        if (runningCount === 2) markBothStarted();
         await gate;
         return run(body);
       };
@@ -310,14 +314,16 @@ test('high Chromium baseline admits one active parent and one child, but never a
   });
 
   const first = manager.execute('parent', { messages: [{ role: 'user', content: 'x' }] });
-  const second = manager.execute('child', { messages: [{ role: 'user', content: 'y' }] });
+  let second: Promise<unknown> | undefined;
   try {
+    await firstStarted;
+    second = manager.execute('child', { messages: [{ role: 'user', content: 'y' }] });
     await bothStarted;
     assert.deepEqual(manager.list().map(s => s.id), ['default', 'parent', 'child']);
     await assert.rejects(manager.execute('third', { messages: [] }), SessionLimitExceededError);
   } finally {
     release();
-    await Promise.allSettled([first, second]);
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
     await manager.close();
   }
 });
