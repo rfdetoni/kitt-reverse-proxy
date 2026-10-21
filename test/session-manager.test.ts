@@ -287,52 +287,64 @@ test('capacity reports resource-aware eviction budgets', async () => {
 });
 
 
-test('resource pressure admits the first named session but protects an active one', async () => {
+test('high Chromium baseline admits one active parent and one child, but never a third', async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  let started!: () => void;
-  const running = new Promise<void>((resolve) => { started = resolve; });
-
+  let markBothStarted!: () => void;
+  const bothStarted = new Promise<void>((resolve) => { markBothStarted = resolve; });
+  let runningCount = 0;
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
     provider: 'chatgpt',
-    config: {
-      ...config,
-      maxSessions: 4,
-      maxResidentRssBytes: 1,
-      maxBrowserPages: 100
-    },
-    factory: async (id) => {
+    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
+    factory: async id => {
       const named = executor(id);
-      const executeNamed = named.execute.bind(named);
+      const run = named.execute.bind(named);
       named.execute = async (body: JsonObject) => {
-        started();
+        if (++runningCount === 2) markBothStarted();
         await gate;
-        return await executeNamed(body);
+        return run(body);
       };
       return { executor: named };
     }
   });
 
-  const first = manager.execute('resourcebound', {
-    messages: [{ role: 'user', content: 'x' }]
-  });
+  const first = manager.execute('parent', { messages: [{ role: 'user', content: 'x' }] });
+  const second = manager.execute('child', { messages: [{ role: 'user', content: 'y' }] });
   try {
-    await running;
-    assert.deepEqual(
-      manager.list().map((session) => session.id),
-      ['default', 'resourcebound']
-    );
-    await assert.rejects(manager.execute('other', {
-      messages: [{ role: 'user', content: 'y' }]
-    }), SessionLimitExceededError);
+    await bothStarted;
+    assert.deepEqual(manager.list().map(s => s.id), ['default', 'parent', 'child']);
+    await assert.rejects(manager.execute('third', { messages: [] }), SessionLimitExceededError);
   } finally {
     release();
-    await first;
+    await Promise.allSettled([first, second]);
     await manager.close();
   }
 });
 
+test('high-baseline child admission refuses growth beyond the fixed RSS headroom', async () => {
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'), provider: 'chatgpt',
+    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
+    factory: async id => ({ executor: executor(id) })
+  });
+  try {
+    await manager.execute('parent', {});
+    const internal = manager as unknown as {
+      baselineRssBytes: number;
+      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
+    };
+    internal.memorySampler = {
+      snapshot: () => ({
+        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
+        mode: 'test', partial: false, processes: 1
+      })
+    };
+    await assert.rejects(manager.execute('child', {}), SessionLimitExceededError);
+  } finally {
+    await manager.close();
+  }
+});
 
 test('resource pressure preserves a named agent session during the host-tool gap', async () => {
   const closed: string[] = [];
