@@ -569,12 +569,15 @@ export class SessionManager {
     // Under RSS/page pressure, retain recently active conversation sessions.
     // Admission can fail for a different session while its owner can still
     // continue using the existing session ID without extra browser pages.
-    const graceMs = underResourcePressure
+    const graceMs = underResourcePressure && !atCountLimit
       ? Math.min(this.options.config.sessionIdleTimeoutMs, RESOURCE_PRESSURE_IDLE_GRACE_MS)
       : 0;
     const candidate = this.oldestRecyclableSession(graceMs);
     if (candidate) {
       await this.removeSession(candidate);
+      // A hard session-count cap allows one-for-one replacement after the
+      // old browser is closed; preserve existing LRU admission semantics.
+      if (atCountLimit) return;
       // Closing a Chromium page does not synchronously reclaim process RSS.
       // Recheck actual pressure rather than immediately admitting a new one.
       atCountLimit =
