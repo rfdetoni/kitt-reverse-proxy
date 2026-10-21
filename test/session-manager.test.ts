@@ -386,6 +386,45 @@ test('resource pressure preserves a named agent session during the host-tool gap
   }
 });
 
+test('resource eviction rechecks RSS before creating another Chromium session', async () => {
+  const closed: string[] = [];
+  const manager = new SessionManager({
+    defaultExecutor: executor('default'),
+    provider: 'chatgpt',
+    config: {
+      ...config, maxSessions: 4, sessionIdleTimeoutMs: 30 * 60 * 1000,
+      maxResidentRssBytes: 1, maxBrowserPages: 100
+    },
+    factory: async id => ({
+      executor: executor(id),
+      browserSession: {
+        context: { pages: () => [] },
+        async close() { closed.push(id); }
+      } as unknown as LiveBrowserSession
+    })
+  });
+  try {
+    await manager.execute('stale-agent', {});
+    const internal = manager as unknown as {
+      baselineRssBytes: number;
+      sessions: Map<string, { lastActivity: number }>;
+      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
+    };
+    internal.sessions.get('stale-agent')!.lastActivity -= 6 * 60 * 1000;
+    internal.memorySampler = {
+      snapshot: () => ({
+        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
+        mode: 'test', partial: false, processes: 1
+      })
+    };
+    await assert.rejects(manager.execute('new-agent', {}), SessionLimitExceededError);
+    assert.deepEqual(closed, ['stale-agent']);
+    assert.deepEqual(manager.list().map(session => session.id), ['default']);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('baseline resource exception cannot admit new sessions after excessive memory growth', async () => {
   const manager = new SessionManager({
     defaultExecutor: executor('default'),
