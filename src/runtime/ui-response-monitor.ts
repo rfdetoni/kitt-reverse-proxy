@@ -419,7 +419,12 @@ export async function awaitUiResponse(
             compact_candidates: probe.compactCandidates ?? 0,
             fresh_compact_candidates: probe.freshCompactCandidates ?? 0,
             max_sample_chars: probe.maxSampleChars ?? 0,
-            fresh_dom_mutation_samples: probe.mutationSamples ?? 0
+            fresh_dom_mutation_samples: probe.mutationSamples ?? 0,
+            tap_correlation_failure: tap?.failureReason ?? null,
+            tap_receiving: Boolean(tap?.receiving),
+            generation_stopped_ms: Date.now() - generationStoppedAt,
+            recovery: 'explicit_continue_only',
+            prompt_replay_safe: false
           });
         }
       }
@@ -434,8 +439,11 @@ export async function awaitUiResponse(
             'O envio ao ChatGPT foi confirmado, mas nenhuma resposta CDP correspondeu ao prompt atual e o DOM não comprovou uma resposta nova. Nenhuma ação foi inferida ou reenviada. Verifique o Chrome autenticado e continue explicitamente; use /v1/kitt/reset se necessário.'
           );
         }
-        throw new UiTimeoutError(
-          'O ChatGPT terminou de gerar, mas o proxy não conseguiu extrair a resposta do assistente.'
+        throw new UiUncorrelatedCaptureError(
+          'O ChatGPT terminou de gerar, mas nenhuma resposta comprovadamente vinculada '
+          + 'ao turno atual pôde ser extraída. O prompt pode ter sido executado; '
+          + 'não o reenvie automaticamente. Use continuação explícita para inspecionar '
+          + 'o estado atual, ou /v1/kitt/reset quando necessário.'
         );
       }
     }
