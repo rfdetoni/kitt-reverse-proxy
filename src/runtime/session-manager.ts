@@ -561,9 +561,9 @@ export class SessionManager {
   }
 
   private async ensureCapacity(): Promise<void> {
-    const atCountLimit =
+    let atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-    const underResourcePressure = this.resourcePressure();
+    let underResourcePressure = this.resourcePressure();
     if (!atCountLimit && !underResourcePressure) return;
 
     // Under RSS/page pressure, retain recently active conversation sessions.
@@ -575,7 +575,12 @@ export class SessionManager {
     const candidate = this.oldestRecyclableSession(graceMs);
     if (candidate) {
       await this.removeSession(candidate);
-      return;
+      // Closing a Chromium page does not synchronously reclaim process RSS.
+      // Recheck actual pressure rather than immediately admitting a new one.
+      atCountLimit =
+        this.sessions.size + this.creating.size >= this.options.config.maxSessions;
+      underResourcePressure = this.resourcePressure();
+      if (!atCountLimit && !underResourcePressure) return;
     }
 
     // A headed Chromium baseline can legitimately exceed the RSS budget before
