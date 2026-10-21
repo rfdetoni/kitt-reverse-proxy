@@ -561,29 +561,18 @@ export class SessionManager {
   }
 
   private async ensureCapacity(): Promise<void> {
-    let atCountLimit =
+    const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-    let underResourcePressure = this.resourcePressure();
+    const underResourcePressure = this.resourcePressure();
     if (!atCountLimit && !underResourcePressure) return;
 
-    // Under RSS/page pressure, retain recently active conversation sessions.
-    // Admission can fail for a different session while its owner can still
-    // continue using the existing session ID without extra browser pages.
-    const graceMs = underResourcePressure && !atCountLimit
-      ? Math.min(this.options.config.sessionIdleTimeoutMs, RESOURCE_PRESSURE_IDLE_GRACE_MS)
-      : 0;
-    const candidate = this.oldestRecyclableSession(graceMs);
+    // On-demand admission can replace an already idle named session: this is
+    // necessary for isolated planning turns followed by execution, all using
+    // distinct IDs. Only the periodic pressure sweep has a recent-use grace.
+    const candidate = this.oldestRecyclableSession();
     if (candidate) {
       await this.removeSession(candidate);
-      // A hard session-count cap allows one-for-one replacement after the
-      // old browser is closed; preserve existing LRU admission semantics.
-      if (atCountLimit) return;
-      // Closing a Chromium page does not synchronously reclaim process RSS.
-      // Recheck actual pressure rather than immediately admitting a new one.
-      atCountLimit =
-        this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-      underResourcePressure = this.resourcePressure();
-      if (!atCountLimit && !underResourcePressure) return;
+      return;
     }
 
     // A headed Chromium baseline can legitimately exceed the RSS budget before
@@ -618,7 +607,9 @@ export class SessionManager {
       logger.event('warn', 'session.capacity.resource_pressure_rejection', {
         ...this.capacity(),
         at_count_limit: atCountLimit,
-        recent_session_grace_ms: graceMs
+        background_eviction_grace_ms: Math.min(
+          this.options.config.sessionIdleTimeoutMs, RESOURCE_PRESSURE_IDLE_GRACE_MS
+        )
       });
     }
     throw new SessionLimitExceededError();
