@@ -330,7 +330,7 @@ async function executeAgentContract(
   const firstChoice = first.completion.choices[0]?.message;
   // An empty object contains no decision or result to serialize faithfully.
   // Re-prompting the web UI here can stall for minutes and cannot restore intent.
-  if (/^\\{\\s*\\}$/u.test(firstChoice?.content?.trim() ?? '')) {
+  if (/^\{\s*\}$/u.test(firstChoice?.content?.trim() ?? '')) {
     throw new AgentContractError(
       409, 'agent_contract_empty_action',
       'Provider returned an empty action with no decision to repair; no host tool was executed.',
