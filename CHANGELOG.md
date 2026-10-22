@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.22 — reject empty WebChat agent actions without unsafe replay
+
+A Gemini Web response of `{}` does not contain an action, a result, or enough evidence to serialize a faithful KITT host instruction. The agent gateway now returns a typed recoverable `agent_contract_empty_action` error immediately rather than submitting a speculative repair that can occupy the browser session for minutes. No host tool is invoked and no invented action is accepted. A regression verifies one upstream attempt and the explicit failure, while valid actions retain the existing bounded recovery behavior. Dependency pins and package lock remain consistent with the release.
+
 ## 5.4.21 — bounded child session under high Chromium startup memory
 
 The 2026-10-21 Wine-MBS logs show the primary agent executing in a named ChatGPT Web session while a diagnostic child received `session_limit_exceeded`: Chromium startup RSS was already over the configured budget (768 MiB), and both the default session and the busy primary could not be recycled. The existing baseline exception only admitted one named session.

@@ -326,6 +326,15 @@ test('a repair cannot turn a partially written JSON TOOL into a successful final
   assert.equal(recovered.body.choices,undefined);
 });
 
+test('empty Gemini action fails without a speculative browser repair', async () => {
+  const response = await executeRecovery(['{}', writeContract], 3);
+  assert.equal(response.status, 409);
+  assert.equal(response.attempts, 1);
+  assert.equal((response.body.error as {code:string}).code, 'agent_contract_empty_action');
+  assert.equal((response.body.error as {recoverable:boolean}).recoverable, true);
+  assert.equal(response.body.choices, undefined);
+});
+
 test('stalled repairs stop early and respect the same upstream budget', async () => {
   const echoedWithFence = await executeRecovery(['broken', '```json\nbroken\n```', writeContract], 3);
   assert.equal(echoedWithFence.status, 409);

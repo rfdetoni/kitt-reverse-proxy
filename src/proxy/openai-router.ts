@@ -328,6 +328,15 @@ async function executeAgentContract(
   // Never use a model repair call to rewrite an already-identified native or
   // compact tool action. Fail closed instead of changing tool arguments.
   const firstChoice = first.completion.choices[0]?.message;
+  // An empty object contains no decision or result to serialize faithfully.
+  // Re-prompting the web UI here can stall for minutes and cannot restore intent.
+  if (/^\{\s*\}$/u.test(firstChoice?.content?.trim() ?? '')) {
+    throw new AgentContractError(
+      409, 'agent_contract_empty_action',
+      'Provider returned an empty action with no decision to repair; no host tool was executed.',
+      true, 'continue'
+    );
+  }
   if (firstChoice?.tool_calls?.length || firstChoice?.content?.trimStart().startsWith('<tool_call>')
       || firstValidationError.kind === 'limit' || firstValidationError.kind === 'ambiguous') {
     throw new AgentContractError(409, 'agent_contract_invalid', firstValidationError.message, true, 'continue');
