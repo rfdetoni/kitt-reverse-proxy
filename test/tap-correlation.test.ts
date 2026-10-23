@@ -573,3 +573,58 @@ test('late recipient classification invalidates earlier generic JSON for cold an
     assert.equal(adapter.completedContract(),'{"items":["actual answer"]}');
   }
 });
+
+
+test('CDP correlates one user message split into typed text objects', async () => {
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta:'typed-parts-ok'}) + '\n\n').toString('base64')}
+    : {});
+  const {tap} = fixtureTap(async () => cdp);
+  const prompt = 'CURRENT-ISOLATED-RE-TURN ' + 'bounded trusted text evidence '.repeat(35) + ' FINAL-RE-SENTINEL';
+  const parts = prompt.match(/[\s\S]{1,71}/g)!.map(text => ({type:'text', text}));
+  await tap.initialize();
+  const turn = tap.arm(prompt);
+  try {
+    cdp.emit('Network.requestWillBeSent', {
+      requestId: 'typed-current', type: 'fetch',
+      request: {url: 'https://chatgpt.com/backend-api/conversation',
+        method: 'POST', headers: {'content-type':'application/json'},
+        postData: JSON.stringify({messages: [
+          {role:'user', content:{parts:[{type:'text',text:'unrelated old turn'}]}},
+          {role:'user', content:{parts}}
+        ]})}
+    });
+    cdp.emit('Network.responseReceived', {requestId:'typed-current',
+      response:{url:'https://chatgpt.com/backend-api/conversation',
+        status:200, mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
+    cdp.emit('Network.loadingFinished', {requestId:'typed-current'});
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.ok(events.some(e => e.type === 'matched' && e.requestId === 'typed-current'));
+    assert.ok(events.some(e => e.type === 'end'));
+    assert.equal(events.some(e => e.type === 'error'),false);
+  } finally {turn.cancel(); await tap.detach();}
+});
+
+test('CDP never joins typed text from separate role/message objects', async () => {
+  const cdp = fakeCdp();
+  const {tap} = fixtureTap(async () => cdp,{tapMatchTimeoutMs:80});
+  const prompt = 'SECURE_USER_BEGIN_' + 'A'.repeat(340) + '_SECURE_USER_END';
+  await tap.initialize();
+  const turn = tap.arm(prompt);
+  try {
+    const url='https://chatgpt.com/backend-api/conversation';
+    cdp.emit('Network.requestWillBeSent', {requestId:'cross-turn', type:'fetch',
+      request:{url,method:'POST',headers:{'content-type':'application/json'},
+        postData:JSON.stringify({messages:[
+          {role:'assistant',content:{parts:[{type:'text',text:prompt.slice(0,180)}]}},
+          {role:'user',content:{parts:[{type:'text',text:prompt.slice(180)}]}}
+        ]})}});
+    cdp.emit('Network.responseReceived',{requestId:'cross-turn',
+      response:{url,status:200,mimeType:'text/event-stream',headers:{'content-type':'text/event-stream'}}});
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.equal(events.some(e=>e.type==='matched'), false);
+    assert.ok(events.some(e=>e.type==='error' && e.reason==='no_matching_request'));
+  } finally {turn.cancel(); await tap.detach();}
+});

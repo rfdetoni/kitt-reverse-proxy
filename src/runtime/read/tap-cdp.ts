@@ -49,6 +49,8 @@ interface ActiveTurn {
   postsSeen: number;
   decodedBodies: number;
   partialMatches: number;
+  maxAnchorHits: number;
+  highestCandidateScore: number;
   queue: AsyncEventQueue<TapEvent>;
   candidates: Map<string, Candidate>;
   pendingBodies: Map<string, PendingBody>;
@@ -99,6 +101,30 @@ function promptNeedles(prompt: string): string[] {
   return unique.length >= 2 ? unique : [text];
 }
 
+/** Assemble only adjacent typed text parts in a single content array.
+ * Never combine text across different messages, roles or request metadata. */
+function contiguousTextParts(items: JsonValue[]): string | undefined {
+  if (items.length < 2 || items.length > 256) return undefined;
+  const chunks: string[] = [];
+  let total = 0;
+  for (const item of items) {
+    let value: string | undefined;
+    if (typeof item === 'string') {
+      value = item;
+    } else {
+      const obj = record(item);
+      if (!obj || !['text', 'input_text'].includes(String(obj.type ?? ''))) return undefined;
+      if (typeof obj.text === 'string') value = obj.text;
+      else if (typeof obj.content === 'string') value = obj.content;
+    }
+    if (value === undefined) return undefined;
+    total += value.length;
+    if (total > RESOURCE_LIMITS.discoveryRequestBytes) return undefined;
+    chunks.push(value);
+  }
+  return normalize(chunks.join(''));
+}
+
 function jsonContainsNeedles(value: JsonValue, needles: readonly string[]): number {
   let mask = 0;
   const visit = (item: JsonValue, depth: number): void => {
@@ -109,11 +135,9 @@ function jsonContainsNeedles(value: JsonValue, needles: readonly string[]): numb
         if (part.includes(needle)) mask |= 1 << index;
       });
     } else if (Array.isArray(item)) {
-      // Web chat can serialize one composer submission as adjacent content
-      // fragments. Match anchors spanning those fragments, but NEVER flatten
-      // the entire JSON document (which could combine unrelated user turns).
-      if (item.length > 0 && item.every(part => typeof part === 'string')) {
-        const joined = normalize(item.join(''));
+      // Join only text fragments of ONE content part array.
+      const joined = contiguousTextParts(item);
+      if (joined !== undefined) {
         needles.forEach((needle, index) => {
           if (joined.includes(needle)) mask |= 1 << index;
         });
@@ -244,6 +268,8 @@ export class CdpStreamTap {
       postsSeen: 0,
       decodedBodies: 0,
       partialMatches: 0,
+      maxAnchorHits: 0,
+      highestCandidateScore: 0,
       queue,
       candidates: new Map(),
       pendingBodies: new Map(),
@@ -350,6 +376,8 @@ export class CdpStreamTap {
     if (!allAnchors && matchedMask) turn.partialMatches++;
     const { url, method, resourceType } = pending;
     const baseScore = scoreRequestCandidate(url, decoded.body, resourceType, this.provider.id);
+    turn.maxAnchorHits = Math.max(turn.maxAnchorHits, anchorHits);
+    turn.highestCandidateScore = Math.max(turn.highestCandidateScore, baseScore);
     // ChatGPT may segment, trim or rewrite a very large composed prompt in
     // its request. Accept one 192-char unique anchor ONLY for a high-scoring,
     // provider-scoped request, and ONLY if no competing response candidate
@@ -552,6 +580,8 @@ export class CdpStreamTap {
         posts_seen: turn.postsSeen,
         decoded_bodies: turn.decodedBodies,
         partial_matches: turn.partialMatches,
+        max_anchor_hits: turn.maxAnchorHits,
+        highest_scoped_candidate_score: turn.highestCandidateScore,
         required_anchors: turn.needles.length
       });
     }
