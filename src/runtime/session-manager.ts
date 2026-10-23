@@ -165,6 +165,11 @@ export class SessionManager {
   private closed = false;
   private generation = 0;
   private readonly instanceId = randomUUID();
+  // Named agent's first request can take ownership of the authenticated
+  // startup tab. The default route then becomes lazy, never sharing the tab.
+  private startupTabAdopted = false;
+  private defaultRouteUsed = false;
+  private defaultRehydration: Promise<void> | undefined;
 
   constructor(private readonly options: {
     defaultExecutor: ChatExecutor;
@@ -172,6 +177,7 @@ export class SessionManager {
     provider: string;
     config: AppConfig;
     factory?: SessionFactory;
+    reuseStartupTabForFirstNamed?: boolean;
   }) {
     const now = Date.now();
     this.sessions.set('default', {
@@ -486,7 +492,10 @@ export class SessionManager {
       session.automationQueue.close();
     }
 
-    await settleWithin([...this.creating.values()], SHUTDOWN_DRAIN_TIMEOUT_MS);
+    await settleWithin([
+      ...this.creating.values(),
+      ...(this.defaultRehydration ? [this.defaultRehydration] : [])
+    ], SHUTDOWN_DRAIN_TIMEOUT_MS);
     const snapshot = [...this.sessions.values()];
     await settleWithin(
       snapshot.flatMap((session) => [session.queue.drain(), session.automationQueue.drain()]),
@@ -505,6 +514,11 @@ export class SessionManager {
     }
     const defaultSession = this.sessions.get('default');
     await defaultSession?.browserSession?.close().catch(() => undefined);
+    if (this.startupTabAdopted) {
+      // If first named session was removed, its page may already be closed.
+      // This releases the original native Chrome process/profile exactly once.
+      await this.options.defaultBrowserSession?.close().catch(() => undefined);
+    }
   }
 
   private get defaultSession(): ManagedSession {
@@ -516,6 +530,10 @@ export class SessionManager {
   private async resolve(requestedId: string | undefined): Promise<ManagedSession> {
     if (this.closed) throw new SessionNotSupportedError();
     const id = this.normalizeSessionId(requestedId);
+    if (id === 'default') {
+      this.defaultRouteUsed = true;
+      if (this.startupTabAdopted) await this.rehydrateDefaultRoute();
+    }
     const current = this.sessions.get(id);
     if (current) { current.reservations += 1; return current; }
     if (!this.options.factory) throw new SessionNotSupportedError();
@@ -531,9 +549,61 @@ export class SessionManager {
     finally { this.creating.delete(id); }
   }
 
+  private canAdoptStartupTab(): boolean {
+    if (!this.options.reuseStartupTabForFirstNamed || this.startupTabAdopted
+        || this.defaultRouteUsed || !this.options.defaultBrowserSession) return false;
+    const primary = this.defaultSession;
+    return !primary.reservations && !primary.activeOperations && !primary.queue.depth
+      && !primary.automationQueue.depth && primary.status === 'idle'
+      && !primary.browserAutomation && Boolean(primary.browserSession)
+      && !primary.browserSession!.page.isClosed();
+  }
+
+  private adoptStartupTab(): SessionFactoryResult | undefined {
+    if (!this.canAdoptStartupTab()) return undefined;
+    const primary = this.defaultSession;
+    this.startupTabAdopted = true;
+    const session = primary.browserSession!;
+    delete primary.browserSession;
+    logger.event('info', 'session.browser.startup_tab_adopted', {
+      browser_page_reused: true, extra_tabs_created: 0
+    });
+    return {
+      executor: this.options.defaultExecutor,
+      browserSession: {
+        ...session,
+        // Startup Chrome/profile remains owned by SessionManager until shutdown.
+        // Releasing a named lease must never kill its sibling browser contexts.
+        async close(): Promise<void> {}
+      }
+    };
+  }
+
+  private async rehydrateDefaultRoute(): Promise<void> {
+    if (this.defaultSession.browserSession) return;
+    if (!this.options.factory) throw new SessionNotSupportedError();
+    if (!this.defaultRehydration) {
+      const promise = (async () => {
+        const result = await this.options.factory!('default');
+        if (this.closed || !result.browserSession) {
+          await result.browserSession?.close().catch(() => undefined);
+          throw new SessionNotSupportedError();
+        }
+        const session = this.defaultSession;
+        session.executor = resilient(result.executor, this.options.provider, this.circuitStates);
+        if (result.browserSession) session.browserSession = result.browserSession;
+        session.generation = ++this.generation;
+      })();
+      this.defaultRehydration = promise;
+      void promise.finally(() => { this.defaultRehydration = undefined; }).catch(() => undefined);
+    }
+    await this.defaultRehydration;
+  }
+
   private async create(id: string): Promise<ManagedSession> {
     await this.ensureCapacity();
-    const result = await this.options.factory!(id);
+    const adopted = this.adoptStartupTab();
+    const result = adopted ?? await this.options.factory!(id);
     if (this.closed) {
       await result.browserSession?.close().catch(() => undefined);
       throw new SessionNotSupportedError();
@@ -563,6 +633,9 @@ export class SessionManager {
   private async ensureCapacity(): Promise<void> {
     const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
+    // Admission reuses an existing page and adds no Chromium renderer. A
+    // page/RSS cap already reached by the startup browser should not deny it.
+    if (!atCountLimit && this.canAdoptStartupTab()) return;
     const underResourcePressure = this.resourcePressure();
     if (!atCountLimit && !underResourcePressure) return;
 
@@ -672,6 +745,30 @@ export class SessionManager {
     delete session.browserAutomation;
       delete session.browserAutomationLastActivity;
     await session.browserSession?.close().catch(() => undefined);
+    if (session.browserSession?.page === this.options.defaultBrowserSession?.page
+        && this.startupTabAdopted) {
+      const initial = this.options.defaultBrowserSession!;
+      // On idle eviction, return the startup tab to the standby default only
+      // after clearing its previous agent history. Next named can reclaim it.
+      if (!this.closed && !this.defaultRouteUsed && !this.defaultSession.browserSession
+          && this.options.defaultExecutor.reset) {
+        try {
+          await this.options.defaultExecutor.reset();
+          this.defaultSession.browserSession = initial;
+          this.startupTabAdopted = false;
+          logger.event('info', 'session.browser.startup_tab_returned', {
+            browser_page_reused: true, history_cleared: true
+          });
+        } catch {
+          // Never transfer a stale conversation to a different session.
+          await initial.page.close().catch(() => undefined);
+        }
+      } else if (this.closed || this.defaultSession.browserSession) {
+        await initial.page.close().catch(() => undefined);
+      }
+      // While a lazy default is being initialized, retain the original tab
+      // until shutdown rather than exiting Chrome with zero usable tabs.
+    }
     telemetry.sessionEvicted();
     telemetry.setSessionsActive(this.sessions.size);
   }

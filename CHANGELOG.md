@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.24 — reuse authenticated startup tab for first named agent
+
+First named agent session adopts the already authenticated bootstrap tab, preventing a second idle tab. Additional independent agent sessions receive separate pages; default-route use before adoption leaves the default tab untouched. If default is used after adoption, its separate tab is created lazily, preserving session and CDP correlation isolation. On agent eviction the adopted page is closed; shutdown alone owns the native Chrome process/profile. Focused lifecycle tests, package lock versions synchronized, no dependency pin changes.
+
+
 ## 5.4.23 — correlate segmented typed WebChat prompt content without guessing
 
 The CDP passive reader now joins adjacent typed text parts only inside one content array; it never joins separate messages, roles, non-text parts or metadata. Redacted aggregate correlation diagnostics include highest observed anchor count and candidate score, making `no_matching_request` actionable without copying prompts. Explicit-continue-only capture failures and exactly-once UI submission are preserved. Focused positive/negative tests guard cross-turn misattribution. Dependencies and pins unchanged; package-lock version synchronized.
