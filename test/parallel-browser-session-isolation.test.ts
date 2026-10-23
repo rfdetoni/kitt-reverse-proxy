@@ -253,3 +253,32 @@ test('one-page resource ceiling admits first named without starting renderer', a
     assert.equal(manager.capacity().browser_pages,1);
   }finally{await manager.close();}
 });
+
+
+test('evicted first agent clears chat and reclaims startup page for next named agent', async () => {
+  const page = {closed:false,isClosed(){return this.closed;},
+    async close(){this.closed=true;},async goto(_url:string){}};
+  const context={pages:()=>[page],async newPage(){throw new Error('new tab not expected');}};
+  let shutdown=0, resets=0;
+  const base={context,page,persistent:true,headed:true,async close(){shutdown++;}} as unknown as LiveBrowserSession;
+  const primary:ChatExecutor={
+    modelId:'startup',transport:'ui',describe:()=>({}),
+    async reset(){resets++;},
+    async execute(){return {completion:{id:'x',object:'chat.completion',created:0,model:'startup',
+      choices:[{index:0,message:{role:'assistant',content:'ok'},finish_reason:'stop'}]},deltas:[]};}
+  };
+  const manager=new SessionManager({provider:'chatgpt',config,defaultExecutor:primary,
+    defaultBrowserSession:base,reuseStartupTabForFirstNamed:true,
+    factory:async()=>{throw new Error('idle primary should reuse startup tab');}});
+  try{
+    await manager.execute('firstAgent',{messages:[]});
+    assert.equal(await manager.delete('firstAgent'),true);
+    assert.equal(resets,1,'must reset chat before returning it to the pool');
+    assert.equal(page.closed,false,'Chrome must remain available for next agent');
+    await manager.execute('nextAgent',{messages:[]});
+    assert.equal(manager.capacity().browser_pages,1);
+    assert.equal(resets,1);
+  }finally{await manager.close();}
+  assert.equal(shutdown,1);
+  assert.equal(page.closed,true);
+});

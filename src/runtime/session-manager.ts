@@ -747,7 +747,27 @@ export class SessionManager {
     await session.browserSession?.close().catch(() => undefined);
     if (session.browserSession?.page === this.options.defaultBrowserSession?.page
         && this.startupTabAdopted) {
-      await this.options.defaultBrowserSession?.page.close().catch(() => undefined);
+      const initial = this.options.defaultBrowserSession!;
+      // On idle eviction, return the startup tab to the standby default only
+      // after clearing its previous agent history. Next named can reclaim it.
+      if (!this.closed && !this.defaultRouteUsed && !this.defaultSession.browserSession
+          && this.options.defaultExecutor.reset) {
+        try {
+          await this.options.defaultExecutor.reset();
+          this.defaultSession.browserSession = initial;
+          this.startupTabAdopted = false;
+          logger.event('info', 'session.browser.startup_tab_returned', {
+            browser_page_reused: true, history_cleared: true
+          });
+        } catch {
+          // Never transfer a stale conversation to a different session.
+          await initial.page.close().catch(() => undefined);
+        }
+      } else if (this.closed || this.defaultSession.browserSession) {
+        await initial.page.close().catch(() => undefined);
+      }
+      // While a lazy default is being initialized, retain the original tab
+      // until shutdown rather than exiting Chrome with zero usable tabs.
     }
     telemetry.sessionEvicted();
     telemetry.setSessionsActive(this.sessions.size);
