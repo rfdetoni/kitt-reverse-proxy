@@ -549,14 +549,19 @@ export class SessionManager {
     finally { this.creating.delete(id); }
   }
 
-  private adoptStartupTab(): SessionFactoryResult | undefined {
+  private canAdoptStartupTab(): boolean {
     if (!this.options.reuseStartupTabForFirstNamed || this.startupTabAdopted
-        || this.defaultRouteUsed || !this.options.defaultBrowserSession) return undefined;
+        || this.defaultRouteUsed || !this.options.defaultBrowserSession) return false;
     const primary = this.defaultSession;
-    if (primary.reservations || primary.activeOperations || primary.queue.depth
-        || primary.automationQueue.depth || primary.status !== 'idle'
-        || primary.browserAutomation || !primary.browserSession
-        || primary.browserSession.page.isClosed()) return undefined;
+    return !primary.reservations && !primary.activeOperations && !primary.queue.depth
+      && !primary.automationQueue.depth && primary.status === 'idle'
+      && !primary.browserAutomation && Boolean(primary.browserSession)
+      && !primary.browserSession!.page.isClosed();
+  }
+
+  private adoptStartupTab(): SessionFactoryResult | undefined {
+    if (!this.canAdoptStartupTab()) return undefined;
+    const primary = this.defaultSession;
     this.startupTabAdopted = true;
     const session = primary.browserSession;
     delete primary.browserSession;
@@ -628,6 +633,9 @@ export class SessionManager {
   private async ensureCapacity(): Promise<void> {
     const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
+    // Admission reuses an existing page and adds no Chromium renderer. A
+    // page/RSS cap already reached by the startup browser should not deny it.
+    if (!atCountLimit && this.canAdoptStartupTab()) return;
     const underResourcePressure = this.resourcePressure();
     if (!atCountLimit && !underResourcePressure) return;
 

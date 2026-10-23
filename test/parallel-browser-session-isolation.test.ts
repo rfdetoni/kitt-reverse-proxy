@@ -230,3 +230,26 @@ test('default traffic first keeps startup tab and forbids sharing with named ses
     assert.equal(created,1,'named session must be separately created after default use');
   }finally{await manager.close();}
 });
+
+
+test('one-page resource ceiling admits first named without starting renderer', async () => {
+  let newPages = 0;
+  const page = {closed:false,isClosed(){return this.closed;},async close(){this.closed=true;},
+    async goto(_url:string){}};
+  const context = {pages:()=>[page],async newPage(){newPages++;throw new Error('new tab must not be needed');}};
+  const base = {context,page,persistent:true,headed:true,async close(){}} as unknown as LiveBrowserSession;
+  const primary:ChatExecutor = {modelId:'startup',transport:'ui',describe:()=>({}),
+    async execute(){return {completion:{id:'x',object:'chat.completion',created:0,model:'startup',
+      choices:[{index:0,message:{role:'assistant',content:'startup'},finish_reason:'stop'}]},deltas:[]};}};
+  const manager = new SessionManager({
+    provider:'chatgpt',config:{...config,maxBrowserPages:1,maxResidentRssBytes:1},
+    defaultExecutor:primary,defaultBrowserSession:base,reuseStartupTabForFirstNamed:true,
+    factory:async()=>{throw new Error('factory must not start another browser tab');}
+  });
+  try{
+    const result=await manager.execute('agent',{messages:[]});
+    assert.equal(result.completion.choices[0]?.message.content,'startup');
+    assert.equal(newPages,0);
+    assert.equal(manager.capacity().browser_pages,1);
+  }finally{await manager.close();}
+});
