@@ -1,5 +1,10 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.23 — correlate segmented typed WebChat prompt content without guessing
+
+The CDP passive reader now joins adjacent typed text parts only inside one content array; it never joins separate messages, roles, non-text parts or metadata. Redacted aggregate correlation diagnostics include highest observed anchor count and candidate score, making `no_matching_request` actionable without copying prompts. Explicit-continue-only capture failures and exactly-once UI submission are preserved. Focused positive/negative tests guard cross-turn misattribution. Dependencies and pins unchanged; package-lock version synchronized.
+
+
 ## 5.4.22 — reject empty WebChat agent actions without unsafe replay
 
 A Gemini Web response of `{}` does not contain an action, a result, or enough evidence to serialize a faithful KITT host instruction. The agent gateway now returns a typed recoverable `agent_contract_empty_action` error immediately rather than submitting a speculative repair that can occupy the browser session for minutes. No host tool is invoked and no invented action is accepted. A regression verifies one upstream attempt and the explicit failure, while valid actions retain the existing bounded recovery behavior. Dependency pins and package lock remain consistent with the release.
