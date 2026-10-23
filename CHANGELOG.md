@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.25 — wait for slow HTTP response to an already-correlated CDP POST
+
+Stop falsely reporting no_matching_request after 4 seconds when all prompt anchors have already matched a high-scoring, provider-scoped POST but its HTTP response has not arrived. Wait once for a bounded response window (the configured first-byte timeout, max 90s), then fail closed if still absent; associate only by identical requestId and retain cross-turn isolation. Emit redacted eligible-candidate diagnostics and regression tests for delayed response and no-response cases. Existing dependency pins unchanged; package-lock synchronized.
+
 ## 5.4.24 — reuse authenticated startup tab for first named agent
 
 First named agent session adopts the already authenticated bootstrap tab, preventing a second idle tab. Additional independent agent sessions receive separate pages; default-route use before adoption leaves the default tab untouched. If default is used after adoption, its separate tab is created lazily, preserving session and CDP correlation isolation. On agent eviction the adopted page is closed; shutdown alone owns the native Chrome process/profile. Focused lifecycle tests, package lock versions synchronized, no dependency pin changes.

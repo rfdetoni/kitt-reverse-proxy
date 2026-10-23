@@ -628,3 +628,45 @@ test('CDP never joins typed text from separate role/message objects', async () =
     assert.ok(events.some(e=>e.type==='error' && e.reason==='no_matching_request'));
   } finally {turn.cancel(); await tap.detach();}
 });
+
+
+test('full CDP POST correlation waits for its slow response without 4s false fallback', async () => {
+  const cdp = fakeCdp(async method => method === 'Network.streamResourceContent'
+    ? {bufferedData: Buffer.from('data: ' + JSON.stringify({delta:'slow-response-ok'}) + '\n\n').toString('base64')}
+    : {});
+  const {tap} = fixtureTap(async () => cdp, {tapMatchTimeoutMs: 20, tapFirstByteMs: 250});
+  await tap.initialize();
+  const prompt = 'EXPECTED-USER-PROMPT ' + 'very distinct content for bounded matching '.repeat(25);
+  const turn = tap.arm(prompt);
+  try {
+    request(cdp, prompt);
+    await new Promise(resolve => setTimeout(resolve, 75));
+    // The 20ms request-discovery timer expired, but matching POST is known.
+    // Its response must still be associated by the same requestId only.
+    response(cdp);
+    cdp.emit('Network.loadingFinished', {requestId:'current'});
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.ok(events.some(e => e.type === 'matched' && e.requestId === 'current'));
+    assert.ok(events.some(e => e.type === 'end'));
+    assert.equal(events.some(e => e.type === 'error'), false);
+  } finally {turn.cancel(); await tap.detach();}
+});
+
+test('matched POST with no HTTP response is still bounded and never accepted', async () => {
+  const cdp = fakeCdp();
+  const {tap} = fixtureTap(async () => cdp, {tapMatchTimeoutMs: 20, tapFirstByteMs: 85});
+  await tap.initialize();
+  const prompt = 'CURRENT-UNIQUE-PROMPT ' + 'abc unique '.repeat(65);
+  const turn = tap.arm(prompt);
+  const start = Date.now();
+  try {
+    request(cdp,prompt);
+    const events = [];
+    for await (const event of turn.events()) events.push(event);
+    assert.equal(events.some(e=>e.type==='matched'), false);
+    assert.ok(events.some(e=>e.type==='error' && e.reason==='no_matching_request'));
+    assert.ok(Date.now()-start >= 55, 'must not fail on short request discovery timer');
+    assert.ok(Date.now()-start < 1800, 'must remain bounded');
+  } finally {turn.cancel(); await tap.detach();}
+});
