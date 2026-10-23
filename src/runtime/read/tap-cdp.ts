@@ -51,6 +51,7 @@ interface ActiveTurn {
   partialMatches: number;
   maxAnchorHits: number;
   highestCandidateScore: number;
+  awaitingMatchedResponse: boolean;
   queue: AsyncEventQueue<TapEvent>;
   candidates: Map<string, Candidate>;
   pendingBodies: Map<string, PendingBody>;
@@ -270,6 +271,7 @@ export class CdpStreamTap {
       partialMatches: 0,
       maxAnchorHits: 0,
       highestCandidateScore: 0,
+      awaitingMatchedResponse: false,
       queue,
       candidates: new Map(),
       pendingBodies: new Map(),
@@ -402,6 +404,24 @@ export class CdpStreamTap {
       pendingChunks: [],
       pendingBytes: 0
     });
+
+    // An exact high-confidence POST match may precede its HTTP response by
+    // tens of seconds under model load. Stop using the 4s *request discovery*
+    // timer once such a request is found. Wait once, bounded by first-byte
+    // timeout, for the matching requestId's response to arrive; never accept
+    // a different request or treat an absent response as verified.
+    if (allAnchors && baseScore >= 70 && !turn.awaitingMatchedResponse) {
+      turn.awaitingMatchedResponse = true;
+      this.clearTimer(turn.matchTimer);
+      const responseWaitMs = Math.min(90_000, Math.max(
+        this.config.tapMatchTimeoutMs ?? 4_000,
+        this.config.tapFirstByteMs ?? 45_000
+      ));
+      turn.matchTimer = setTimeout(
+        () => this.fail(turn, 'no_matching_request'), responseWaitMs
+      );
+      turn.matchTimer.unref?.();
+    }
   }
 
   private readonly onResponse = (raw: unknown): void => {
@@ -582,6 +602,8 @@ export class CdpStreamTap {
         partial_matches: turn.partialMatches,
         max_anchor_hits: turn.maxAnchorHits,
         highest_scoped_candidate_score: turn.highestCandidateScore,
+        eligible_candidates: turn.candidates.size,
+        awaiting_matched_response: turn.awaitingMatchedResponse,
         required_anchors: turn.needles.length
       });
     }
