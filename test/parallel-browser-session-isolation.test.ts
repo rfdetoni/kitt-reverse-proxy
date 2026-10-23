@@ -160,8 +160,7 @@ test('first named agent adopts startup tab, child gets another, default is lazy'
   };
   const page = await context.newPage();
   let baseClosed = 0;
-  const base = {context, page, persistent: true, headed: true, async close() { baseClosed++; }}
-    as unknown as LiveBrowserSession;
+  const base = {context, page, persistent: true, headed: true, async close() { baseClosed++; }} as unknown as LiveBrowserSession;
   const broker = new BrowserSessionBroker(base, config);
   const sessions = new Map<string, LiveBrowserSession>();
   const calls: string[] = [];
@@ -211,8 +210,7 @@ test('default traffic first keeps startup tab and forbids sharing with named ses
   let pages=1;
   const page = { isClosed:()=>false, close:async()=>undefined, goto:async()=>undefined };
   const context = {pages:()=>[page],newPage:async()=>{pages++;return page}};
-  const base = {context,page,persistent:true,headed:true,close:async()=>undefined}
-    as unknown as LiveBrowserSession;
+  const base = {context,page,persistent:true,headed:true,close:async()=>undefined} as unknown as LiveBrowserSession;
   const executor = (id:string):ChatExecutor=>({
     modelId:id,transport:'ui',describe:()=>({}),
     execute:async()=>({completion:{id,object:'chat.completion',created:1,model:id,
