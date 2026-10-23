@@ -113,6 +113,9 @@ async function main(): Promise<void> {
     defaultBrowserSession: runtime.session,
     provider: runtime.provider.id,
     config,
+    // First named agent adopts the authenticated bootstrap page, no new tab.
+    // If default was used first, the existing default page remains its owner.
+    reuseStartupTabForFirstNamed: Boolean(browserBroker),
     ...(browserBroker
       ? { factory: async () => createIsolatedUiSession(runtime.session, runtime.provider, config, browserBroker) }
       : {})

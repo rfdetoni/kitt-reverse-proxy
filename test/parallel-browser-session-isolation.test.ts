@@ -145,3 +145,90 @@ test('distinct child sessions do not silently collapse onto the default proxy qu
     assert.equal(manager.capacity().named, 2);
   } finally { await manager.close(); }
 });
+
+
+test('first named agent adopts startup tab, child gets another, default is lazy', async () => {
+  const pages: Array<{id: number; closed: boolean; goto(url: string): Promise<void>; close(): Promise<void>; isClosed(): boolean}> = [];
+  const context = {
+    pages: () => pages,
+    async newPage() {
+      const page = { id: pages.length, closed: false, async goto(_url: string) {},
+        async close() { this.closed = true; }, isClosed() { return this.closed; } };
+      pages.push(page);
+      return page;
+    }
+  };
+  const page = await context.newPage();
+  let baseClosed = 0;
+  const base = {context, page, persistent: true, headed: true, async close() { baseClosed++; }}
+    as unknown as LiveBrowserSession;
+  const broker = new BrowserSessionBroker(base, config);
+  const sessions = new Map<string, LiveBrowserSession>();
+  const calls: string[] = [];
+  const executor = (name: string): ChatExecutor => ({
+    modelId: name, transport: 'ui',
+    async execute() {
+      return {completion:{id:name,object:'chat.completion',created:1,model:name,
+        choices:[{index:0,message:{role:'assistant',content:name},finish_reason:'stop'}]},deltas:[]};
+    }, describe(){return {};}
+  });
+  const manager = new SessionManager({
+    defaultExecutor: executor('startup'),
+    defaultBrowserSession: base,
+    provider:'chatgpt',config,
+    reuseStartupTabForFirstNamed:true,
+    factory:async(id)=>{
+      calls.push(id);
+      const session = await broker.acquire(provider);
+      sessions.set(id,session);
+      return {executor:executor(id),browserSession:session};
+    }
+  });
+  try {
+    const root = await manager.execute('primaryAgent',{messages:[]});
+    assert.equal(root.completion.choices[0]?.message.content,'startup');
+    assert.equal(pages.length,1,'bootstrap page should be the first agent tab');
+    assert.equal(manager.capacity().browser_pages,1);
+    const child = await manager.execute('childAgent',{messages:[]});
+    assert.equal(child.completion.choices[0]?.message.content,'childAgent');
+    assert.equal(pages.length,2);
+    assert.notEqual(sessions.get('childAgent')?.page,page);
+    assert.deepEqual(calls,['childAgent']);
+
+    // Default route is deliberately materialized in a *new* page once used.
+    const def = await manager.execute(undefined,{messages:[]});
+    assert.equal(def.completion.choices[0]?.message.content,'default');
+    assert.equal(pages.length,3);
+    assert.equal(calls[1],'default');
+    assert.notEqual(sessions.get('default')?.page,page);
+    assert.equal((await manager.execute('primaryAgent',{messages:[]})).completion.choices[0]?.message.content,'startup');
+  } finally {await manager.close();}
+  assert.equal(baseClosed,1,'original browser process is closed only by owner shutdown');
+  assert.deepEqual(pages.map(x=>x.closed),[true,true,true]);
+});
+
+test('default traffic first keeps startup tab and forbids sharing with named sessions', async () => {
+  let pages=1;
+  const page = { isClosed:()=>false, close:async()=>undefined, goto:async()=>undefined };
+  const context = {pages:()=>[page],newPage:async()=>{pages++;return page}};
+  const base = {context,page,persistent:true,headed:true,close:async()=>undefined}
+    as unknown as LiveBrowserSession;
+  const executor = (id:string):ChatExecutor=>({
+    modelId:id,transport:'ui',describe:()=>({}),
+    execute:async()=>({completion:{id,object:'chat.completion',created:1,model:id,
+      choices:[{index:0,message:{role:'assistant',content:id},finish_reason:'stop'}]},deltas:[]})
+  });
+  let created=0;
+  const manager=new SessionManager({
+    provider:'chatgpt',config,defaultExecutor:executor('default'),defaultBrowserSession:base,
+    reuseStartupTabForFirstNamed:true,
+    factory:async()=>{created++;return {executor:executor('named'),
+      browserSession:{...base,close:async()=>undefined}};}
+  });
+  try{
+    await manager.execute(undefined,{messages:[]});
+    const result=await manager.execute('agent',{messages:[]});
+    assert.equal(result.completion.choices[0]?.message.content,'named');
+    assert.equal(created,1,'named session must be separately created after default use');
+  }finally{await manager.close();}
+});
