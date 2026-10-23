@@ -563,7 +563,7 @@ export class SessionManager {
     if (!this.canAdoptStartupTab()) return undefined;
     const primary = this.defaultSession;
     this.startupTabAdopted = true;
-    const session = primary.browserSession;
+    const session = primary.browserSession!;
     delete primary.browserSession;
     logger.event('info', 'session.browser.startup_tab_adopted', {
       browser_page_reused: true, extra_tabs_created: 0
