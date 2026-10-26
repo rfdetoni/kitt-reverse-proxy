@@ -1,5 +1,12 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.26 — bounded Playwright browser diagnostics and patched dependencies
+
+- Override vulnerable transitive body-parser to 2.4.0 and fast-uri to 3.1.9 with the published package integrity hashes; retain audit and npm ci checks.
+- Capture real page console errors/warnings, JS exceptions, failed requests and HTTP 4xx/5xx in each automation session. Store only event type, allowlisted origin, resource category and SHA-256 message fingerprint; never return raw headers, request bodies or secrets from console text.
+- Add read-only `diagnose` browser action with event counters and bounded recent evidence. Preserve origin enforcement and session isolation. Synchronize package-lock.json with package.json.
+
+
 ## 5.4.25 — wait for slow HTTP response to an already-correlated CDP POST
 
 Stop falsely reporting no_matching_request after 4 seconds when all prompt anchors have already matched a high-scoring, provider-scoped POST but its HTTP response has not arrived. Wait once for a bounded response window (the configured first-byte timeout, max 90s), then fail closed if still absent; associate only by identical requestId and retain cross-turn isolation. Emit redacted eligible-candidate diagnostics and regression tests for delayed response and no-response cases. Existing dependency pins unchanged; package-lock synchronized.

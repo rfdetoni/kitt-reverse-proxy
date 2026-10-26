@@ -1,10 +1,12 @@
 import type { Locator, Page } from 'playwright';
+import { createHash } from 'node:crypto';
 import { throwIfAborted } from './cancellation.js';
 import type { JsonObject, LiveBrowserSession } from '../types.js';
 
 export const BROWSER_AUTOMATION_ACTIONS = [
   'open',
   'inspect',
+  'diagnose',
   'click',
   'type',
   'screenshot',
@@ -210,8 +212,19 @@ function actionName(value: string): BrowserAutomationAction {
   return normalized as BrowserAutomationAction;
 }
 
+type BrowserDiagnostic = {
+  kind: 'console' | 'pageerror' | 'requestfailed' | 'http_error';
+  severity: string;
+  origin: string;
+  fingerprint: string;
+  status?: number;
+  resource_type?: string;
+};
+
 export class BrowserAutomationSession {
   private originScope = new Set<string>([LOOPBACK_SCOPE]);
+  private readonly diagnostics: BrowserDiagnostic[] = [];
+  private readonly diagnosticCounts = { console: 0, pageerror: 0, requestfailed: 0, http_error: 0 };
   private blockedNavigationUrl: string | undefined;
 
   constructor(private readonly page: Page) {}
@@ -250,6 +263,26 @@ export class BrowserAutomationSession {
         page.on('popup', (popup) => {
           void popup.close().catch(() => undefined);
         });
+        // Observe real Playwright/CDP events without collecting secrets from
+        // console text, requests, headers or response bodies.
+        page.on('console', (message) => {
+          if (message.type() === 'error' || message.type() === 'warning') {
+            session.recordDiagnostic('console', message.type(), page.url(), message.text());
+          }
+        });
+        page.on('pageerror', (error) => {
+          session.recordDiagnostic('pageerror', 'error', page.url(), error.message);
+        });
+        page.on('requestfailed', (request) => {
+          session.recordDiagnostic('requestfailed', 'error', request.url(),
+            request.failure()?.errorText || 'failed', undefined, request.resourceType());
+        });
+        page.on('response', (response) => {
+          if (response.status() >= 400) {
+            session.recordDiagnostic('http_error', 'error', response.url(),
+              String(response.status()), response.status(), response.request().resourceType());
+          }
+        });
       }
       throwIfAborted(signal);
       return session;
@@ -257,6 +290,23 @@ export class BrowserAutomationSession {
       await page.close().catch(() => undefined);
       throw error;
     }
+  }
+
+  private recordDiagnostic(
+    kind: BrowserDiagnostic['kind'], severity: string, url: string,
+    message: string, status?: number, resourceType?: string
+  ): void {
+    this.diagnosticCounts[kind] += 1;
+    const fingerprint = createHash('sha256').update(message).digest('hex').slice(0, 16);
+    const entry: BrowserDiagnostic = {
+      kind, severity,
+      origin: this.isAllowedUrl(url) ? safeUrlLabel(url) : '<outside-scope>',
+      fingerprint,
+      ...(status !== undefined ? { status } : {}),
+      ...(resourceType ? { resource_type: resourceType.slice(0, 32) } : {})
+    };
+    this.diagnostics.push(entry);
+    if (this.diagnostics.length > 128) this.diagnostics.shift();
   }
 
   private setOriginScope(originScope: readonly string[]): void {
@@ -386,6 +436,18 @@ export class BrowserAutomationSession {
 
     const timeout = timeoutMs(args);
     try {
+      if (action === 'diagnose') {
+        this.assertAllowedUrl(this.page.url());
+        if (Object.keys(args).length > 0) {
+          throw new BrowserAutomationInputError('Browser diagnose accepts no arguments.');
+        }
+        return {
+          action: 'diagnose', url: this.page.url(),
+          counters: { ...this.diagnosticCounts },
+          recent: this.diagnostics.slice(-32),
+          truncated: this.diagnostics.length > 32
+        };
+      }
       if (action === 'open') {
         const url = httpUrl(args);
         this.assertAllowedUrl(url);
