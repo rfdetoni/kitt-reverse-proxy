@@ -405,7 +405,28 @@ export async function sendUiPrompt(
     if (send) {
       beforeSubmit?.();
       logger.debug('ui.prompt.submission', {provider_id: provider.id, outcome: 'dispatch', method: 'button', prompt_chars: prompt.length});
-      await send.click({ timeout: 2_000 });
+      try {
+        await send.click({ timeout: 2_000 });
+      } catch (error) {
+        // Playwright can time out after dispatching a click while ChatGPT
+        // re-renders the composer. A blind retry may submit twice. Probe the
+        // existing accepted/streaming/changed-response signals instead.
+        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+        try {
+          await waitForSubmissionConfirmation(session, provider, baseline, prompt, signal);
+          logger.debug('ui.prompt.submission', {
+            provider_id: provider.id, outcome: 'confirmed_after_click_timeout',
+            method: 'button', prompt_chars: prompt.length
+          });
+          return;
+        } catch (confirmationError) {
+          if (!(confirmationError instanceof UiAutomationError)) throw confirmationError;
+          throw new UiAutomationError(
+            'O clique expirou e não houve confirmação de envio. ' +
+            'O prompt não foi reenviado para evitar duplicação; confira o Chromium.'
+          );
+        }
+      }
       submitted = true;
       break;
     }

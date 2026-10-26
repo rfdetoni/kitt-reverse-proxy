@@ -48,3 +48,47 @@ test('UI submission requires acceptance, including ignored click/Enter and detac
     assert.equal(enters, mode === 'ignored-enter' ? 1 : 0, 'never submit a second time after uncertain acceptance');
   }));
 });
+
+test('Click timeout after UI accepted the prompt confirms without resubmitting', async () => {
+  const provider = detectProvider('https://chatgpt.com/');
+  const config = { manualInterventionTimeoutMs: 1_000 } as AppConfig;
+  let draft = '';
+  let clicks = 0;
+  let enters = 0;
+  const input = {
+    last() { return this; },
+    count: async () => 1,
+    isVisible: async () => true,
+    fill: async (text: string) => { draft = text; },
+    focus: async () => undefined,
+    press: async () => { enters++; },
+    evaluate: async (fn: unknown) => {
+      if (String(fn).includes('html.isContentEditable')) return true;
+      return draft;
+    }
+  };
+  const button = {
+    last() { return this; },
+    all() { return [this]; },
+    count: async () => 1,
+    isVisible: async () => true,
+    isEnabled: async () => true,
+    click: async () => {
+      clicks++;
+      draft = ''; // Browser accepted the click before Playwright timed out.
+      const timeout = new Error('locator.click: Timeout 2000ms exceeded');
+      timeout.name = 'TimeoutError';
+      throw timeout;
+    }
+  };
+  const frame = {
+    isDetached: () => false,
+    locator: (selector: string) => selector.includes('contenteditable') ||
+      selector.includes('prompt-textarea') ? input : button,
+    evaluate: async (_fn: unknown, args: unknown) => Array.isArray(args) ? false : []
+  };
+  const session = { page: { frames: () => [frame] } } as unknown as LiveBrowserSession;
+  await sendUiPrompt(session, provider, config, 'Prompt accepted');
+  assert.equal(clicks, 1);
+  assert.equal(enters, 0, 'do not retry after an ambiguous click timeout');
+});
