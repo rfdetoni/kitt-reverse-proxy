@@ -1,7 +1,8 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
-## 5.4.26 — bounded Playwright browser diagnostics
+## 5.4.26 — bounded Playwright browser diagnostics and patched dependencies
 
+- Override vulnerable transitive body-parser to 2.4.0 and fast-uri to 3.1.9 with the published package integrity hashes; retain audit and npm ci checks.
 - Capture real page console errors/warnings, JS exceptions, failed requests and HTTP 4xx/5xx in each automation session. Store only event type, allowlisted origin, resource category and SHA-256 message fingerprint; never return raw headers, request bodies or secrets from console text.
 - Add read-only `diagnose` browser action with event counters and bounded recent evidence. Preserve origin enforcement and session isolation. Synchronize package-lock.json with package.json.
 
