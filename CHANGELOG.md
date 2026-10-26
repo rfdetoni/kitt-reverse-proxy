@@ -1,5 +1,11 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.27 — confirm ambiguous UI click before failing
+
+- When Playwright's send-button click times out after dispatch, check actual UI submission evidence before propagating failure. Never blindly retry, which could duplicate the prompt.
+- Return an actionable, non-secret UI error only when no submission can be confirmed. Add regression for post-click timeout and avoid changing authorization or session isolation.
+
+
 ## 5.4.26 — bounded Playwright browser diagnostics and patched dependencies
 
 - Override vulnerable transitive body-parser to 2.4.0 and fast-uri to 3.1.9 with the published package integrity hashes; retain audit and npm ci checks.
