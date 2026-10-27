@@ -1,6 +1,6 @@
 # K.I.T.T. Reverse Proxy
 
-Versão **5.4.22**. Adaptador OpenAI-compatible, sessões WebChat e plugins de provedores. [Histórico de mudanças](CHANGELOG.md) · [Release 5.4.10](docs/RELEASE_5.4.10.md).
+Versão **5.4.29**. Adaptador OpenAI-compatible, sessões WebChat e plugins de provedores. [Histórico de mudanças](CHANGELOG.md) · [Release 5.4.10](docs/RELEASE_5.4.10.md).
 
 ## What’s included
 
