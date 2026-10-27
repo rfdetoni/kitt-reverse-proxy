@@ -303,7 +303,7 @@ K.I.T.T. keeps resilience on the safe side of chat semantics:
 - **Circuit breaker per session/transport.** Three consecutive availability failures open the circuit for 30 seconds; the next eligible request becomes a half-open probe.
 - **Low-overhead health tracking.** Success/failure counters and an in-memory latency EWMA add constant work per request.
 - **Health-aware readiness.** `/readyz` returns `503` while the active provider circuit is open.
-- **Bounded queues and sessions.** Named sessions use bounded serial lanes plus count, browser-page and resident-RSS budgets. Pressure-based LRU reclamation only targets idle recyclable named sessions; sessions waiting for client tool results remain pinned until continuation.
+- **Bounded queues and sessions.** Named sessions use bounded serial lanes plus session-count and browser-page limits. Browser memory is owned by Chrome/the operating system, never sampled or capped by the proxy. Page-pressure LRU reclamation only targets idle recyclable named sessions; sessions waiting for client tool results remain pinned until continuation.
 - **Cancellation propagation.** Client disconnects flow through request lifecycle, queue and executor layers.
 - **Progressive streaming.** UI streaming emits suffix deltas instead of buffering every cumulative page snapshot.
 
@@ -386,7 +386,7 @@ A single authenticated browser can host multiple logical conversations. Named `X
 
 K.I.T.T. Agent CLI child agents use stable named session identities: sibling children map to different named sessions/tabs, while a retained child reuses the same named session when it receives another task. Distinct named session IDs are never merged into one browser conversation.
 
-Session behavior includes bounded concurrent capacity, independent bounded chat/browser-automation lanes, idle timeout cleanup plus resource-pressure LRU reclamation, explicit reset/delete endpoints, stable conversation IDs across Agent CLI turns and circuit-breaker state isolated with the session executor.
+Session behavior includes bounded concurrent capacity, independent bounded chat/browser-automation lanes, idle timeout cleanup plus browser-page-pressure LRU reclamation, explicit reset/delete endpoints, stable conversation IDs across Agent CLI turns and circuit-breaker state isolated with the session executor.
 
 ---
 
@@ -458,8 +458,7 @@ Common options:
 --max-sessions <n>           maximum live sessions
 --max-queue <n>              bounded queue depth
 --session-idle-timeout <s>   idle session eviction timeout
---max-browser-pages <n>      browser-page budget before idle LRU reclamation
---max-rss-mb <n>             proxy RSS budget before idle LRU reclamation
+--max-browser-pages <n>      browser-page budget before idle LRU reclamation (not RAM)
 --tool-enforcement <mode>    auto|explore-first|required
 --allow-endpoint-host <host> authorize an additional network-discovery backend
 --headless | --headed | --auto-browser

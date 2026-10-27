@@ -1,5 +1,12 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.28 — let Chrome own its memory
+
+- Remove Chromium process-tree RSS/PSS sampling, baseline memory headroom, memory-based session admission rejections and memory-triggered LRU eviction.
+- Keep bounded session count, browser page count, ordinary idle cleanup and explicit session deletion; never evict a busy or pending-tool session because the conversation became memory-heavy.
+- Retire `PROXY_MAX_RSS_MB`/`--max-rss-mb` and RSS fields from capacity snapshots; replace resource-pressure metrics with page-only capacity metadata.
+- Replace stale memory-pressure tests with session-count/page-budget and host-tool-continuation regressions. Bump package and npm lock; update transitive `qs` from 6.16.0 to patched 6.16.1 after the new GHSA-6pq8-jhm2-2vcw advisory surfaced in the production audit.
+
 ## 5.4.27 — confirm ambiguous UI click before failing
 
 - When Playwright's send-button click times out after dispatch, check actual UI submission evidence before propagating failure. Never blindly retry, which could duplicate the prompt.

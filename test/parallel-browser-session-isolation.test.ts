@@ -9,7 +9,6 @@ const config = {
   targetUrl: 'https://chatgpt.com/',
   maxSessions: 4,
   maxBrowserPages: 12,
-  maxResidentRssBytes: 16 * 1024 * 1024 * 1024,
   maxQueue: 8,
   minIntervalMs: 0,
   sessionIdleTimeoutMs: 600_000,
@@ -242,7 +241,7 @@ test('one-page resource ceiling admits first named without starting renderer', a
     async execute(){return {completion:{id:'x',object:'chat.completion',created:0,model:'startup',
       choices:[{index:0,message:{role:'assistant',content:'startup'},finish_reason:'stop'}]},deltas:[]};}};
   const manager = new SessionManager({
-    provider:'chatgpt',config:{...config,maxBrowserPages:1,maxResidentRssBytes:1},
+    provider:'chatgpt',config:{...config,maxBrowserPages:1},
     defaultExecutor:primary,defaultBrowserSession:base,reuseStartupTabForFirstNamed:true,
     factory:async()=>{throw new Error('factory must not start another browser tab');}
   });
