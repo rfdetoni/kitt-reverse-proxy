@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildManagedProxyArgs } from '../src/control-plane/service-manager.js';
+import { shutdownDrainTimeoutMs } from '../src/config.js';
+
+test('shutdown drain timeout covers configured requests', () => {
+  assert.equal(shutdownDrainTimeoutMs({ uiResponseTimeoutMs: 180000, upstreamTimeoutMs: 120000, manualInterventionTimeoutMs: 300000 }), 330000);
+});
 
 test('managed proxy launch forwards inherited logging and owner pid', () => {
   const args = buildManagedProxyArgs({

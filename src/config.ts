@@ -54,6 +54,12 @@ const DEFAULTS = Object.freeze({
   tapVerifyTurns: Number(process.env.PROXY_TAP_VERIFY_TURNS || numberSetting(CENTER, 'tap_verify_turns') || 3)
 });
 
+/** Allow in-flight UI, upstream and manual-intervention requests to drain before forced shutdown. */
+export const SHUTDOWN_DRAIN_BUFFER_MS = 30_000;
+export function shutdownDrainTimeoutMs(config: Pick<AppConfig, 'uiResponseTimeoutMs' | 'upstreamTimeoutMs' | 'manualInterventionTimeoutMs'>): number {
+  return Math.max(config.uiResponseTimeoutMs, config.upstreamTimeoutMs, config.manualInterventionTimeoutMs) + SHUTDOWN_DRAIN_BUFFER_MS;
+}
+
 const TRANSPORTS = new Set<TransportMode>(['auto', 'network', 'ui']);
 const READ_MODES = new Set<NonNullable<AppConfig['readMode']>>(['auto', 'dom', 'tap']);
 const LOG_FORMATS = new Set<AppConfig['logFormat']>(['text', 'json']);

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cliLaunchPresets, parseCliArgs, printHelp } from './config.js';
+import { cliLaunchPresets, parseCliArgs, printHelp, shutdownDrainTimeoutMs } from './config.js';
 import { closeLogger, configureLogger, logger, sanitizeLogMessage } from './logger.js';
 import { flushTracing } from './observability/tracing.js';
 import { startProxyServer } from './proxy/server.js';
@@ -141,12 +141,13 @@ async function main(): Promise<void> {
         clearInterval(ownerWatch);
         ownerWatch = undefined;
       }
-      logger.info(`${signal} recebido. Encerrando servidor e sessão browser...`);
+      const drainTimeoutMs = shutdownDrainTimeoutMs(config);
+      logger.info(`${signal} recebido. Drenando requisições HTTP/SSE ativas por até ${drainTimeoutMs}ms antes de encerrar o browser...`);
       let forced = false;
       const forceTimer = setTimeout(() => {
         forced = true;
         server.closeAllConnections?.();
-      }, 5_000);
+      }, drainTimeoutMs);
       await new Promise<void>((resolve) => server.close(() => resolve()));
       clearTimeout(forceTimer);
       if (forced) logger.warn('Conexões HTTP remanescentes foram encerradas durante shutdown.');

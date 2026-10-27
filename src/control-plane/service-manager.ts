@@ -424,7 +424,7 @@ export class ServiceManager {
     if (!instance) return false;
     if (processMatches(instance.pid, instance.processFingerprint)) {
       terminateOwnedProcess(instance.pid, instance.processFingerprint, 'SIGTERM');
-      await waitForExit(instance.pid, instance.processFingerprint, 2_500);
+      await waitForExit(instance.pid, instance.processFingerprint, 360_000);
       if (processMatches(instance.pid, instance.processFingerprint)) {
         terminateOwnedProcess(instance.pid, instance.processFingerprint, 'SIGKILL');
       }

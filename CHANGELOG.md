@@ -1,5 +1,11 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.29 — drain active requests before shutdown
+
+- Drain active HTTP/SSE requests for the longest configured UI, upstream or manual-intervention timeout plus a safety buffer.
+- Align managed service stop grace with the proxy drain deadline so long-running WebChat turns are not cut off by the old short stop deadline.
+- Add regression coverage for the calculated drain window.
+
 ## 5.4.28 — let Chrome own its memory
 
 - Remove Chromium process-tree RSS/PSS sampling, baseline memory headroom, memory-based session admission rejections and memory-triggered LRU eviction.
