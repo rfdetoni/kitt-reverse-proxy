@@ -14,7 +14,6 @@ import {
   BrowserAutomationSession,
   BrowserAutomationUnavailableError
 } from './browser-automation.js';
-import { ProcessMemorySampler } from './process-memory.js';
 import { ResilientChatExecutor, type ProviderCircuitState } from './resilient-executor.js';
 import { logger } from '../logger.js';
 import { telemetry } from '../util/telemetry.js';
@@ -23,9 +22,8 @@ import { traceSpan } from '../observability/tracing.js';
 
 const SESSION_ID = /^[A-Za-z0-9]{1,64}$/;
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
-const BASELINE_RSS_HEADROOM_BYTES = 512 * 1024 * 1024;
 // Do not discard a conversation between model calls and host tool execution.
-const RESOURCE_PRESSURE_IDLE_GRACE_MS = 5 * 60 * 1000;
+const PAGE_PRESSURE_IDLE_GRACE_MS = 5 * 60 * 1000;
 
 function combinedSignal(primary: AbortSignal | undefined, shutdown: AbortSignal): AbortSignal {
   return primary ? AbortSignal.any([primary, shutdown]) : shutdown;
@@ -106,12 +104,7 @@ export interface SessionCapacitySnapshot {
   automation_pages: number;
   browser_pages: number;
   max_browser_pages: number;
-  resident_rss_bytes: number;
-  memory_measurement: string;
-  memory_measurement_partial: boolean;
-  measured_processes: number;
-  max_resident_rss_bytes: number;
-  eviction: 'resource_lru_idle';
+  eviction: 'page_lru_idle';
   accepts_named_sessions: boolean;
   shutting_down: boolean;
 }
@@ -153,10 +146,6 @@ function awaitsToolResult(session: ManagedSession): boolean {
 }
 
 export class SessionManager {
-  private readonly memorySampler = new ProcessMemorySampler();
-  // Capture Chromium's already-running baseline once; do not let admission
-  // drift upward with every subsequent request or browser memory growth.
-  private readonly baselineRssBytes = this.memorySampler.snapshot().bytes;
   private readonly circuitStates = new Map<string, ProviderCircuitState>();
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
@@ -381,10 +370,7 @@ export class SessionManager {
   capacity(): SessionCapacitySnapshot {
     const values = [...this.sessions.values()];
     const browserPages = this.browserPageCount(values);
-    const memory = this.memorySampler.snapshot();
-    const residentRss = memory.bytes;
     const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
-    const maxResidentRssBytes = this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
     const busy = values.filter((session) =>
       session.status === 'busy'
       || session.queue.depth > 0
@@ -422,10 +408,7 @@ export class SessionManager {
       ).length,
       browser_pages: browserPages,
       max_browser_pages: maxBrowserPages,
-      resident_rss_bytes: residentRss,
-      memory_measurement: memory.mode, memory_measurement_partial: memory.partial, measured_processes: memory.processes,
-      max_resident_rss_bytes: maxResidentRssBytes,
-      eviction: 'resource_lru_idle',
+      eviction: 'page_lru_idle',
       accepts_named_sessions: Boolean(this.options.factory),
       shutting_down: this.closed
     };
@@ -472,11 +455,10 @@ export class SessionManager {
     );
     for (const session of stale) await this.removeSession(session);
 
-    // Resource pressure is evaluated independently of time-based eviction.
-    // Reap at most one additional idle session per sweep so RSS lag after
-    // browser/page teardown cannot cascade into aggressive over-eviction.
-    if (this.resourcePressure()) {
-      const graceMs = Math.min(timeout, RESOURCE_PRESSURE_IDLE_GRACE_MS);
+    // Only page count may trigger early recycling. Chromium memory usage
+    // belongs to Chrome/the OS, regardless of conversation length.
+    if (this.browserPageCount() >= (this.options.config.maxBrowserPages ?? 12)) {
+      const graceMs = Math.min(timeout, PAGE_PRESSURE_IDLE_GRACE_MS);
       const candidate = this.oldestRecyclableSession(graceMs, now);
       if (candidate) await this.removeSession(candidate);
     }
@@ -633,61 +615,22 @@ export class SessionManager {
   private async ensureCapacity(): Promise<void> {
     const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
-    // Admission reuses an existing page and adds no Chromium renderer. A
-    // page/RSS cap already reached by the startup browser should not deny it.
-    if (!atCountLimit && this.canAdoptStartupTab()) return;
-    const underResourcePressure = this.resourcePressure();
-    if (!atCountLimit && !underResourcePressure) return;
+    const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
+    const atPageLimit = this.browserPageCount() >= maxBrowserPages;
 
-    // On-demand admission can replace an already idle named session: this is
-    // necessary for isolated planning turns followed by execution, all using
-    // distinct IDs. Only the periodic pressure sweep has a recent-use grace.
+    // Reusing the authenticated startup tab does not create another page.
+    if (!atCountLimit && (this.canAdoptStartupTab() || !atPageLimit)) return;
+
+    // Only session-count/page limits may recycle a finished idle session.
+    // Active conversations and sessions awaiting tool results remain pinned.
     const candidate = this.oldestRecyclableSession();
     if (candidate) {
       await this.removeSession(candidate);
+      // Evicting an idle session does not guarantee it owned a browser page.
+      if (!this.canAdoptStartupTab() && this.browserPageCount() >= maxBrowserPages) {
+        throw new SessionLimitExceededError();
+      }
       return;
-    }
-
-    // Headed Chromium can start above a strict RSS budget. Allow the first
-    // named session, plus one concurrent child if the *startup* baseline was
-    // already above budget. This is bounded by fixed startup headroom, not
-    // by a moving RSS baseline; normal count/page caps still apply.
-    const rssBudget = this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
-    const namedCount = this.sessions.size - (this.sessions.has('default') ? 1 : 0);
-    const baselineSlots = this.baselineRssBytes >= rssBudget ? 2 : 1;
-    if (
-      !atCountLimit
-      && underResourcePressure
-      && namedCount < baselineSlots
-      && this.sessions.has('default')
-      && this.creating.size === 0
-      && this.browserPageCount() < (this.options.config.maxBrowserPages ?? 12)
-      && this.memorySampler.snapshot().bytes <= Math.max(
-        rssBudget, this.baselineRssBytes + BASELINE_RSS_HEADROOM_BYTES
-      )
-    ) {
-      const capacity = this.capacity();
-      logger.event('warn', 'session.capacity.baseline_pressure_admission', {
-        resident_rss_bytes: capacity.resident_rss_bytes,
-        max_resident_rss_bytes: capacity.max_resident_rss_bytes,
-        baseline_resident_rss_bytes: this.baselineRssBytes,
-        baseline_admission_headroom_bytes: BASELINE_RSS_HEADROOM_BYTES,
-        baseline_named_slots: baselineSlots,
-        admitted_named_slot: namedCount + 1,
-        browser_pages: capacity.browser_pages,
-        max_browser_pages: capacity.max_browser_pages
-      });
-      return;
-    }
-
-    if (underResourcePressure) {
-      logger.event('warn', 'session.capacity.resource_pressure_rejection', {
-        ...this.capacity(),
-        at_count_limit: atCountLimit,
-        background_eviction_grace_ms: Math.min(
-          this.options.config.sessionIdleTimeoutMs, RESOURCE_PRESSURE_IDLE_GRACE_MS
-        )
-      });
     }
     throw new SessionLimitExceededError();
   }
@@ -722,16 +665,6 @@ export class SessionManager {
       }
     }
     return pages;
-  }
-
-  private resourcePressure(): boolean {
-    const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
-    const maxResidentRssBytes =
-      this.options.config.maxResidentRssBytes ?? 768 * 1024 * 1024;
-    return (
-      this.browserPageCount() >= maxBrowserPages
-      || this.memorySampler.snapshot().bytes >= maxResidentRssBytes
-    );
   }
 
   private async removeSession(session: ManagedSession): Promise<void> {

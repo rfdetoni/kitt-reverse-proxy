@@ -125,6 +125,16 @@ test('hybrid read controls parse conservatively and DOM remains an explicit kill
   assert.throws(() => parseCliArgs(['chatgpt', '--read-mode', 'unsafe']), /Read mode inválido/);
 });
 
+test('RSS memory management option is not available', () => {
+  const settings = parseCliArgs(['chatgpt']);
+  if ('help' in settings) throw new Error('unexpected help');
+  assert.equal('maxResidentRssBytes' in settings, false);
+  assert.throws(
+    () => parseCliArgs(['chatgpt', '--max-rss-mb', '768']),
+    /Argumento desconhecido: --max-rss-mb/
+  );
+});
+
 test('default passive tap tolerates slow initial and intermittent response chunks', () => {
   const config = parseCliArgs(['chatgpt']);
   if ('help' in config) throw new Error('unexpected help');

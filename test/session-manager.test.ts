@@ -264,63 +264,51 @@ test('browser automation can progress while chat execution is waiting', async ()
 });
 
 
-test('capacity reports resource-aware eviction budgets', async () => {
+test('capacity reports session and browser-page limits, never a Chrome RSS budget', async () => {
   const manager = new SessionManager({
-    defaultExecutor: executor('default'),
-    provider: 'chatgpt',
-    config: {
-      ...config,
-      maxBrowserPages: 7,
-      maxResidentRssBytes: 256 * 1024 * 1024
-    }
+    defaultExecutor: executor('default'), provider: 'chatgpt',
+    config: { ...config, maxBrowserPages: 7 }
   });
   try {
     const capacity = manager.capacity();
-    assert.equal(capacity.eviction, 'resource_lru_idle');
+    assert.equal(capacity.eviction, 'page_lru_idle');
     assert.equal(capacity.max_browser_pages, 7);
-    assert.equal(capacity.max_resident_rss_bytes, 256 * 1024 * 1024);
-    assert.equal(typeof capacity.resident_rss_bytes, 'number');
     assert.equal(typeof capacity.browser_pages, 'number');
+    assert.equal('resident_rss_bytes' in capacity, false);
+    assert.equal('max_resident_rss_bytes' in capacity, false);
   } finally {
     await manager.close();
   }
 });
 
-
-test('high Chromium baseline admits one active parent and one child, but never a third', async () => {
+test('concurrent conversations use session count, not Chromium memory baseline', async () => {
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  let markFirstStarted!: () => void;
-  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
-  let markBothStarted!: () => void;
-  const bothStarted = new Promise<void>((resolve) => { markBothStarted = resolve; });
-  let runningCount = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let startedCount = 0;
+  let bothStarted!: () => void;
+  const both = new Promise<void>(resolve => { bothStarted = resolve; });
   const manager = new SessionManager({
-    defaultExecutor: executor('default'),
-    provider: 'chatgpt',
-    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
+    defaultExecutor: executor('default'), provider: 'chatgpt',
+    config: { ...config, maxSessions: 3, maxBrowserPages: 100 },
     factory: async id => {
       const named = executor(id);
       const run = named.execute.bind(named);
-      named.execute = async (body: JsonObject) => {
-        runningCount += 1;
-        if (runningCount === 1) markFirstStarted();
-        if (runningCount === 2) markBothStarted();
+      named.execute = async body => {
+        startedCount += 1;
+        if (startedCount === 2) bothStarted();
         await gate;
         return run(body);
       };
       return { executor: named };
     }
   });
-
-  const first = manager.execute('parent', { messages: [{ role: 'user', content: 'x' }] });
+  const first = manager.execute('parent', {});
   let second: Promise<unknown> | undefined;
   try {
-    await firstStarted;
-    second = manager.execute('child', { messages: [{ role: 'user', content: 'y' }] });
-    await bothStarted;
+    second = manager.execute('child', {});
+    await both;
     assert.deepEqual(manager.list().map(s => s.id), ['default', 'parent', 'child']);
-    await assert.rejects(manager.execute('third', { messages: [] }), SessionLimitExceededError);
+    await assert.rejects(manager.execute('third', {}), SessionLimitExceededError);
   } finally {
     release();
     await Promise.allSettled([first, ...(second ? [second] : [])]);
@@ -328,104 +316,74 @@ test('high Chromium baseline admits one active parent and one child, but never a
   }
 });
 
-test('high-baseline child admission refuses growth beyond the fixed RSS headroom', async () => {
+test('browser page cap refuses a new tab while the existing tab is busy', async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  let markStarted!: () => void;
-  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  let started!: () => void;
+  const active = new Promise<void>(resolve => { started = resolve; });
   const manager = new SessionManager({
     defaultExecutor: executor('default'), provider: 'chatgpt',
-    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
+    config: { ...config, maxSessions: 4, maxBrowserPages: 1 },
     factory: async id => {
       const named = executor(id);
-      const original = named.execute.bind(named);
+      const run = named.execute.bind(named);
       named.execute = async body => {
-        markStarted();
+        started();
         await gate;
-        return original(body);
+        return run(body);
       };
-      return { executor: named };
+      return {
+        executor: named,
+        browserSession: {
+          context: { pages: () => [{ isClosed: () => false }] },
+          async close() {}
+        } as unknown as LiveBrowserSession
+      };
     }
   });
-  const parent = manager.execute('parent', {});
+  const first = manager.execute('parent', {});
   try {
-    await started;
-    const internal = manager as unknown as {
-      baselineRssBytes: number;
-      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
-    };
-    internal.memorySampler = {
-      snapshot: () => ({
-        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
-        mode: 'test', partial: false, processes: 1
-      })
-    };
-    // The parent is busy and cannot be recycled to hide a failed admission.
+    await active;
     await assert.rejects(manager.execute('child', {}), SessionLimitExceededError);
+    assert.deepEqual(manager.list().map(s => s.id), ['default', 'parent']);
   } finally {
     release();
-    await parent;
+    await first;
     await manager.close();
   }
 });
 
-test('resource pressure preserves a named agent session during the host-tool gap', async () => {
+test('page pressure keeps a recent named session through host-tool continuation', async () => {
   const closed: string[] = [];
   const manager = new SessionManager({
-    defaultExecutor: executor('default'),
-    provider: 'chatgpt',
-    config: {
-      ...config, maxSessions: 4, sessionIdleTimeoutMs: 30 * 60 * 1000,
-      maxResidentRssBytes: 1, maxBrowserPages: 100
-    },
+    defaultExecutor: executor('default'), provider: 'chatgpt',
+    config: { ...config, maxSessions: 4, maxBrowserPages: 1, sessionIdleTimeoutMs: 30 * 60 * 1000 },
     factory: async id => ({
       executor: executor(id),
       browserSession: {
-        context: { pages: () => [] },
+        context: { pages: () => [{ isClosed: () => false }] },
         async close() { closed.push(id); }
       } as unknown as LiveBrowserSession
     })
   });
   try {
-    // The baseline allowance initially admits the sole named session.
     await manager.execute('agent', { messages: [{ role: 'user', content: 'tool request' }] });
-    const internals = manager as unknown as {
-      baselineRssBytes: number;
-      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
-    };
-    internals.memorySampler = {
-      snapshot: () => ({
-        bytes: internals.baselineRssBytes + 512 * 1024 * 1024 + 1,
-        mode: 'test', partial: false, processes: 1
-      })
-    };
-
-    // A pending host action can leave the UI session idle for one sweep.
     await manager.sweepIdle(Date.now() + 60_000);
-    assert.deepEqual(manager.list().map(session => session.id), ['default', 'agent']);
-
-    // Same-session continuation needs no admission despite high RSS.
+    assert.deepEqual(manager.list().map(s => s.id), ['default', 'agent']);
     await manager.execute('agent', { messages: [{ role: 'user', content: 'tool result' }] });
     assert.deepEqual(closed, []);
-
-    // Still release truly idle named sessions after the bounded grace window.
-    await manager.sweepIdle(Date.now() + 6 * 60 * 1000);
-    assert.deepEqual(manager.list().map(session => session.id), ['default']);
+    await manager.sweepIdle(Date.now() + 6 * 60_000);
     assert.deepEqual(closed, ['agent']);
   } finally {
     await manager.close();
   }
 });
 
-test('isolated planning sessions recycle on admission but tool-loop session survives a sweep', async () => {
+test('isolated planning turns recycle on session-count pressure, not memory growth', async () => {
   const closed: string[] = [];
   const manager = new SessionManager({
-    defaultExecutor: executor('default'),
-    provider: 'chatgpt',
-    config: {
-      ...config, maxSessions: 4, sessionIdleTimeoutMs: 30 * 60 * 1000,
-      maxResidentRssBytes: 1, maxBrowserPages: 100
-    },
+    defaultExecutor: executor('default'), provider: 'chatgpt',
+    config: { ...config, maxSessions: 2, maxBrowserPages: 100, sessionIdleTimeoutMs: 30 * 60 * 1000 },
     factory: async id => ({
       executor: executor(id),
       browserSession: {
@@ -436,62 +394,16 @@ test('isolated planning sessions recycle on admission but tool-loop session surv
   });
   try {
     await manager.execute('planone', {});
-    const internal = manager as unknown as {
-      baselineRssBytes: number;
-      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
-    };
-    internal.memorySampler = {
-      snapshot: () => ({
-        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
-        mode: 'test', partial: false, processes: 1
-      })
-    };
-
-    // Two isolated plan turns must make room for each other without failing
-    // admission; neither one is the host-tool conversation to preserve.
     await manager.execute('plantwo', {});
     await manager.execute('executor', {});
     assert.deepEqual(closed, ['planone', 'plantwo']);
-
-    // Only periodic pressure recycling applies the short active-session grace.
     await manager.sweepIdle(Date.now() + 60_000);
-    assert.deepEqual(manager.list().map(session => session.id), ['default', 'executor']);
+    assert.deepEqual(manager.list().map(s => s.id), ['default', 'executor']);
     await manager.execute('executor', { messages: [{ role: 'user', content: 'host result' }] });
-    assert.deepEqual(closed, ['planone', 'plantwo']);
   } finally {
     await manager.close();
   }
 });
-
-test('baseline resource exception cannot admit new sessions after excessive memory growth', async () => {
-  const manager = new SessionManager({
-    defaultExecutor: executor('default'),
-    provider: 'chatgpt',
-    config: { ...config, maxSessions: 4, maxResidentRssBytes: 1, maxBrowserPages: 100 },
-    factory: async (id) => ({ executor: executor(id) })
-  });
-  try {
-    const internal = manager as unknown as {
-      baselineRssBytes: number;
-      memorySampler: { snapshot(): { bytes: number; mode: string; partial: boolean; processes: number } };
-    };
-    // Model the Chromium tree growing >512 MiB *after* manager startup.
-    internal.memorySampler = {
-      snapshot: () => ({
-        bytes: internal.baselineRssBytes + 512 * 1024 * 1024 + 1,
-        mode: 'test', partial: false, processes: 1
-      })
-    };
-    await assert.rejects(
-      manager.execute('excessive', { messages: [{ role: 'user', content: 'x' }] }),
-      SessionLimitExceededError
-    );
-    assert.deepEqual(manager.list().map((session) => session.id), ['default']);
-  } finally {
-    await manager.close();
-  }
-});
-
 
 test('admitted idle-session reuse cannot be evicted by concurrent creation', async () => {
   const closed: string[] = [];
