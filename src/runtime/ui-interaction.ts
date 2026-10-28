@@ -159,7 +159,7 @@ async function setComposerTextThroughDom(
       inputType: 'insertText',
       data: text
     }));
-  }, { text: prompt, replaceRichText }, { timeout: 5_000 });
+  }, { text: prompt, replaceRichText }, { timeout: prompt.length >= 8_192 ? 10_000 : 5_000 });
 }
 
 async function writeComposerText(input: Locator, prompt: string): Promise<void> {
@@ -167,17 +167,24 @@ async function writeComposerText(input: Locator, prompt: string): Promise<void> 
 
   const startedAt = Date.now();
   const largePrompt = prompt.length >= 16_384;
-  const native = largePrompt && await isNativeComposer(input);
-  const strategy = native ? 'native_input' : 'fill';
+  // Browser-rich editors become costly to fill after long conversations.
+  // The already verified DOM-replacement path avoids Playwright fill timeouts
+  // for medium/large prompts, with no keyboard replay or automatic submission.
+  const boundedLargeWrite = prompt.length >= 8_192;
+  const native = boundedLargeWrite && await isNativeComposer(input);
+  const richDomDirect = boundedLargeWrite && !native;
+  const strategy = richDomDirect ? 'rich_dom_direct' : native ? 'native_input' : 'fill';
   let writeFailed = false;
   let writeErrorType = '';
   try {
-    if (native) {
+    if (richDomDirect) {
+      await setComposerTextThroughDom(input, prompt, true);
+    } else if (native) {
       // For large native textareas, assign the value and dispatch one input
       // event instead of performing a huge browser keyboard/fill operation.
       await setComposerTextThroughDom(input, prompt);
     } else {
-      await input.fill(prompt, { timeout: largePrompt ? 8_000 : 2_000 });
+      await input.fill(prompt, { timeout: 2_000 });
     }
   } catch (error) {
     writeFailed = true;
@@ -188,6 +195,7 @@ async function writeComposerText(input: Locator, prompt: string): Promise<void> 
     // A controlled React editor may replace its value on the next tick.
     // Do not submit merely because one transient read matched.
     if (native) await abortableSleep(100);
+    if (richDomDirect) await abortableSleep(250);
     if (await composerHasExpectedText(input, expected)) {
       logger.debug('ui.composer.write', {
         outcome: 'verified', strategy, prompt_chars: prompt.length,
@@ -201,7 +209,7 @@ async function writeComposerText(input: Locator, prompt: string): Promise<void> 
   // tool-result prompt. Attempt one bounded DOM replacement for every length,
   // not only prompts above 8 KiB. Do not retype into an already-corrupted
   // draft: keyboard replay can duplicate content and potentially submit it.
-  if (!native) {
+  if (!native && !richDomDirect) {
     await setComposerTextThroughDom(input, prompt, true).catch(() => undefined);
     await abortableSleep(250);
     if (await composerHasExpectedText(input, expected)) {
