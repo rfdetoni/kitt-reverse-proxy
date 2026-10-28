@@ -5,7 +5,7 @@ import { sendUiPrompt } from '../src/runtime/ui-interaction.js';
 import { UiAutomationError } from '../src/runtime/ui-errors.js';
 import type { AppConfig, LiveBrowserSession } from '../src/types.js';
 
-test('large rich editor autoformatting is recovered once with verified DOM assignment', async () => {
+test('large rich editor uses verified DOM assignment without Playwright fill', async () => {
   const prompt = '# Windows API Observatory\n' + 'Win32\n'.repeat(10_000);
   let draft = '';
   let fillCalls = 0;
@@ -49,13 +49,13 @@ test('large rich editor autoformatting is recovered once with verified DOM assig
   const session = {page: {frames: () => [frame]}} as unknown as LiveBrowserSession;
   await sendUiPrompt(session, detectProvider('https://chatgpt.com'),
     {manualInterventionTimeoutMs: 1000} as AppConfig, prompt);
-  assert.equal(fillCalls, 1);
+  assert.equal(fillCalls, 0);
   assert.equal(domCalls, 1);
   assert.equal(submitCalls, 1);
 });
 
 
-test('medium rich editor recovers a three-character formatting change and submits T00 once', async () => {
+test('medium rich editor bypasses slow fill and submits T00 once', async () => {
   const prompt = 'T00 — Preflight\n' + 'Inspect the workspace contracts safely.\n'.repeat(340);
   assert.ok(prompt.length > 8_192 && prompt.length < 16_384);
   let draft = '', fillCalls = 0, domCalls = 0, submitCalls = 0, keyboardCalls = 0;
@@ -93,13 +93,13 @@ test('medium rich editor recovers a three-character formatting change and submit
   }}} as unknown as LiveBrowserSession;
   await sendUiPrompt(session, detectProvider('https://chatgpt.com'),
     {manualInterventionTimeoutMs: 1000} as AppConfig, prompt);
-  assert.equal(fillCalls,1);
+  assert.equal(fillCalls,0);
   assert.equal(domCalls,1);
   assert.equal(submitCalls,1);
   assert.equal(keyboardCalls,0);
 });
 
-test('medium rich editor never submits a still-mutated prompt or retypes via keyboard', async () => {
+test('medium rich editor rejects mismatched direct DOM assignment without keyboard replay', async () => {
   const prompt = 'T00\n' + 'Record immutable environment facts.\n'.repeat(350);
   assert.ok(prompt.length > 8_192 && prompt.length < 16_384);
   let draft = '', domCalls = 0, sendCalls = 0, keyboardCalls = 0;
@@ -140,4 +140,42 @@ test('medium rich editor never submits a still-mutated prompt or retypes via key
   assert.equal(domCalls,1);
   assert.equal(sendCalls,0);
   assert.equal(keyboardCalls,0);
+});
+
+test('rich editor times out on direct DOM write and never sends an unverified draft', async () => {
+  const prompt = 'KITT tool output\n' + 'data '.repeat(3_000);
+  let sends = 0;
+  let fills = 0;
+  let domCalls = 0;
+  const editor = {
+    last() { return this; }, count: async () => 1, isVisible: async () => true,
+    evaluate: async (fn: unknown) => {
+      const code = String(fn);
+      if (code.includes('html.isContentEditable')) return true;
+      if (code.includes('return element instanceof HTMLTextAreaElement')) return false;
+      if (code.includes('const { text, replaceRichText } = payload')) {
+        domCalls++;
+        throw Object.assign(new Error('renderer busy'), { name: 'TimeoutError' });
+      }
+      return '';
+    },
+    fill: async () => { fills++; }
+  };
+  const absent = { last() { return this; }, count: async () => 0 };
+  const frame = {
+    isDetached: () => false,
+    locator: (selector: string) =>
+      selector.includes('contenteditable') ? editor : absent
+  };
+  const session = { page: { frames: () => [frame], keyboard: {
+    insertText: async () => { sends++; }
+  }}} as unknown as LiveBrowserSession;
+  await assert.rejects(
+    sendUiPrompt(session, detectProvider('https://chatgpt.com'),
+      { manualInterventionTimeoutMs: 1000 } as AppConfig, prompt),
+    (err: unknown) => err instanceof UiAutomationError && /Falha ao preencher/.test(err.message)
+  );
+  assert.equal(domCalls, 1);
+  assert.equal(fills, 0);
+  assert.equal(sends, 0);
 });
