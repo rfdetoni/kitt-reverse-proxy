@@ -1,5 +1,12 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.31 — watchdog requires semantic stream progress
+
+- Do not reset the UI inactivity watchdog for correlated CDP bytes alone when the adapter has decoded zero new assistant text. This prevents heartbeat/non-answer frames from holding requests open until the 15-minute absolute deadline.
+- Preserve long-generation support: decoded assistant-text growth still refreshes the inactivity budget, while the absolute 15-minute ceiling remains in force.
+- Add regression tests for empty-stream heartbeat stalls and actual assistant-text progress. No provider endpoints, credentials, or replay behavior changed.
+
+
 ## 5.4.30 — stable rich-editor prompt writes
 
 - For rich ChatGPT Web composers and prompts at least 8 KiB, use bounded direct DOM assignment instead of Playwright fill, avoiding the observed 14K-character fill timeout on a long conversation.

@@ -33,6 +33,8 @@ export function verifiedLogicalCompletion(assistantText: string, correlatedFrame
 
 export interface UiTransportActivity {
   lastByteAt?: number;
+  /** Length of the best assistant-owned text candidate decoded from the correlated stream. */
+  textChars?: number;
   receiving: boolean;
   /** Strictly parsed current-turn JSON object from a pretrusted, correlated CDP tap. */
   completedContract?: string;
@@ -193,6 +195,8 @@ export async function awaitUiResponse(
   const generatingDeadline = startedAt + uiResponseAbsoluteBudget(config.uiResponseTimeoutMs, true);
   const streamingSelectors = selectorCandidates(provider.ui.streamingSelectors, 'streaming').map((item) => item.selector);
   let lastActivityAt = startedAt;
+  let lastSeenTapByteAt = 0;
+  let lastTapTextChars = 0;
   const deltas: string[] = [];
   let firstDeltaMs: number | undefined;
   let retainedDeltaChars = 0;
@@ -362,11 +366,19 @@ export async function awaitUiResponse(
     }
 
     const tap = tapActivity?.();
-    // Correlated response bytes are progress even when the UI is still
-    // rendering or its assistant selectors do not match current markup.
-    if (tap?.lastByteAt && tap.lastByteAt > lastActivityAt && tap.lastByteAt <= Date.now()) {
-      lastActivityAt = tap.lastByteAt;
+    // A live HTTP stream may emit heartbeats or non-answer frames indefinitely.
+    // Count correlated bytes as transport activity, but refresh the inactivity
+    // watchdog only when the decoded assistant-owned answer actually grows.
+    if (tap?.lastByteAt && tap.lastByteAt > lastSeenTapByteAt && tap.lastByteAt <= Date.now()) {
+      lastSeenTapByteAt = tap.lastByteAt;
       observedTap = true;
+      if (tap.textChars === undefined) {
+        // Compatibility for non-contract readers that do not expose decoded text.
+        lastActivityAt = tap.lastByteAt;
+      } else if (tap.textChars > lastTapTextChars) {
+        lastTapTextChars = tap.textChars;
+        lastActivityAt = tap.lastByteAt;
+      }
     }
 
     if (streaming) generationStoppedAt = 0;
