@@ -1,5 +1,11 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.30 — stable rich-editor prompt writes
+
+- For rich ChatGPT Web composers and prompts at least 8 KiB, use bounded direct DOM assignment instead of Playwright fill, avoiding the observed 14K-character fill timeout on a long conversation.
+- Verify editor contents twice before one submission; fail closed without keyboard replay when the editor is unresponsive or the draft differs.
+- Add regressions for long rich editors, mismatched drafts and write timeouts.
+
 ## 5.4.29 — drain active requests before shutdown
 
 - Drain active HTTP/SSE requests for the longest configured UI, upstream or manual-intervention timeout plus a safety buffer.
