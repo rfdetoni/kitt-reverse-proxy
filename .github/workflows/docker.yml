@@ -1,29 +1,12 @@
 name: Docker
 
+# Docker smoke remains available for targeted release validation.
 on:
-  push:
-    branches: [main, 'fix/**']
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - docker/**
-      - package.json
-      - package-lock.json
-      - tsconfig.json
-      - tsconfig.build.json
-      - src/**
-      - .github/workflows/docker.yml
-  pull_request:
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - docker/**
-      - package.json
-      - package-lock.json
-      - tsconfig.json
-      - tsconfig.build.json
-      - src/**
-      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
