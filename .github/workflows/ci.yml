@@ -2,8 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, 'fix/**']
+    branches: [main] # Automatic release requires a successful main CI
+    paths-ignore: ['**/*.md', 'docs/**']
   pull_request:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,8 +45,10 @@ jobs:
       - name: Build production package
         run: npm run build
       - name: Install Chromium for the real CDP boundary
+        if: github.event_name != 'pull_request'
         run: npx playwright install --with-deps chromium
       - name: Verify CDP source integrity in real Chromium
+        if: github.event_name != 'pull_request'
         run: npm run test:browser
       - name: Validate multicore installer build
         run: node scripts/build-fast.mjs
