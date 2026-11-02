@@ -37,7 +37,7 @@
     "benchmark:runtime": "npm run build && node scripts/benchmark-runtime.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/server": "2.4.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "cors": "2.8.6",
