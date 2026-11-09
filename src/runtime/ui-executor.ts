@@ -448,6 +448,9 @@ export class UiChatExecutor implements ChatExecutor {
     prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence, this.mutationEvidence)}`;
 
     throwIfAborted(options?.signal);
+    await waitForUiIdle(this.session, this.provider, this.config, options?.signal);
+    const verified = await verifyChatGptModel(this.session.page, this.provider.id, this.modelId, options?.signal);
+    if (verified) this.observedModel = verified;
     const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
     throwIfAborted(options?.signal);
     if (fallbackPublicImageUrls.length > 0) {
@@ -463,9 +466,6 @@ export class UiChatExecutor implements ChatExecutor {
       const initialArtifacts = await extractArtifactContents(this.session.page).catch(() => []);
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
-    // Check exact model identity before baseline capture or upstream submission.
-    const verified = await verifyChatGptModel(this.session.page, this.provider.id, this.modelId, options?.signal);
-    if (verified) this.observedModel = verified;
     const baseline = await this.captureResponseBaseline(options?.signal);
     const promptSendStartedAt = Date.now();
     options?.lifecycle?.beforeSubmit(prompt);
