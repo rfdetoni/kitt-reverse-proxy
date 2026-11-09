@@ -28,7 +28,6 @@ import {
   ChatStreamWriter,
   completionToResponses,
   ResponsesStreamWriter,
-  responsesBodyToChat,
   sendOpenAiError
 } from './openai.js';
 import { parseRequestBody, sendProxyError } from './http-errors.js';
