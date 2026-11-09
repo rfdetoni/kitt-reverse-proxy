@@ -275,4 +275,5 @@ test('Responses continuation honors store false and explicit instruction replace
   }, 'a');
   assert.deepEqual((next.messages as any[]).filter((message) => message.role === 'system'),
     [{ role: 'system', content: 'new' }]);
+  assert.deepEqual((next.messages as any[])[0], { role: 'system', content: 'new' });
 });
