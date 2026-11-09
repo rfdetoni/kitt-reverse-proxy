@@ -35,6 +35,7 @@ import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
 import { withEstimatedUsage } from './token-usage.js';
 import { ResponsesContinuationStore } from './responses-continuation.js';
+import { prepareCustomTools } from './responses-custom-tools.js';
 import { unwrapContractJson } from '../util/contract-json.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
@@ -541,8 +542,9 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
         const normalizedSessionId = manager.normalizeSessionId(sessionId);
+        const custom = parseRequestBody((value) => prepareCustomTools(value as JsonObject), source);
         const converted = parseRequestBody(
-          (value) => responses.prepare(value as JsonObject, normalizedSessionId), source
+          (value) => responses.prepare(value as JsonObject, normalizedSessionId), custom.source
         );
         logger.trace('openai.responses.request.raw', {
           headers: req.headers,
@@ -558,7 +560,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
 
         if (source.stream === true) {
           const model = typeof converted.model === 'string' && converted.model.trim() ? converted.model : manager.modelId;
-          const writer = new ResponsesStreamWriter(res, model);
+          const writer = new ResponsesStreamWriter(res, model, undefined, custom.names);
           writer.beginResponse();
           const result = contract
             ? await executeAgentContractIdempotent(req, manager, body, baseOptions)
@@ -578,7 +580,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           : await manager.execute(sessionId, body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, converted);
-        const response = completionToResponses(completion);
+        const response = completionToResponses(completion, undefined, custom.names);
         responses.remember(response.id as string, source, normalizedSessionId, converted, completion);
         res.json(response);
       });
