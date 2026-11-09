@@ -97,7 +97,12 @@ export async function collectVisibleSnapshots(
               })) continue;
               const value = (element.innerText || element.textContent || '').trim().slice(0, maxChars);
               if (!value) continue;
-              const domIdentity = element.getAttribute('data-message-id') || element.getAttribute('data-turn-id') || element.id || '';
+              const owner = element.closest('[data-message-id], [data-turn-id], [data-turn-key], [data-testid^="conversation-turn-"]');
+              const domIdentity = owner?.getAttribute('data-message-id')
+                || owner?.getAttribute('data-turn-id')
+                || owner?.getAttribute('data-turn-key')
+                || owner?.getAttribute('data-testid')
+                || element.id || '';
               results.push({
                 selector, count: nodes.length, index,
                 identity: domIdentity ? `${selector}|${domIdentity}` : `${selector}|index:${index}`,
@@ -184,10 +189,12 @@ export async function readVisibleSnapshotSlot(
         if (rect.width <= 0 || rect.height <= 0) return undefined;
         const text = (element.innerText || element.textContent || '').trim().slice(0, maxChars);
         if (!text) return undefined;
-        const domIdentity = element.getAttribute('data-message-id')
-          || element.getAttribute('data-turn-id')
-          || element.id
-          || '';
+        const owner = element.closest('[data-message-id], [data-turn-id], [data-turn-key], [data-testid^="conversation-turn-"]');
+        const domIdentity = owner?.getAttribute('data-message-id')
+          || owner?.getAttribute('data-turn-id')
+          || owner?.getAttribute('data-turn-key')
+          || owner?.getAttribute('data-testid')
+          || element.id || '';
         return {
           count: nodes.length,
           text,
@@ -201,7 +208,7 @@ export async function readVisibleSnapshotSlot(
         excludeSelectors: responseExcludeSelectors as string[]
       }
     );
-    if (!raw) return undefined;
+    if (!raw || (snapshot.identity && snapshot.identity !== raw.identity)) return undefined;
     return {
       ...snapshot,
       count: raw.count,
