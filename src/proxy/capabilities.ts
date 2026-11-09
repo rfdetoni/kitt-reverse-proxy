@@ -132,7 +132,7 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
     },
     structured_output: 'validated_or_error',
     request_lifecycle: { deadline_ms: 240_000, max_upstream_attempts: 3, cumulative_usage: true, idempotency: 'process_scoped' },
-    model_selection: { mode: manager.transport === 'ui' ? 'ui_alias_only' : 'native', observed_model: null },
+    model_selection: asObject(description.model_selection) ?? { mode: manager.transport === 'ui' ? 'ui_alias_only' : 'native', observed_model: null },
     structured_output_retry: true,
     tool_enforcement: config.toolEnforcement ?? 'explore-first',
     kitt_agent_cli: kittAgentCliCapabilities(manager),
