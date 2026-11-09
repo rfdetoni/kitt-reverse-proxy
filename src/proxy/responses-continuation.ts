@@ -60,7 +60,15 @@ export class ResponsesContinuationStore {
       : prior.messages.filter((message) => !(
         message !== null && typeof message === 'object' && !Array.isArray(message) && message.role === 'system'
       ));
-    current.messages = [...priorMessages, ...(current.messages as JsonValue[])];
+    const currentMessages = current.messages as JsonValue[];
+    // The instruction replacement is the first message, never an assistant-following system turn.
+    current.messages = source.instructions === undefined
+      ? [...priorMessages, ...currentMessages]
+      : [...currentMessages.filter((m) => (
+          m !== null && typeof m === 'object' && !Array.isArray(m) && m.role === 'system'
+        )), ...priorMessages, ...currentMessages.filter((m) => !(
+          m !== null && typeof m === 'object' && !Array.isArray(m) && m.role === 'system'
+        ))];
     if (current.model === undefined) current.model = prior.model;
     return current;
   }
