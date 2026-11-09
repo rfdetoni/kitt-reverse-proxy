@@ -23,8 +23,8 @@ export function requiredExactChatGptModel(modelId: string): string | undefined {
 }
 
 export function modelRadioMatches(label: string, expected: string): boolean {
-  const normalized = label.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
-    .replace(/^gpt\s*-?\s*/, 'gpt-');
+  const normalized = label.normalize('NFKC').replace(/[\s_]+/g, '-').trim().toLowerCase()
+    .replace(/^gpt-?/, 'gpt-');
   return normalized === expected;
 }
 
