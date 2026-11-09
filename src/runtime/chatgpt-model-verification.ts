@@ -71,7 +71,8 @@ export async function verifyChatGptModel(
       throw new ChatGptModelNotVerifiedError();
     }
     return expected;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     throw new ChatGptModelNotVerifiedError();
   } finally {
     await page.keyboard.press('Escape').catch(() => {});
