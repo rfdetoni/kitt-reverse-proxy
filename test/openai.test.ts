@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ResponsesContinuationStore } from '../src/proxy/responses-continuation.js';
 import {
   ChatStreamWriter,
   completionToResponses,
@@ -237,4 +238,42 @@ test('Chat stream emits SSE keepalive while a started stream is idle', async () 
     choices: [{ index: 0, message: { role: 'assistant', content: 'a' }, finish_reason: 'stop' }]
   });
   assert.match(output, /: ping\n\n/);
+});
+
+test('Responses continuation retains prior assistant context only within the originating session', () => {
+  const state = new ResponsesContinuationStore();
+  const first = state.prepare({ input: 'first', model: 'chatgpt-web' }, 'agentA');
+  state.remember('resp_one', { input: 'first' }, 'agentA', first, {
+    id: 'c', object: 'chat.completion', created: 1, model: 'chatgpt-web',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }]
+  });
+  const next = state.prepare({ input: 'second', previous_response_id: 'resp_one' }, 'agentA');
+  assert.deepEqual(next.messages, [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'answer' },
+    { role: 'user', content: 'second' }
+  ]);
+  assert.equal(next.model, 'chatgpt-web');
+  assert.throws(() => state.prepare({ input: 'second', previous_response_id: 'resp_one' }, 'agentB'),
+    /outra sessão/);
+  assert.throws(() => state.prepare({ input: 'second', previous_response_id: 'resp_missing' }, 'agentA'),
+    /desconhecido/);
+});
+
+test('Responses continuation honors store false and explicit instruction replacement', () => {
+  const state = new ResponsesContinuationStore();
+  const first = state.prepare({ instructions: 'old', input: 'first' }, 'a');
+  const completed = {
+    id: 'c', object: 'chat.completion' as const, created: 1, model: 'chatgpt-web',
+    choices: [{ index: 0, message: { role: 'assistant' as const, content: 'answer' }, finish_reason: 'stop' }]
+  };
+  state.remember('resp_notstored', { store: false }, 'a', first, completed);
+  assert.throws(() => state.prepare({ input: 'follow-up', previous_response_id: 'resp_notstored' }, 'a'));
+  state.remember('resp_stored', {}, 'a', first, completed);
+  const next = state.prepare({
+    instructions: 'new', input: 'follow-up', previous_response_id: 'resp_stored'
+  }, 'a');
+  assert.deepEqual((next.messages as any[]).filter((message) => message.role === 'system'),
+    [{ role: 'system', content: 'new' }]);
+  assert.deepEqual((next.messages as any[])[0], { role: 'system', content: 'new' });
 });

@@ -28,13 +28,13 @@ import {
   ChatStreamWriter,
   completionToResponses,
   ResponsesStreamWriter,
-  responsesBodyToChat,
   sendOpenAiError
 } from './openai.js';
 import { parseRequestBody, sendProxyError } from './http-errors.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 import { validateOpenAiChatRequest, validateResponsesRequest } from './request-validation.js';
 import { withEstimatedUsage } from './token-usage.js';
+import { ResponsesContinuationStore } from './responses-continuation.js';
 import { unwrapContractJson } from '../util/contract-json.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
@@ -474,6 +474,7 @@ function verifyAgentModelIdentity(body: JsonObject, manager: SessionManager): vo
 
 export function createOpenAiRouter(manager: SessionManager): Router {
   const router = Router();
+  const responses = new ResponsesContinuationStore();
 
   router.post('/v1/embeddings', (_req: Request, res: Response) => {
     sendOpenAiError(
@@ -539,7 +540,10 @@ export function createOpenAiRouter(manager: SessionManager): Router {
       await withRequestLifecycle(req, res, async (signal) => {
         const sessionId = req.get('x-kitt-session-id');
         const source = validateResponsesRequest(req.body);
-        const converted = parseRequestBody(responsesBodyToChat, source);
+        const normalizedSessionId = manager.normalizeSessionId(sessionId);
+        const converted = parseRequestBody(
+          (value) => responses.prepare(value as JsonObject, normalizedSessionId), source
+        );
         logger.trace('openai.responses.request.raw', {
           headers: req.headers,
           body: source,
@@ -565,6 +569,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           markStructuredOutput(res, result.metadata?.structured_output === 'failed');
           const completion = withEstimatedUsage(result.completion, converted);
           writer.finish(completion, bufferTools ? [] : result.deltas);
+          responses.remember(writer.responseId, source, normalizedSessionId, converted, completion);
           return;
         }
 
@@ -573,7 +578,9 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           : await manager.execute(sessionId, body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, converted);
-        res.json(completionToResponses(completion));
+        const response = completionToResponses(completion);
+        responses.remember(response.id as string, source, normalizedSessionId, converted, completion);
+        res.json(response);
       });
     } catch (error) {
       logger.event('warn', 'openai.responses.error', { error });

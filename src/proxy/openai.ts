@@ -301,7 +301,7 @@ export class ChatStreamWriter {
 }
 
 export class ResponsesStreamWriter {
-  private readonly responseId = `resp_${randomUUID()}`;
+  readonly responseId = `resp_${randomUUID()}`;
   private readonly messageItemId = `msg_${randomUUID()}`;
   private sequence = 0;
   private started = false;
