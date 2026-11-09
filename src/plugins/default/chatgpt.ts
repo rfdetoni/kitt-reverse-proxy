@@ -34,6 +34,10 @@ export const CHATGPT_PLUGIN = defineProviderPlugin({
       'form button[type="submit"]:not([data-testid="stop-button"])'
     ],
     responseSelectors: [
+      '[data-turn-key] [data-conversation-role="assistant"] .markdown',
+      '[data-turn-key] [data-conversation-role="assistant"] [data-markdown-text-style="assistant-message"]',
+      '[data-turn-key] [data-conversation-role="assistant"] pre',
+      '[data-turn-key] [data-message-author-role="assistant"] .markdown',
       '[data-message-author-role="assistant"] .markdown',
       '[data-message-author-role="assistant"] pre',
       '[data-message-author-role="assistant"] .prose',

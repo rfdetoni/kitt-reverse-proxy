@@ -106,6 +106,11 @@ export function validateResponsesRequest(value: unknown): JsonObject {
   if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim() || body.model.length > 256)) {
     fail('"model" deve ser string não vazia de até 256 caracteres.');
   }
+  if (body.previous_response_id !== undefined && (
+    typeof body.previous_response_id !== 'string'
+    || !/^resp_[A-Za-z0-9-]{1,128}$/.test(body.previous_response_id)
+  )) fail('"previous_response_id" inválido ou não pertencente a este proxy.');
+  if (body.store !== undefined && typeof body.store !== 'boolean') fail('"store" deve ser boolean.');
   validateTools(body.tools);
   optionalNumber(body, 'temperature', 0, 2);
   optionalNumber(body, 'top_p', 0, 1);
