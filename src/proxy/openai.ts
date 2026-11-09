@@ -18,7 +18,7 @@ function inputItemToMessages(item: JsonValue): JsonValue[] {
   if (typeof item === 'string') return [{ role: 'user', content: item }];
   if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
 
-  if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
+  if ((item.type === 'function_call_output' || item.type === 'custom_tool_call_output') && typeof item.call_id === 'string') {
     const output = typeof item.output === 'string'
       ? item.output
       : JSON.stringify(item.output ?? '');
@@ -26,13 +26,15 @@ function inputItemToMessages(item: JsonValue): JsonValue[] {
   }
 
   if (
-    item.type === 'function_call'
+    (item.type === 'function_call' || item.type === 'custom_tool_call')
     && typeof item.call_id === 'string'
     && typeof item.name === 'string'
   ) {
-    const argumentsText = typeof item.arguments === 'string'
-      ? item.arguments
-      : JSON.stringify(item.arguments ?? {});
+    const argumentsText = item.type === 'custom_tool_call'
+      ? JSON.stringify({ input: typeof item.input === 'string' ? item.input : '' })
+      : typeof item.arguments === 'string'
+        ? item.arguments
+        : JSON.stringify(item.arguments ?? {});
     return [{
       role: 'assistant',
       content: null,
@@ -80,9 +82,19 @@ export function responsesBodyToChat(value: unknown): JsonObject {
   };
 }
 
+/** Decode function-shaped custom calls strictly; malformed model output cannot become a client tool call. */
+export function customToolCallInput(argumentsText: string): string {
+  const value: unknown = JSON.parse(argumentsText);
+  if (!isJsonObject(value) || typeof value.input !== 'string') {
+    throw new Error('Custom tool call must contain a string input property.');
+  }
+  return value.input;
+}
+
 export function completionToResponses(
   completion: OpenAiCompletion,
-  responseId = `resp_${randomUUID()}`
+  responseId = `resp_${randomUUID()}`,
+  customToolNames: ReadonlySet<string> = new Set()
 ): JsonObject {
   const message = completion.choices[0]?.message;
   const text = message?.content || '';
@@ -99,6 +111,17 @@ export function completionToResponses(
   }
 
   for (const call of message?.tool_calls || []) {
+    if (customToolNames.has(call.function.name)) {
+      output.push({
+        id: 'ctc_' + randomUUID().replace(/-/g, '').slice(0, 16),
+        call_id: call.id,
+        type: 'custom_tool_call',
+        name: call.function.name,
+        input: customToolCallInput(call.function.arguments),
+        status: 'completed'
+      });
+      continue;
+    }
     output.push({
       id: `fc_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
       call_id: call.id,
@@ -313,7 +336,8 @@ export class ResponsesStreamWriter {
   constructor(
     private readonly res: Response,
     private readonly model: string,
-    private readonly heartbeatMs = SSE_HEARTBEAT_MS
+    private readonly heartbeatMs = SSE_HEARTBEAT_MS,
+    private readonly customToolNames: ReadonlySet<string> = new Set()
   ) {}
 
   private event(type: string, payload: Record<string, unknown>): void {
@@ -404,6 +428,19 @@ export class ResponsesStreamWriter {
     }
 
     for (const call of toolCalls) {
+      if (this.customToolNames.has(call.function.name)) {
+        const itemId = 'ctc_' + randomUUID().replace(/-/g, '').slice(0, 16);
+        const input = customToolCallInput(call.function.arguments);
+        const added = { id: itemId, call_id: call.id, type: 'custom_tool_call', name: call.function.name, input: '', status: 'in_progress' };
+        this.event('response.output_item.added', { output_index: outputIndex, item: added });
+        this.event('response.custom_tool_call_input.delta', { item_id: itemId, output_index: outputIndex, delta: input });
+        this.event('response.custom_tool_call_input.done', { item_id: itemId, output_index: outputIndex, input });
+        const done = { ...added, input, status: 'completed' };
+        this.event('response.output_item.done', { output_index: outputIndex, item: done });
+        output.push(done);
+        outputIndex += 1;
+        continue;
+      }
       const itemId = `fc_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
       const added = {
         id: itemId,

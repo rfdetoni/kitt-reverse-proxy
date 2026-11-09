@@ -83,6 +83,9 @@ test('publishes live session capacity, provider discovery and resilience state',
     assert.equal(sessionContract.eviction, 'page_lru_idle');
     assert.equal(sessionContract.accepts_named_sessions, true);
     assert.equal(sessionContract.recyclable_idle_named, 1);
+    assert.equal(capabilities.protocols.openai.previous_response_id, true);
+    assert.equal(capabilities.protocols.openai.previous_response_id_persistent, false);
+    assert.equal(capabilities.protocols.openai.custom_text_tools, true);
     assert.equal(capabilities.resilience.circuit, 'closed');
     assert.equal(capabilities.provider_discovery.list_endpoint, '/v1/providers');
     assert.equal(capabilities.provider_registry.version, 3);

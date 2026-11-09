@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ResponsesContinuationStore } from '../src/proxy/responses-continuation.js';
+import { prepareCustomTools } from '../src/proxy/responses-custom-tools.js';
 import {
   ChatStreamWriter,
   completionToResponses,
@@ -276,4 +277,54 @@ test('Responses continuation honors store false and explicit instruction replace
   assert.deepEqual((next.messages as any[]).filter((message) => message.role === 'system'),
     [{ role: 'system', content: 'new' }]);
   assert.deepEqual((next.messages as any[])[0], { role: 'system', content: 'new' });
+});
+
+test('Responses custom tool declarations and calls preserve free-form input', () => {
+  const original = {
+    input: 'run it',
+    tools: [{ type: 'custom', name: 'shell', format: { type: 'text' } }],
+    tool_choice: { type: 'custom', name: 'shell' }
+  };
+  const adapted = prepareCustomTools(original);
+  assert.deepEqual(adapted.source.tool_choice, { type: 'function', name: 'shell' });
+  assert.equal((adapted.source.tools as any[])[0].parameters.properties.input.type, 'string');
+  assert.equal(original.tools[0]?.type, 'custom');
+  assert.deepEqual(responsesBodyToChat({
+    input: [{ type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' }]
+  }).messages, [{ role: 'tool', tool_call_id: 'call_1', content: 'ok' }]);
+  assert.deepEqual(responsesBodyToChat({
+    input: [{ type: 'custom_tool_call', call_id: 'call_1', name: 'shell', input: 'pwd' }]
+  }).messages, [{
+    role: 'assistant', content: null, tool_calls: [
+      { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{"input":"pwd"}' } }
+    ]
+  }]);
+});
+
+test('Responses custom tool SSE uses native item and event types', async () => {
+  const { ResponsesStreamWriter } = await import('../src/proxy/openai.js');
+  const completion = {
+    id: 'c', object: 'chat.completion' as const, created: 1, model: 'chatgpt-web',
+    choices: [{
+      index: 0, message: {
+        role: 'assistant' as const, content: null,
+        tool_calls: [{ id: 'call_1', type: 'function' as const, function: { name: 'shell', arguments: '{"input":"ls"}' } }]
+      },
+      finish_reason: 'tool_calls'
+    }]
+  };
+  const names = new Set(['shell']);
+  const response = completionToResponses(completion, 'resp_custom', names);
+  assert.equal((response.output as any[])[0].type, 'custom_tool_call');
+  assert.equal((response.output as any[])[0].input, 'ls');
+  let output = '';
+  const fake = {
+    status() { return this; }, setHeader() { return this; }, flushHeaders() {},
+    write(chunk: string) { output += chunk; return true; }, end() { return this; }
+  };
+  new ResponsesStreamWriter(fake as never, 'chatgpt-web', undefined, names).finish(completion);
+  assert.ok(output.includes('response.custom_tool_call_input.delta'));
+  assert.ok(output.includes('response.custom_tool_call_input.done'));
+  assert.ok(output.includes('"type":"custom_tool_call"'));
+  assert.equal(output.includes('response.function_call_arguments.delta'), false);
 });
