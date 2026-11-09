@@ -78,6 +78,7 @@ import {
   type HybridUiResponseResult
 } from './read/hybrid-reader.js';
 import { UiAutomationError } from './ui-errors.js';
+import { verifyChatGptModel } from './chatgpt-model-verification.js';
 
 export {
   ConversationStateConflictError,
@@ -132,6 +133,7 @@ export class UiChatExecutor implements ChatExecutor {
   readonly modelId: string;
   private history: CanonicalMessage[] = [];
   private protocolFingerprint = '';
+  private observedModel: string | undefined;
   private toolProtocolWasEnabled = false;
   private systemContextWasEnabled = false;
   private readonly toolNamesByCallId = new Map<string, string>();
@@ -214,6 +216,7 @@ export class UiChatExecutor implements ChatExecutor {
     throwIfAborted(signal);
     this.history = [];
     this.protocolFingerprint = '';
+    this.observedModel = undefined;
     this.toolProtocolWasEnabled = false;
     this.systemContextWasEnabled = false;
     this.toolNamesByCallId.clear();
@@ -460,6 +463,9 @@ export class UiChatExecutor implements ChatExecutor {
       const initialArtifacts = await extractArtifactContents(this.session.page).catch(() => []);
       this.artifactFingerprints = new Set(initialArtifacts.map(artifactFingerprint));
     }
+    // Check exact model identity before baseline capture or upstream submission.
+    const verified = await verifyChatGptModel(this.session.page, this.provider.id, this.modelId, options?.signal);
+    if (verified) this.observedModel = verified;
     const baseline = await this.captureResponseBaseline(options?.signal);
     const promptSendStartedAt = Date.now();
     options?.lifecycle?.beforeSubmit(prompt);
@@ -630,8 +636,12 @@ export class UiChatExecutor implements ChatExecutor {
       transport: 'ui',
       targetOrigin: new URL(this.config.targetUrl).origin,
       persistentSession: this.session.persistent,
-      modelSelection: 'ui_alias_only',
-      observedModel: null,
+      modelSelection: this.observedModel ? 'verified_read_only' : 'ui_alias_only',
+      observedModel: this.observedModel ?? null,
+      model_selection: {
+        mode: this.observedModel ? 'verified_read_only' : 'ui_alias_only',
+        observed_model: this.observedModel ?? null
+      },
       manualChallengeHandling: true,
       progressiveUiStreaming: true,
       boundedHistoryChars: RESOURCE_LIMITS.uiHistoryChars,
