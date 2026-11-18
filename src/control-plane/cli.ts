@@ -107,11 +107,11 @@ function modelOptions(args: readonly string[]): {
   const url = flagValue(args, '--decision-url');
   const timeout = flagValue(args, '--decision-timeout-ms');
   const temporary = flagValue(args, '--temporary-chat');
-  if (mode !== undefined) result.decisionMode = mode as typeof result.decisionMode;
+  if (mode !== undefined) result.decisionMode = mode as NonNullable<typeof result.decisionMode>;
   if (model !== undefined) result.decisionModel = model;
   if (url !== undefined) result.decisionUrl = url;
   if (timeout !== undefined) result.decisionTimeoutMs = Number(timeout);
-  if (temporary !== undefined) result.temporaryChat = temporary as typeof result.temporaryChat;
+  if (temporary !== undefined) result.temporaryChat = temporary as NonNullable<typeof result.temporaryChat>;
   return result;
 }
 
