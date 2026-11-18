@@ -298,11 +298,14 @@ export class ServiceManager {
   private async startUnlocked(options: StartServiceOptions): Promise<ProxyInstanceRecord> {
     this.reapOrphanBrowserHosts();
     const target = resolveServiceTarget(options.target);
+    const profile = this.profiles.resolve(target.provider, options.profile);
+    // Persisted per-provider choices survive service stop, restart and KITT restarts.
+    options = { ...this.profiles.modelSettings(profile.id, target.provider), ...options };
+    validateServiceModels(options);
     if (options.model) target.model = options.model;
     if (options.temporaryChat === 'required' && target.provider !== 'chatgpt') {
       throw new Error('Verified temporary chat is currently supported only for ChatGPT.');
     }
-    const profile = this.profiles.resolve(target.provider, options.profile);
     return await this.withProfileLock(profile.directory, async () => {
     const active = this.instances.listActive();
 
@@ -463,6 +466,13 @@ export class ServiceManager {
     };
     try {
       this.profiles.markProvider(profile.id, target.provider);
+      this.profiles.saveModelSettings(profile.id, target.provider, {
+        ...(options.decisionMode !== undefined ? { decisionMode: options.decisionMode } : {}),
+        ...(options.decisionModel !== undefined ? { decisionModel: options.decisionModel } : {}),
+        ...(options.decisionUrl !== undefined ? { decisionUrl: options.decisionUrl } : {}),
+        ...(options.decisionTimeoutMs !== undefined ? { decisionTimeoutMs: options.decisionTimeoutMs } : {}),
+        ...(options.temporaryChat !== undefined ? { temporaryChat: options.temporaryChat } : {})
+      });
       return this.instances.put(record);
     } catch (error) {
       terminateSpawnedOwned(child, serviceFingerprint);
