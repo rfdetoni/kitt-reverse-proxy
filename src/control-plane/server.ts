@@ -105,11 +105,11 @@ function serviceModels(params: Record<string, unknown>): ServiceModelOptions {
   const url = optionalString(params, 'decision_url');
   const timeout = optionalInteger(params, 'decision_timeout_ms', 100, 30000);
   const temporary = optionalString(params, 'temporary_chat');
-  if (mode !== undefined) result.decisionMode = mode as ServiceModelOptions['decisionMode'];
+  if (mode !== undefined) result.decisionMode = mode as NonNullable<ServiceModelOptions['decisionMode']>;
   if (model !== undefined) result.decisionModel = model;
   if (url !== undefined) result.decisionUrl = url;
   if (timeout !== undefined) result.decisionTimeoutMs = timeout;
-  if (temporary !== undefined) result.temporaryChat = temporary as ServiceModelOptions['temporaryChat'];
+  if (temporary !== undefined) result.temporaryChat = temporary as NonNullable<ServiceModelOptions['temporaryChat']>;
   return result;
 }
 
