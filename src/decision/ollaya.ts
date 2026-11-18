@@ -48,8 +48,8 @@ function extractLatestUserText(body: JsonObject): string | undefined {
     text = content;
   } else if (Array.isArray(content)) {
     text = content
-      .filter((item): item is Record<string, unknown> => isRecord(item) && item.type === 'text')
-      .map((item) => typeof item.text === 'string' ? item.text : '')
+      .filter((item) => isRecord(item) && item.type === 'text')
+      .map((item) => isRecord(item) && typeof item.text === 'string' ? item.text : '')
       .join('\n');
   } else {
     return undefined;
