@@ -517,7 +517,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           writer.begin();
           const result = contract
             ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
-            : await manager.execute(sessionId, body, {
+            : await manager.execute(sessionId, advice.body, {
                 ...baseOptions,
                 ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
               });
@@ -529,7 +529,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
 
         const result = contract
           ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
-          : await manager.execute(sessionId, body, baseOptions);
+          : await manager.execute(sessionId, advice.body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, validatedBody);
         res.json(completion);
@@ -570,7 +570,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           writer.beginResponse();
           const result = contract
             ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
-            : await manager.execute(sessionId, body, {
+            : await manager.execute(sessionId, advice.body, {
                 signal,
                 ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
               });
@@ -583,7 +583,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
 
         const result = contract
           ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
-          : await manager.execute(sessionId, body, { signal });
+          : await manager.execute(sessionId, advice.body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, converted);
         const response = completionToResponses(completion, undefined, custom.names);
