@@ -22,6 +22,7 @@ import {
   type UiTextSnapshot
 } from './ui-dom.js';
 import { navigateSession } from './browser-session.js';
+import { activateTemporaryChat, temporaryChatMode } from './temporary-chat.js';
 import {
   buildToolProtocolPlan,
   formatApiDirective,
@@ -156,6 +157,8 @@ export class UiChatExecutor implements ChatExecutor {
 
   async initialize(): Promise<void> {
     await this.waitForReady('inicialização');
+    await activateTemporaryChat(this.session.page, this.provider.id, temporaryChatMode());
+    await this.waitForReady('chat temporário');
     await this.responseReader.initialize();
   }
 
@@ -231,6 +234,8 @@ export class UiChatExecutor implements ChatExecutor {
         throw new UiAutomationError(`Falha ao iniciar nova conversa: ${error instanceof Error ? error.message : String(error)}`);
       });
     await this.waitForReady('nova conversa', signal);
+    await activateTemporaryChat(this.session.page, this.provider.id, temporaryChatMode());
+    await this.waitForReady('chat temporário', signal);
     await this.responseReader.reset();
   }
 
