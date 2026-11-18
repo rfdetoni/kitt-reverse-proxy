@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildManagedProxyArgs } from '../src/control-plane/service-manager.js';
+import { buildManagedProxyArgs, validateServiceModels } from '../src/control-plane/service-manager.js';
 import { shutdownDrainTimeoutMs } from '../src/config.js';
 
 test('shutdown drain timeout covers configured requests', () => {
@@ -69,4 +69,17 @@ test('managed proxy launch does not invent ownership for manual services', () =>
     args[args.indexOf('--cdp-url') + 1],
     'http://127.0.0.1:9222'
   );
+});
+
+test('managed decision-model and temporary-chat options reject malformed values before restart', () => {
+  validateServiceModels({
+    decisionMode: 'assist', decisionModel: 'winnow:e4b',
+    decisionUrl: 'http://127.0.0.1:11435', decisionTimeoutMs: 1200,
+    temporaryChat: 'supported'
+  });
+  assert.throws(() => validateServiceModels({ decisionMode: 'invalid' as never }), /decisionMode/);
+  assert.throws(() => validateServiceModels({ decisionModel: '--bad' }), /decisionModel/);
+  assert.throws(() => validateServiceModels({ decisionUrl: 'http://user:pass@127.0.0.1:11435' }), /credentials/);
+  assert.throws(() => validateServiceModels({ decisionTimeoutMs: 90000 }), /decisionTimeoutMs/);
+  assert.throws(() => validateServiceModels({ temporaryChat: 'bad' as never }), /temporaryChat/);
 });
