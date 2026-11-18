@@ -131,6 +131,21 @@ export function runtimeCapabilities(manager: SessionManager, config: AppConfig):
       usage_is_estimated: true
     },
     structured_output: 'validated_or_error',
+    decision_layer: {
+      provider: 'ollaya',
+      mode: process.env.PROXY_DECISION_MODE || 'off',
+      typed_inference: true,
+      preset: 'router',
+      advisory_only: true,
+      agent_contract_behavior: 'shadow',
+      status_header: 'X-Kitt-Decision-Status',
+      fallback: 'llm_unchanged'
+    },
+    temporary_chats: {
+      mode: process.env.PROXY_TEMPORARY_CHAT || 'off',
+      ui_provider: 'chatgpt',
+      browser_session_isolation: true
+    },
     request_lifecycle: { deadline_ms: 240_000, max_upstream_attempts: 3, cumulative_usage: true, idempotency: 'process_scoped' },
     model_selection: { mode: manager.transport === 'ui' ? 'ui_alias_only' : 'native', observed_model: null },
     structured_output_retry: true,

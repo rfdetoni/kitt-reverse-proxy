@@ -7,6 +7,7 @@ import { withPersistentBrowserProfile } from '../util/browser-profile.js';
 import { loadProviderPluginModules } from '../plugins/loader.js';
 import { NetworkChatExecutor } from './network-executor.js';
 import { createManagedUiRuntime } from './ui-browser-lifecycle.js';
+import { temporaryChatMode } from './temporary-chat.js';
 import type { AppConfig, ChatExecutor, LiveBrowserSession } from '../types.js';
 
 export interface RuntimeBundle {
@@ -61,7 +62,17 @@ export async function createRuntime(config: AppConfig): Promise<RuntimeBundle> {
     logger.info(`Provider plugins carregados: ${loadedPlugins.map((plugin) => plugin.provider.id).join(', ')}.`);
   }
   const provider = detectProvider(config.targetUrl, config.provider);
-  const candidates = transportCandidates(config.transport, provider);
+  const requestedTemporaryMode = temporaryChatMode();
+  if (requestedTemporaryMode === 'required' && provider.id !== 'chatgpt') {
+    throw new Error('Temporary chats are not verified for provider: ' + provider.id);
+  }
+  if (requestedTemporaryMode !== 'off' && provider.id === 'chatgpt' && config.transport === 'network') {
+    throw new Error('Temporary ChatGPT conversations require --transport ui.');
+  }
+  // A network capture cannot prove the provider's temporary-chat state.
+  const candidates = requestedTemporaryMode !== 'off' && provider.id === 'chatgpt'
+    ? ['ui'] as const
+    : transportCandidates(config.transport, provider);
   logger.info(`Provider: ${provider.name}; transporte: ${candidates.join(' -> ')}.`);
 
   let lastError: unknown;

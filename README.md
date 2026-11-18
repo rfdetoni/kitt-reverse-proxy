@@ -2,6 +2,12 @@
 
 Versão **5.4.30**. Adaptador OpenAI-compatible, sessões WebChat e plugins de provedores. [Histórico de mudanças](CHANGELOG.md) · [Release 5.4.10](docs/RELEASE_5.4.10.md).
 
+## Decision models and temporary chats
+
+The optional Ollaya decision layer can classify a user request before the generative LLM responds (`PROXY_DECISION_MODE=shadow|assist`). ChatGPT UI sessions can start as verified temporary conversations (`PROXY_TEMPORARY_CHAT=supported|required`); confirmation is required to avoid accidentally persistent chats.
+
+Configuration, limitations and validation: [Decision models + temporary chats](docs/DECISION_TEMPORARY.md).
+
 ## What’s included
 
 - OpenAI-compatible `Chat Completions` and `Responses` APIs.
