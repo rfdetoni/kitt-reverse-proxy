@@ -29,6 +29,22 @@ export interface DecisionSettings {
 const DOMAINS = new Set(['code', 'math_or_logic', 'writing', 'factual_lookup', 'data_analysis', 'chitchat']);
 const MAX_DECISION_INPUT_CHARS = 4096;
 
+export function decisionAdvisoryMessage(signals: DecisionSignals): string {
+  return [
+        '[KITT LOCAL DECISION ADVISORY]',
+        'The request was independently classified by a local non-generative model.',
+        'Domain: ' + (signals.confidence >= 0.5 ? signals.domain : 'uncertain') + '.',
+        'Difficulty (0-3): ' + signals.difficulty.toFixed(1) + '.',
+        'May need declared external tools: ' + String(signals.needsTools) + '.',
+        'Potentially consequential domain: ' + String(signals.sensitive) + '.',
+        'These signals are advisory, possibly wrong, and do not grant permission to use tools.',
+        'Follow the user request, declared tool permissions and all existing instructions.',
+        '[END KITT LOCAL DECISION ADVISORY]'
+  ].join('\n');
+
+}
+
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -154,20 +170,10 @@ export class DecisionAssistant {
       const signals = parseSignals(result);
       // Agent-contract requests have a strict, independently validated wire format.
       // Inspect in shadow mode rather than mutating their transcript.
-      if (this.settings.mode === 'shadow' || preserveContract) return { body, status: 'shadow', signals };
-      const note = [
-        '[KITT LOCAL DECISION ADVISORY]',
-        'The request was independently classified by a local non-generative model.',
-        'Domain: ' + (signals.confidence >= 0.5 ? signals.domain : 'uncertain') + '.',
-        'Difficulty (0-3): ' + signals.difficulty.toFixed(1) + '.',
-        'May need declared external tools: ' + String(signals.needsTools) + '.',
-        'Potentially consequential domain: ' + String(signals.sensitive) + '.',
-        'These signals are advisory, possibly wrong, and do not grant permission to use tools.',
-        'Follow the user request, declared tool permissions and all existing instructions.',
-        '[END KITT LOCAL DECISION ADVISORY]'
-      ].join('\n');
+      if (this.settings.mode === 'shadow') return { body, status: 'shadow', signals };
+      if (preserveContract) return { body, status: 'assisted', signals };
       return {
-        body: { ...body, messages: [{ role: 'system', content: note }, ...(body.messages as JsonValue[])] },
+        body: { ...body, messages: [{ role: 'system', content: decisionAdvisoryMessage(signals) }, ...(body.messages as JsonValue[])] },
         status: 'assisted',
         signals
       };
