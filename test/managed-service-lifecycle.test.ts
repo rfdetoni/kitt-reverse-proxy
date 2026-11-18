@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ProfileRegistry } from '../src/control-plane/profile-registry.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -82,4 +86,22 @@ test('managed decision-model and temporary-chat options reject malformed values 
   assert.throws(() => validateServiceModels({ decisionUrl: 'http://user:pass@127.0.0.1:11435' }), /credentials/);
   assert.throws(() => validateServiceModels({ decisionTimeoutMs: 90000 }), /decisionTimeoutMs/);
   assert.throws(() => validateServiceModels({ temporaryChat: 'bad' as never }), /temporaryChat/);
+});
+
+test('decision model configuration survives registry reload per provider/profile', () => {
+  const root = mkdtempSync(join(tmpdir(), 'kitt-model-settings-'));
+  const profiles = new ProfileRegistry(root);
+  const profile = profiles.create('coding-openai', ['chatgpt']);
+  profiles.saveModelSettings(profile.id, 'chatgpt', {
+    decisionMode: 'assist',
+    decisionModel: 'winnow:e4b',
+    decisionUrl: 'http://127.0.0.1:11435',
+    temporaryChat: 'supported'
+  });
+  const reloaded = new ProfileRegistry(root);
+  const stored = reloaded.modelSettings('coding-openai', 'chatgpt');
+  assert.equal(stored.decisionMode, 'assist');
+  assert.equal(stored.decisionModel, 'winnow:e4b');
+  assert.equal(stored.temporaryChat, 'supported');
+  assert.deepEqual(reloaded.modelSettings('coding-openai', 'gemini'), {});
 });
