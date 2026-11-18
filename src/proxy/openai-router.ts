@@ -37,7 +37,7 @@ import { withEstimatedUsage } from './token-usage.js';
 import { ResponsesContinuationStore } from './responses-continuation.js';
 import { prepareCustomTools } from './responses-custom-tools.js';
 import { unwrapContractJson } from '../util/contract-json.js';
-import { DecisionAssistant, decisionSettingsFromEnv } from '../decision/ollaya.js';
+import { DecisionAssistant, decisionSettingsFromEnv, decisionAdvisoryMessage, type DecisionSignals } from '../decision/ollaya.js';
 
 const AGENT_EXECUTION_CONTEXT = `[AGENT EXECUTION CONTEXT]
 You are servicing an external API request through a browser-backed transport. When callable functions are supplied, act as an API execution agent rather than as a conversational chat assistant.
@@ -259,7 +259,8 @@ function recordContractAttempt(
 async function executeAgentContract(
   lease: SessionExecutionLease,
   plan: AgentContractPlan,
-  options: ChatExecutionOptions
+  options: ChatExecutionOptions,
+  decisionSignals?: DecisionSignals
 ): Promise<ChatExecutionResult> {
   const transform = (result: ChatExecutionResult): ChatExecutionResult => ({
     ...result,
@@ -275,7 +276,12 @@ async function executeAgentContract(
     body: plan.body,
     options: executionOptions
   });
-  const first = await lease.execute(plan.body, executionOptions);
+  // Wire contract and idempotency fingerprint remain untouched. Advice is
+  // appended only to the already-validated transport prompt.
+  const guidedBody = decisionSignals && Array.isArray(plan.body.messages)
+    ? { ...plan.body, messages: [{ role: 'system', content: decisionAdvisoryMessage(decisionSignals) }, ...plan.body.messages] }
+    : plan.body;
+  const first = await lease.execute(guidedBody, executionOptions);
   commitAgentContractContext(plan);
   let firstValidationError: AgentContractValidationError | undefined;
   try {
@@ -426,7 +432,7 @@ async function executeAgentContract(
   }
 }
 
-async function executeAgentContractIdempotent(req: Request, manager: SessionManager, body: JsonObject, options: ChatExecutionOptions): Promise<ChatExecutionResult> {
+async function executeAgentContractIdempotent(req: Request, manager: SessionManager, body: JsonObject, options: ChatExecutionOptions, decisionSignals?: DecisionSignals): Promise<ChatExecutionResult> {
   validateAgentContractWire(body);
   const sessionId = manager.normalizeSessionId(req.get('x-kitt-session-id'));
   const meta = body.kitt_meta && typeof body.kitt_meta === 'object' && !Array.isArray(body.kitt_meta) ? body.kitt_meta : {};
@@ -444,7 +450,7 @@ async function executeAgentContractIdempotent(req: Request, manager: SessionMana
       executed = true;
       try {
         const value = await manager.transaction(sessionId, { ...options, lifecycle }, (lease) =>
-          executeAgentContract(lease, prepareContract(req, body, lease, manager.transport === 'network'), { ...options, lifecycle }));
+          executeAgentContract(lease, prepareContract(req, body, lease, manager.transport === 'network'), { ...options, lifecycle }, decisionSignals));
         lifecycle.phase = 'completed'; return value;
       } catch (error) {
         lifecycle.phase = lifecycle.submitted ? 'outcome_unknown' : 'failed';
@@ -516,7 +522,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           const writer = new ChatStreamWriter(res, model);
           writer.begin();
           const result = contract
-            ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
+            ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions, advice.signals)
             : await manager.execute(sessionId, advice.body, {
                 ...baseOptions,
                 ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
@@ -528,7 +534,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         }
 
         const result = contract
-          ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
+          ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions, advice.signals)
           : await manager.execute(sessionId, advice.body, baseOptions);
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, validatedBody);
@@ -569,7 +575,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
           const writer = new ResponsesStreamWriter(res, model, undefined, custom.names);
           writer.beginResponse();
           const result = contract
-            ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
+            ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions, advice.signals)
             : await manager.execute(sessionId, advice.body, {
                 signal,
                 ...(!bufferTools ? { onDelta: async (delta) => { writer.delta(delta); await waitForDrain(res); } } : {})
@@ -582,7 +588,7 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         }
 
         const result = contract
-          ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions)
+          ? await executeAgentContractIdempotent(req, manager, advice.body, baseOptions, advice.signals)
           : await manager.execute(sessionId, advice.body, { signal });
         markStructuredOutput(res, result.metadata?.structured_output === 'failed');
         const completion = withEstimatedUsage(result.completion, converted);
