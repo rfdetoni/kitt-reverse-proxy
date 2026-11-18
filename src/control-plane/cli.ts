@@ -88,6 +88,33 @@ async function profilesCommand(args: string[]): Promise<number> {
   throw new Error('Usage: kitt-reverse-proxy profiles <list|create|remove>');
 }
 
+function modelOptions(args: readonly string[]): {
+  decisionMode?: 'off' | 'shadow' | 'assist';
+  decisionModel?: string;
+  decisionUrl?: string;
+  decisionTimeoutMs?: number;
+  temporaryChat?: 'off' | 'supported' | 'required';
+} {
+  const result: {
+    decisionMode?: 'off' | 'shadow' | 'assist';
+    decisionModel?: string;
+    decisionUrl?: string;
+    decisionTimeoutMs?: number;
+    temporaryChat?: 'off' | 'supported' | 'required';
+  } = {};
+  const mode = flagValue(args, '--decision-mode');
+  const model = flagValue(args, '--decision-model');
+  const url = flagValue(args, '--decision-url');
+  const timeout = flagValue(args, '--decision-timeout-ms');
+  const temporary = flagValue(args, '--temporary-chat');
+  if (mode !== undefined) result.decisionMode = mode as typeof result.decisionMode;
+  if (model !== undefined) result.decisionModel = model;
+  if (url !== undefined) result.decisionUrl = url;
+  if (timeout !== undefined) result.decisionTimeoutMs = Number(timeout);
+  if (temporary !== undefined) result.temporaryChat = temporary as typeof result.temporaryChat;
+  return result;
+}
+
 async function serviceCommand(args: string[]): Promise<number> {
   const manager = new ServiceManager();
   const action = args[0] || 'list';
@@ -115,7 +142,13 @@ async function serviceCommand(args: string[]): Promise<number> {
       logContent?: 'none' | 'metadata' | 'full';
       logFile?: string;
       ownerPid?: number;
-    } = { target };
+      model?: string;
+      decisionMode?: 'off' | 'shadow' | 'assist';
+      decisionModel?: string;
+      decisionUrl?: string;
+      decisionTimeoutMs?: number;
+      temporaryChat?: 'off' | 'supported' | 'required';
+    } = { target, ...modelOptions(args) };
     const profile = flagValue(args, '--profile');
     const id = flagValue(args, '--id');
     const host = flagValue(args, '--host');
@@ -138,6 +171,8 @@ async function serviceCommand(args: string[]): Promise<number> {
       options.logContent = rawLogContent as 'none' | 'metadata' | 'full';
     }
     if (logFile) options.logFile = logFile;
+    const llmModel = flagValue(args, '--model');
+    if (llmModel) options.model = llmModel;
     if (rawOwnerPid !== undefined) {
       const ownerPid = Number(rawOwnerPid);
       if (!Number.isInteger(ownerPid) || ownerPid < 1) {
@@ -146,6 +181,13 @@ async function serviceCommand(args: string[]): Promise<number> {
       options.ownerPid = ownerPid;
     }
     const instance = await manager.start(options);
+    print({ schema_version: 1, instance }, json);
+    return 0;
+  }
+  if (action === 'configure') {
+    const id = args[1];
+    if (!id) throw new Error('Usage: service configure <id> [--decision-mode off|shadow|assist] [--decision-model model] [--decision-url origin] [--decision-timeout-ms milliseconds] [--temporary-chat off|supported|required]');
+    const instance = await manager.configure(id, modelOptions(args));
     print({ schema_version: 1, instance }, json);
     return 0;
   }
@@ -168,7 +210,7 @@ async function serviceCommand(args: string[]): Promise<number> {
     print({ schema_version: 1, instance }, json);
     return 0;
   }
-  throw new Error('Usage: kitt-reverse-proxy service <list|start|stop|restart>');
+  throw new Error('Usage: kitt-reverse-proxy service <list|start|configure|stop|restart>');
 }
 
 
