@@ -119,7 +119,7 @@ export async function startProxyServer(input: {
         'content-type', 'authorization', 'x-api-key', 'x-kitt-session-id',
         'x-kitt-request-id', 'x-kitt-reasoning-effort', 'anthropic-version', 'traceparent'
       ],
-      exposedHeaders: ['x-kitt-request-id', 'x-kitt-structured-output', 'traceparent']
+      exposedHeaders: ['x-kitt-request-id', 'x-kitt-structured-output', 'x-kitt-decision-status', 'traceparent']
     }));
   }
 
