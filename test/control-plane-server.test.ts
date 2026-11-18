@@ -36,3 +36,17 @@ test('resident control plane rejects unknown actions', async () => {
     /Unknown control action/
   );
 });
+
+test('control plane validates new model settings without touching absent service', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'kitt-rp-decision-'));
+  await assert.rejects(
+    dispatchControlRequest({ action: 'service.configure', params: {
+      id: 'missing', decision_mode: 'assist', decision_model: 'laya'
+    } }, root), /Unknown or inactive reverse-proxy instance/
+  );
+  await assert.rejects(
+    dispatchControlRequest({ action: 'service.start', params: {
+      target: 'chatgpt', decision_mode: 'invalid'
+    } }, root), /decisionMode/
+  );
+});

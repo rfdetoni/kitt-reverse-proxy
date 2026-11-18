@@ -1,7 +1,11 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ProfileRegistry } from '../src/control-plane/profile-registry.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildManagedProxyArgs } from '../src/control-plane/service-manager.js';
+import { buildManagedProxyArgs, validateServiceModels } from '../src/control-plane/service-manager.js';
 import { shutdownDrainTimeoutMs } from '../src/config.js';
 
 test('shutdown drain timeout covers configured requests', () => {
@@ -69,4 +73,35 @@ test('managed proxy launch does not invent ownership for manual services', () =>
     args[args.indexOf('--cdp-url') + 1],
     'http://127.0.0.1:9222'
   );
+});
+
+test('managed decision-model and temporary-chat options reject malformed values before restart', () => {
+  validateServiceModels({
+    decisionMode: 'assist', decisionModel: 'winnow:e4b',
+    decisionUrl: 'http://127.0.0.1:11435', decisionTimeoutMs: 1200,
+    temporaryChat: 'supported'
+  });
+  assert.throws(() => validateServiceModels({ decisionMode: 'invalid' as never }), /decisionMode/);
+  assert.throws(() => validateServiceModels({ decisionModel: '--bad' }), /decisionModel/);
+  assert.throws(() => validateServiceModels({ decisionUrl: 'http://user:pass@127.0.0.1:11435' }), /credentials/);
+  assert.throws(() => validateServiceModels({ decisionTimeoutMs: 90000 }), /decisionTimeoutMs/);
+  assert.throws(() => validateServiceModels({ temporaryChat: 'bad' as never }), /temporaryChat/);
+});
+
+test('decision model configuration survives registry reload per provider/profile', () => {
+  const root = mkdtempSync(join(tmpdir(), 'kitt-model-settings-'));
+  const profiles = new ProfileRegistry(root);
+  const profile = profiles.create('coding-openai', ['chatgpt']);
+  profiles.saveModelSettings(profile.id, 'chatgpt', {
+    decisionMode: 'assist',
+    decisionModel: 'winnow:e4b',
+    decisionUrl: 'http://127.0.0.1:11435',
+    temporaryChat: 'supported'
+  });
+  const reloaded = new ProfileRegistry(root);
+  const stored = reloaded.modelSettings('coding-openai', 'chatgpt');
+  assert.equal(stored.decisionMode, 'assist');
+  assert.equal(stored.decisionModel, 'winnow:e4b');
+  assert.equal(stored.temporaryChat, 'supported');
+  assert.deepEqual(reloaded.modelSettings('coding-openai', 'gemini'), {});
 });

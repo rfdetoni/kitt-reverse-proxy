@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cliLaunchPresets } from '../config.js';
+import { decisionSettingsFromEnv, type DecisionMode } from '../decision/ollaya.js';
+import type { TemporaryChatMode } from '../runtime/temporary-chat.js';
 import { providerRegistry } from '../plugins/registry.js';
 import { withFileLock } from './file-lock.js';
 import { InstanceRegistry, normalizeInstanceId, type ProxyInstanceRecord } from './instance-registry.js';
@@ -19,8 +21,18 @@ export interface ResolvedServiceTarget {
   model: string;
 }
 
-export interface StartServiceOptions {
+export interface ServiceModelOptions {
+  decisionMode?: DecisionMode;
+  decisionModel?: string;
+  decisionUrl?: string;
+  decisionTimeoutMs?: number;
+  temporaryChat?: TemporaryChatMode;
+}
+
+export interface StartServiceOptions extends ServiceModelOptions {
   target: string;
+  /** API model alias; browser UI selection remains the provider's responsibility. */
+  model?: string;
   id?: string;
   profile?: string;
   port?: number;
@@ -33,6 +45,32 @@ export interface StartServiceOptions {
 
 export interface ServiceStatus extends ProxyInstanceRecord {
   status: 'ready' | 'running' | 'unhealthy';
+}
+
+/** Validate everything before stopping an existing managed proxy. */
+export function validateServiceModels(options: Partial<StartServiceOptions>): void {
+  for (const [key, value] of [['model', options.model], ['decisionModel', options.decisionModel]] as const) {
+    if (value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(value))) {
+      throw new Error(key + ' must be a model identifier (1-256 characters).');
+    }
+  }
+  if (options.temporaryChat !== undefined && !['off', 'supported', 'required'].includes(options.temporaryChat)) {
+    throw new Error('temporaryChat must be off, supported or required.');
+  }
+  if (options.decisionMode !== undefined && !['off', 'shadow', 'assist'].includes(options.decisionMode)) {
+    throw new Error('decisionMode must be off, shadow or assist.');
+  }
+  if (options.decisionTimeoutMs !== undefined && (
+    !Number.isInteger(options.decisionTimeoutMs) || options.decisionTimeoutMs < 100 || options.decisionTimeoutMs > 30000
+  )) throw new Error('decisionTimeoutMs must be between 100 and 30000.');
+  if (options.decisionUrl !== undefined || options.decisionMode !== undefined || options.decisionTimeoutMs !== undefined) {
+    // Same origin, timeout and mode constraints as the execution adapter.
+    decisionSettingsFromEnv({
+      PROXY_DECISION_MODE: options.decisionMode ?? 'off',
+      PROXY_DECISION_URL: options.decisionUrl ?? 'http://127.0.0.1:11435',
+      PROXY_DECISION_TIMEOUT_MS: String(options.decisionTimeoutMs ?? 2500)
+    });
+  }
 }
 
 export function buildManagedProxyArgs(input: {
@@ -253,6 +291,7 @@ export class ServiceManager {
   }
 
   async start(options: StartServiceOptions): Promise<ProxyInstanceRecord> {
+    validateServiceModels(options);
     return await this.withControlLock(() => this.startUnlocked(options));
   }
 
@@ -260,6 +299,13 @@ export class ServiceManager {
     this.reapOrphanBrowserHosts();
     const target = resolveServiceTarget(options.target);
     const profile = this.profiles.resolve(target.provider, options.profile);
+    // Persisted per-provider choices survive service stop, restart and KITT restarts.
+    options = { ...this.profiles.modelSettings(profile.id, target.provider), ...options };
+    validateServiceModels(options);
+    if (options.model) target.model = options.model;
+    if (options.temporaryChat === 'required' && target.provider !== 'chatgpt') {
+      throw new Error('Verified temporary chat is currently supported only for ChatGPT.');
+    }
     return await this.withProfileLock(profile.directory, async () => {
     const active = this.instances.listActive();
 
@@ -360,7 +406,16 @@ export class ServiceManager {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
-      env: { ...process.env, KITT_CONTROL_PLANE_CHILD: '1', ...(browserHostPid ? { KITT_SHARED_BROWSER_PID: String(browserHostPid) } : {}) }
+      env: {
+        ...process.env,
+        KITT_CONTROL_PLANE_CHILD: '1',
+        ...(options.decisionMode !== undefined ? { PROXY_DECISION_MODE: options.decisionMode } : {}),
+        ...(options.decisionModel !== undefined ? { PROXY_DECISION_MODEL: options.decisionModel } : {}),
+        ...(options.decisionUrl !== undefined ? { PROXY_DECISION_URL: options.decisionUrl } : {}),
+        ...(options.decisionTimeoutMs !== undefined ? { PROXY_DECISION_TIMEOUT_MS: String(options.decisionTimeoutMs) } : {}),
+        ...(options.temporaryChat !== undefined ? { PROXY_TEMPORARY_CHAT: options.temporaryChat } : {}),
+        ...(browserHostPid ? { KITT_SHARED_BROWSER_PID: String(browserHostPid) } : {})
+      }
     });
     child.unref();
     if (!child.pid) {
@@ -390,6 +445,11 @@ export class ServiceManager {
       pid: child.pid,
       processFingerprint: serviceFingerprint!,
       startedAt: new Date().toISOString(),
+      ...(options.decisionMode !== undefined ? { decisionMode: options.decisionMode } : {}),
+      ...(options.decisionModel !== undefined ? { decisionModel: options.decisionModel } : {}),
+      ...(options.decisionUrl !== undefined ? { decisionUrl: options.decisionUrl } : {}),
+      ...(options.decisionTimeoutMs !== undefined ? { decisionTimeoutMs: options.decisionTimeoutMs } : {}),
+      ...(options.temporaryChat !== undefined ? { temporaryChat: options.temporaryChat } : {}),
       logLevel,
       logContent,
       logFile: serviceLogFile,
@@ -406,6 +466,13 @@ export class ServiceManager {
     };
     try {
       this.profiles.markProvider(profile.id, target.provider);
+      this.profiles.saveModelSettings(profile.id, target.provider, {
+        ...(options.decisionMode !== undefined ? { decisionMode: options.decisionMode } : {}),
+        ...(options.decisionModel !== undefined ? { decisionModel: options.decisionModel } : {}),
+        ...(options.decisionUrl !== undefined ? { decisionUrl: options.decisionUrl } : {}),
+        ...(options.decisionTimeoutMs !== undefined ? { decisionTimeoutMs: options.decisionTimeoutMs } : {}),
+        ...(options.temporaryChat !== undefined ? { temporaryChat: options.temporaryChat } : {})
+      });
       return this.instances.put(record);
     } catch (error) {
       terminateSpawnedOwned(child, serviceFingerprint);
@@ -456,6 +523,40 @@ export class ServiceManager {
     });
   }
 
+  async configure(id: string, changes: ServiceModelOptions): Promise<ProxyInstanceRecord> {
+    return await this.withControlLock(async () => {
+      const current = this.instances.get(id);
+      if (!current || !processMatches(current.pid, current.processFingerprint)) {
+        throw new Error('Unknown or inactive reverse-proxy instance: ' + id);
+      }
+      // No data or process changes occur when validation fails.
+      const next: StartServiceOptions = {
+        target: current.target,
+        id: current.id,
+        profile: current.profileId,
+        port: current.port,
+        host: current.host,
+        model: current.model,
+        ...(current.logLevel !== undefined ? { logLevel: current.logLevel } : {}),
+        ...(current.logContent !== undefined ? { logContent: current.logContent } : {}),
+        ...(current.logFile ? { logFile: current.logFile } : {}),
+        ...(current.ownerPid !== undefined ? { ownerPid: current.ownerPid } : {}),
+        ...(current.decisionMode !== undefined ? { decisionMode: current.decisionMode } : {}),
+        ...(current.decisionModel !== undefined ? { decisionModel: current.decisionModel } : {}),
+        ...(current.decisionUrl !== undefined ? { decisionUrl: current.decisionUrl } : {}),
+        ...(current.decisionTimeoutMs !== undefined ? { decisionTimeoutMs: current.decisionTimeoutMs } : {}),
+        ...(current.temporaryChat !== undefined ? { temporaryChat: current.temporaryChat } : {}),
+        ...changes
+      };
+      validateServiceModels(next);
+      if (next.temporaryChat === 'required' && current.provider !== 'chatgpt') {
+        throw new Error('Verified temporary chat is currently supported only for ChatGPT.');
+      }
+      await this.stopUnlocked(id);
+      return await this.startUnlocked(next);
+    });
+  }
+
   async restart(id: string): Promise<ProxyInstanceRecord> {
     return await this.withControlLock(async () => {
       const instance = this.instances.get(id);
@@ -467,6 +568,11 @@ export class ServiceManager {
         profile: instance.profileId,
         port: instance.port,
         host: instance.host,
+        ...(instance.decisionMode !== undefined ? { decisionMode: instance.decisionMode } : {}),
+        ...(instance.decisionModel !== undefined ? { decisionModel: instance.decisionModel } : {}),
+        ...(instance.decisionUrl !== undefined ? { decisionUrl: instance.decisionUrl } : {}),
+        ...(instance.decisionTimeoutMs !== undefined ? { decisionTimeoutMs: instance.decisionTimeoutMs } : {}),
+        ...(instance.temporaryChat !== undefined ? { temporaryChat: instance.temporaryChat } : {}),
         ...(instance.logLevel !== undefined ? { logLevel: instance.logLevel } : {}),
         ...(instance.logContent !== undefined ? { logContent: instance.logContent } : {}),
         ...(instance.logFile ? { logFile: instance.logFile } : {}),
