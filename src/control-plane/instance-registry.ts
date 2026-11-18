@@ -20,6 +20,11 @@ export interface ProxyInstanceRecord {
   pid: number;
   processFingerprint: string;
   startedAt: string;
+  decisionMode?: 'off' | 'shadow' | 'assist';
+  decisionModel?: string;
+  decisionUrl?: string;
+  decisionTimeoutMs?: number;
+  temporaryChat?: 'off' | 'supported' | 'required';
   logLevel?: 0 | 1 | 2;
   logContent?: 'none' | 'metadata' | 'full';
   logFile?: string;
