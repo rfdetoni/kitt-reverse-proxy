@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadProviderPluginModules } from '../plugins/loader.js';
 import { providerRegistry } from '../plugins/registry.js';
-import { ServiceManager } from './service-manager.js';
+import { ServiceManager, type ServiceModelOptions } from './service-manager.js';
 
 const CONTROL_HOST = '127.0.0.1';
 const DEFAULT_CONTROL_PORT = 2999;
@@ -98,6 +98,21 @@ function optionalLogContent(params: Record<string, unknown>): 'none' | 'metadata
   return value;
 }
 
+function serviceModels(params: Record<string, unknown>): ServiceModelOptions {
+  const result: ServiceModelOptions = {};
+  const mode = optionalString(params, 'decision_mode');
+  const model = optionalString(params, 'decision_model');
+  const url = optionalString(params, 'decision_url');
+  const timeout = optionalInteger(params, 'decision_timeout_ms', 100, 30000);
+  const temporary = optionalString(params, 'temporary_chat');
+  if (mode !== undefined) result.decisionMode = mode as ServiceModelOptions['decisionMode'];
+  if (model !== undefined) result.decisionModel = model;
+  if (url !== undefined) result.decisionUrl = url;
+  if (timeout !== undefined) result.decisionTimeoutMs = timeout;
+  if (temporary !== undefined) result.temporaryChat = temporary as ServiceModelOptions['temporaryChat'];
+  return result;
+}
+
 export async function dispatchControlRequest(
   request: ControlRequest,
   root?: string
@@ -157,7 +172,8 @@ export async function dispatchControlRequest(
       logContent?: 'none' | 'metadata' | 'full';
       logFile?: string;
       ownerPid?: number;
-    } = { target: requiredString(params, 'target') };
+      model?: string;
+    } & ServiceModelOptions = { target: requiredString(params, 'target'), ...serviceModels(params) };
     const profile = optionalString(params, 'profile');
     const id = optionalString(params, 'id');
     const host = optionalString(params, 'host');
@@ -174,7 +190,13 @@ export async function dispatchControlRequest(
     if (logContent !== undefined) options.logContent = logContent;
     if (logFile) options.logFile = logFile;
     if (ownerPid !== undefined) options.ownerPid = ownerPid;
+    const model = optionalString(params, 'model');
+    if (model) options.model = model;
     return { schema_version: 1, instance: await services.start(options) };
+  }
+  if (request.action === 'service.configure') {
+    const id = requiredString(params, 'id');
+    return { schema_version: 1, instance: await services.configure(id, serviceModels(params)) };
   }
   if (request.action === 'service.stop') {
     const id = requiredString(params, 'id');
