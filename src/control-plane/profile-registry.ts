@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { withFileLockSync } from './file-lock.js';
+import type { ServiceModelOptions } from './service-manager.js';
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SCHEMA_VERSION = 1;
@@ -15,6 +16,7 @@ export interface BrowserProfileRecord {
   createdAt: string;
   updatedAt: string;
   legacy: boolean;
+  modelSettings?: Record<string, ServiceModelOptions>;
 }
 
 interface ProfileFile {
@@ -130,6 +132,30 @@ export class ProfileRegistry {
     state.profiles[index] = updated;
       this.write(state);
       return updated;
+    });
+  }
+
+  modelSettings(id: string, provider: string): ServiceModelOptions {
+    const values = this.get(id)?.modelSettings?.[provider];
+    return values ? { ...values } : {};
+  }
+
+  saveModelSettings(id: string, provider: string, options: ServiceModelOptions): void {
+    return withFileLockSync(this.root, 'profiles', () => {
+      const state = this.read();
+      const index = state.profiles.findIndex((item) => item.id === normalizeProfileId(id));
+      if (index < 0) throw new Error('Unknown profile for model settings: ' + id);
+      const existing = state.profiles[index]!;
+      const current = existing.modelSettings?.[provider] ?? {};
+      state.profiles[index] = {
+        ...existing,
+        updatedAt: new Date().toISOString(),
+        modelSettings: {
+          ...(existing.modelSettings ?? {}),
+          [provider]: { ...current, ...options }
+        }
+      };
+      this.write(state);
     });
   }
 
