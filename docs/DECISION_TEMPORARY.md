@@ -23,7 +23,7 @@ Start ChatGPT with `kitt-reverse-proxy start chatgpt --transport ui` when tempor
 
 - The advisor receives **only the latest plain-text user message** up to 4096 characters; it never receives tool outputs, image payloads, entire conversations or browser credentials.
 - One Ollaya POST /api/decide call uses preset `router`; signals are validated before use.
-- `shadow` classifies without changing the request. `assist` adds a short advisory system message on ordinary OpenAI Chat Completions and Responses. The strict K.I.T.T. Agent contract always stays shadow-only to protect wire semantics.
+- `shadow` classifies without changing the request. `assist` adds a short advisory system message on ordinary OpenAI Chat Completions and Responses. The strict K.I.T.T. Agent contract retains the original request wire unchanged; in assist mode, the advisor is applied to the generated transport prompt only after contract validation. In shadow mode the result is observed without injection.
 - A timeout or invalid/unavailable decision leaves the LLM request unchanged. It never replays a dispatched LLM call.
 - A response header `X-Kitt-Decision-Status` reports off, skipped, shadow, assisted or unavailable. `/v1/capabilities` advertises both integrations.
 - Decision confidences are *not* authorizations or safety guarantees; existing tool permissions and approvals remain authoritative.
