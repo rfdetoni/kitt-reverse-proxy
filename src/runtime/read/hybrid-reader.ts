@@ -249,6 +249,7 @@ export class HybridUiResponseReader {
         (delta) => reconciler.domDelta(delta),
         signal ? AbortSignal.any([signal, monitoring.signal]) : monitoring.signal,
         () => ({ ...(tapLastByteAt === undefined ? {} : { lastByteAt: tapLastByteAt }),
+          textChars: adapter.accumulatedText().length,
           receiving: Boolean(matched && !adapterEnded && !tapFailure),
           ...(tapFailure ? { failureReason: tapFailure } : {}) }),
         preferRawContract
