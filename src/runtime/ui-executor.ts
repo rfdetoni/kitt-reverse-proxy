@@ -79,6 +79,7 @@ import {
   type HybridUiResponseResult
 } from './read/hybrid-reader.js';
 import { UiAutomationError } from './ui-errors.js';
+import { verifyChatGptModelLabel } from './chatgpt-model-verification.js';
 
 export {
   ConversationStateConflictError,
@@ -164,6 +165,9 @@ export class UiChatExecutor implements ChatExecutor {
 
   private async captureResponseBaseline(signal?: AbortSignal): Promise<UiTextSnapshot[]> {
     await waitForUiIdle(this.session, this.provider, this.config, signal);
+    if (this.config.verifyChatGptModelLabel) {
+      await verifyChatGptModelLabel(this.session.page, this.config.verifyChatGptModelLabel, signal);
+    }
     const baseline = await collectVisibleSnapshots(this.session.page, this.provider.ui.responseSelectors, this.provider.ui.responseExcludeSelectors);
     if (this.provider.id === 'chatgpt' || this.provider.id === 'gemini') {
       // Snapshot before *every* send, including repair attempts. The prior
@@ -450,6 +454,10 @@ export class UiChatExecutor implements ChatExecutor {
     prefix = `${prefix}${buildToolEnforcementDirective(enforcement, this.explorationEvidence, this.toolEvidence, this.mutationEvidence)}`;
 
     throwIfAborted(options?.signal);
+    if (this.config.verifyChatGptModelLabel) {
+      await waitForUiIdle(this.session, this.provider, this.config, options?.signal);
+      await verifyChatGptModelLabel(this.session.page, this.config.verifyChatGptModelLabel, options?.signal);
+    }
     const fallbackPublicImageUrls = await uploadImagesFromBody(this.session.page, this.provider, body);
     throwIfAborted(options?.signal);
     if (fallbackPublicImageUrls.length > 0) {

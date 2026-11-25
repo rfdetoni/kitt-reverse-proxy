@@ -33,6 +33,7 @@ import {
   ProviderNoImageSupportError
 } from '../runtime/multimodal.js';
 import { ToolParseFailedError } from '../runtime/tool-response.js';
+import { ChatGptModelNotVerifiedError } from '../runtime/chatgpt-model-verification.js';
 import { ToolEnforcementError } from '../runtime/tool-enforcement.js';
 import { ToolProtocolError } from '../mapping/tool-calling.js';
 import { AgentContractError } from '../runtime/agent-contract.js';
@@ -67,6 +68,7 @@ export function describeProxyError(error: unknown): ProxyErrorDescriptor {
   if (error instanceof Error && error.name === 'RepairContextTooLargeError') return { status: 413, code: 'repair_context_too_large', message, recoverable: true, recoveryAction: 'continue' };
   if (error instanceof ContractJsonError) return { status: 409, code: 'agent_contract_invalid', message, recoverable: true, recoveryAction: 'continue' };
   if (error instanceof InvalidRequestError) return { status: error.status, code: error.code, message };
+  if (error instanceof ChatGptModelNotVerifiedError) return { status: 409, code: 'chatgpt_model_unverified', message };
   if (error instanceof StreamMismatchError) return { status: 502, code: 'stream_mismatch', message };
   if (error instanceof RequestDeadlineError) return { status: 504, code: 'request_deadline_exceeded', message };
   if (error instanceof AttemptBudgetError) return { status: 409, code: 'upstream_budget_exhausted', message, recoverable: true, recoveryAction: 'continue' };
