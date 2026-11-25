@@ -38,9 +38,8 @@ jobs:
       - name: Check generated Agent response schema
         run: python3 protocol-source/scripts/export_agent_contract.py --check --output src/contracts/agent-contract.ts
       - run: npm ci --no-audit --no-fund --strict-allow-scripts
-      - name: Typecheck critical surface
-        run: npm run check
-      - name: Run release-critical contracts
+      # npm test compiles the same tsconfig.json before executing the tests.
+      - name: Typecheck and run release-critical contracts
         run: npm test
       - name: Build production package
         run: npm run build
@@ -49,7 +48,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Verify CDP source integrity in real Chromium
         if: github.event_name != 'pull_request'
-        run: npm run test:browser
+        # Production dist was already compiled above.
+        run: node --test integration/cdp-browser.test.mjs
+      - name: Validate published package contents
+        # The explicit production build already ran prepack's build command.
+        run: npm pack --dry-run --ignore-scripts
       - name: Validate multicore installer build
         run: node scripts/build-fast.mjs
       - name: Validate fast-build output
@@ -60,5 +63,3 @@ jobs:
         run: npm audit --omit=dev --audit-level=moderate
       - name: Reject high or critical dependency vulnerabilities
         run: npm audit --audit-level=high
-      - name: Validate published package contents
-        run: npm pack --dry-run
