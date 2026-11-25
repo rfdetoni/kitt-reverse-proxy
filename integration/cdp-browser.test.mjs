@@ -676,3 +676,45 @@ test('real Chromium waits for the preceding generation before sending a repair a
     assert.equal(await page.evaluate(() => window.clicks),1);
   } finally {await browser.close();}
 });
+
+
+test('opt-in isolated browser transfers bounded bytes without host paths', {timeout: 20_000}, async () => {
+  const { BrowserAutomationSession } = await import('../dist/runtime/browser-automation.js');
+  const server = createServer((req, res) => {
+    if (req.url === '/file') {
+      res.writeHead(200, {'content-type':'application/octet-stream'});
+      res.end(Buffer.from('file bytes'));
+    } else if (req.url === '/large') {
+      res.writeHead(200, {'content-type':'application/octet-stream','content-length': 262145});
+      res.end(Buffer.alloc(262145));
+    } else {
+      res.writeHead(200, {'content-type':'text/html'});
+      res.end('<input type="file" id="file"><output id="value"></output><script>document.querySelector("#file").onchange=async e=>{document.querySelector("#value").textContent=await e.target.files[0].text()}</script>');
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const browser = await chromium.launch({headless: true});
+  const provider = await browser.newContext();
+  let session;
+  try {
+    const page = await provider.newPage();
+    session = await BrowserAutomationSession.create({browser, context: provider, page}, [origin], undefined, true);
+    await session.execute('open', {url: origin}, [origin]);
+    const upload = await session.execute('upload', {
+      selector: '#file', filename: 'test.txt', data_base64: Buffer.from('uploaded bytes').toString('base64')
+    }, [origin]);
+    assert.equal(upload.bytes, 14);
+    const download = await session.execute('download', {url: origin + '/file'}, [origin]);
+    assert.equal(Buffer.from(download.data_base64, 'base64').toString(), 'file bytes');
+    await assert.rejects(session.execute('download', {url: origin + '/large'}, [origin]), /exceeds limit|rejected/i);
+    await assert.rejects(session.execute('download', {url: 'https://example.org/file'}, [origin]), /origin scope/);
+    assert.equal(page.isClosed(), false);
+  } finally {
+    await session?.close();
+    await provider.close();
+    await browser.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
