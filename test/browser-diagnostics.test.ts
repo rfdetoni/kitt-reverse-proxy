@@ -17,7 +17,11 @@ test('browser diagnostics capture bounded real events without raw secrets', asyn
   page.isClosed = () => false;
   page.url = () => 'https://example.org/';
   const base = {
-    context: { newPage: async () => page }
+    context: { newPage: async () => { throw new Error('provider context must not be reused'); } },
+    browser: {
+      isConnected: () => true,
+      newContext: async () => ({ newPage: async () => page, close: async () => undefined })
+    }
   } as unknown as LiveBrowserSession;
   const session = await BrowserAutomationSession.create(base, ['https://example.org']);
   page.emit('console', { type: () => 'error', text: () => 'Bearer TOP_SECRET_123' });
