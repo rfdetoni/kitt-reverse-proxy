@@ -165,9 +165,19 @@ test('browser automation uses a separate tab and never navigates the provider ch
 
   const browserSession: LiveBrowserSession = {
     context: {
-      async newPage() {
-        createdPages += 1;
-        return automationPage;
+      async newPage() { throw new Error('provider context must not be reused'); },
+      pages: () => []
+    } as any,
+    browser: {
+      isConnected: () => true,
+      async newContext(options: Record<string, unknown>) {
+        assert.equal(options.storageState, undefined);
+        assert.equal(options.acceptDownloads, false);
+        assert.equal(options.serviceWorkers, 'block');
+        return {
+          async newPage() { createdPages += 1; return automationPage; },
+          async close() { await automationPage.close(); }
+        };
       }
     } as any,
     page: {
@@ -228,7 +238,11 @@ test('browser automation can progress while chat execution is waiting', async ()
     locator() { throw new Error('not used'); }
   } as any;
   const browserSession: LiveBrowserSession = {
-    context: { async newPage() { return automationPage; } } as any,
+    context: { pages: () => [] } as any,
+    browser: {
+      isConnected: () => true,
+      newContext: async () => ({ newPage: async () => automationPage, close: async () => undefined })
+    } as any,
     page: {} as any,
     persistent: true,
     async close() {}
@@ -445,7 +459,11 @@ test('cancelled automation closes only its tab and does not click after a pendin
   };
   const manager = new SessionManager({
     defaultExecutor: executor('default'), provider: 'chatgpt', config,
-    defaultBrowserSession: { context: { newPage: async () => page, pages: () => [] },
+    defaultBrowserSession: { context: { pages: () => [] },
+      browser: {
+        isConnected: () => true,
+        newContext: async () => ({ newPage: async () => page, close: async () => page.close() })
+      },
       async close() { providerClosed = true; } } as unknown as LiveBrowserSession
   });
   const controller = new AbortController();

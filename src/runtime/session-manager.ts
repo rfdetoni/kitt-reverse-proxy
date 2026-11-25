@@ -149,6 +149,7 @@ export class SessionManager {
   private readonly circuitStates = new Map<string, ProviderCircuitState>();
   private readonly sessions = new Map<string, ManagedSession>();
   private readonly creating = new Map<string, Promise<ManagedSession>>();
+  private pendingAutomationPages = 0;
   private readonly timer: NodeJS.Timeout;
   private readonly shutdownController = new AbortController();
   private closed = false;
@@ -237,11 +238,23 @@ export class SessionManager {
             return { action: 'close', closed: Boolean(current), session_id: session.id };
           }
           if (!session.browserAutomation || session.browserAutomation.isClosed()) {
-            session.browserAutomation = await BrowserAutomationSession.create(
-              session.browserSession!,
-              originScope,
-              signalWithShutdown
-            );
+            const previous = session.browserAutomation;
+            delete session.browserAutomation;
+            await previous?.close();
+            const pageLimit = this.options.config.maxBrowserPages ?? 12;
+            if (this.browserPageCount() + this.pendingAutomationPages + this.creating.size >= pageLimit) {
+              throw new SessionLimitExceededError();
+            }
+            this.pendingAutomationPages += 1;
+            try {
+              session.browserAutomation = await BrowserAutomationSession.create(
+                session.browserSession!,
+                originScope,
+                signalWithShutdown
+              );
+            } finally {
+              this.pendingAutomationPages -= 1;
+            }
           }
           throwIfAborted(signalWithShutdown);
           session.browserAutomationLastActivity = Date.now();
@@ -616,7 +629,7 @@ export class SessionManager {
     const atCountLimit =
       this.sessions.size + this.creating.size >= this.options.config.maxSessions;
     const maxBrowserPages = this.options.config.maxBrowserPages ?? 12;
-    const atPageLimit = this.browserPageCount() >= maxBrowserPages;
+    const atPageLimit = this.browserPageCount() + this.pendingAutomationPages >= maxBrowserPages;
 
     // Reusing the authenticated startup tab does not create another page.
     if (!atCountLimit && (this.canAdoptStartupTab() || !atPageLimit)) return;
@@ -627,7 +640,7 @@ export class SessionManager {
     if (candidate) {
       await this.removeSession(candidate);
       // Evicting an idle session does not guarantee it owned a browser page.
-      if (!this.canAdoptStartupTab() && this.browserPageCount() >= maxBrowserPages) {
+      if (!this.canAdoptStartupTab() && this.browserPageCount() + this.pendingAutomationPages >= maxBrowserPages) {
         throw new SessionLimitExceededError();
       }
       return;
@@ -664,6 +677,10 @@ export class SessionManager {
         // A concurrently closing context contributes no usable page capacity.
       }
     }
+    // Agent automation contexts are separate from provider contexts.
+    pages += values.filter((session) =>
+      Boolean(session.browserAutomation && !session.browserAutomation.isClosed())
+    ).length;
     return pages;
   }
 

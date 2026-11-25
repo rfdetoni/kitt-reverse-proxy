@@ -1,4 +1,5 @@
-import type { Locator, Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
+import { browserLaunchOptions } from './browser-session.js';
 import { createHash } from 'node:crypto';
 import { throwIfAborted } from './cancellation.js';
 import type { JsonObject, LiveBrowserSession } from '../types.js';
@@ -227,7 +228,13 @@ export class BrowserAutomationSession {
   private readonly diagnosticCounts = { console: 0, pageerror: 0, requestfailed: 0, http_error: 0 };
   private blockedNavigationUrl: string | undefined;
 
-  constructor(private readonly page: Page) {}
+  private closed = false;
+
+  constructor(
+    private readonly page: Page,
+    private readonly context: BrowserContext,
+    private readonly ownedBrowser?: Browser
+  ) {}
 
   static async create(
     base: LiveBrowserSession,
@@ -235,10 +242,30 @@ export class BrowserAutomationSession {
     signal?: AbortSignal
   ): Promise<BrowserAutomationSession> {
     throwIfAborted(signal);
-    const page = await base.context.newPage();
+    // Never expose provider cookies, local storage or IndexedDB to an agent.
+    // Reuse the browser process when possible, but always create a clean context.
+    let context: BrowserContext | undefined;
+    let ownedBrowser: Browser | undefined;
     try {
+      if (base.browser?.isConnected()) {
+        context = await base.browser.newContext({
+          acceptDownloads: false,
+          serviceWorkers: 'block'
+        }).catch(() => undefined);
+      }
+      if (!context) {
+        const launch = browserLaunchOptions(false);
+        ownedBrowser = await chromium.launch({ ...launch, channel: 'chrome' })
+          .catch(() => chromium.launch(launch));
+        context = await ownedBrowser.newContext({
+          acceptDownloads: false,
+          serviceWorkers: 'block'
+        });
+      }
       throwIfAborted(signal);
-      const session = new BrowserAutomationSession(page);
+      const page = await context.newPage();
+      throwIfAborted(signal);
+      const session = new BrowserAutomationSession(page, context, ownedBrowser);
       session.setOriginScope(originScope);
       const pageWithRouting = page as Page & {
         route?: Page['route'];
@@ -287,7 +314,8 @@ export class BrowserAutomationSession {
       throwIfAborted(signal);
       return session;
     } catch (error) {
-      await page.close().catch(() => undefined);
+      await context?.close().catch(() => undefined);
+      await ownedBrowser?.close().catch(() => undefined);
       throw error;
     }
   }
@@ -387,11 +415,14 @@ export class BrowserAutomationSession {
   }
 
   isClosed(): boolean {
-    return this.page.isClosed();
+    return this.closed || this.page.isClosed();
   }
 
   async close(): Promise<void> {
-    await this.page.close().catch(() => undefined);
+    if (this.closed) return;
+    this.closed = true;
+    await this.context.close().catch(() => undefined);
+    await this.ownedBrowser?.close().catch(() => undefined);
   }
 
   async execute(
