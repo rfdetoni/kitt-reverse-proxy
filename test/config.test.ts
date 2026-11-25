@@ -141,3 +141,11 @@ test('default passive tap tolerates slow initial and intermittent response chunk
   assert.equal(config.tapFirstByteMs, 45_000);
   assert.equal(config.tapStallMs, 90_000);
 });
+
+test('model picker label verification is explicit and limited to ChatGPT UI', () => {
+  const config = parseCliArgs(['chatgpt', '--verify-chatgpt-model-label', 'Example model']);
+  if ('help' in config) throw new Error('unexpected help');
+  assert.equal(config.verifyChatGptModelLabel, 'Example model');
+  assert.throws(() => parseCliArgs(['gemini', '--verify-chatgpt-model-label', 'Example model']), /requires the chatgpt UI/);
+  assert.throws(() => parseCliArgs(['chatgpt', '--transport', 'network', '--verify-chatgpt-model-label', 'Example model']), /requires the chatgpt UI/);
+});

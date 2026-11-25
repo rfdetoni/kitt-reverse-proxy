@@ -13,6 +13,7 @@ export interface AppConfig {
   targetUrl: string;
   model: string;
   apiModel?: string;
+  verifyChatGptModelLabel?: string;
   ollamaUrl: string;
   host: string;
   port: number;
