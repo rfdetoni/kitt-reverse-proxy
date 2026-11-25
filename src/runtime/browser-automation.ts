@@ -14,9 +14,12 @@ export const BROWSER_AUTOMATION_ACTIONS = [
   'close'
 ] as const;
 
-export type BrowserAutomationAction = typeof BROWSER_AUTOMATION_ACTIONS[number];
+export const BROWSER_FILE_ACTIONS = ['upload', 'download'] as const;
+export type BrowserAutomationAction = typeof BROWSER_AUTOMATION_ACTIONS[number] | typeof BROWSER_FILE_ACTIONS[number];
 
-const ACTIONS = new Set<string>(BROWSER_AUTOMATION_ACTIONS);
+const ACTIONS = new Set<string>([...BROWSER_AUTOMATION_ACTIONS, ...BROWSER_FILE_ACTIONS]);
+const MAX_UPLOAD_BYTES = 32 * 1024;
+const MAX_DOWNLOAD_BYTES = 256 * 1024;
 const MAX_SELECTOR_CHARS = 2_048;
 const MAX_TEXT_CHARS = 32_768;
 const MAX_BODY_CHARS = 20_000;
@@ -233,13 +236,15 @@ export class BrowserAutomationSession {
   constructor(
     private readonly page: Page,
     private readonly context: BrowserContext,
-    private readonly ownedBrowser?: Browser
+    private readonly ownedBrowser?: Browser,
+    private readonly fileTransferEnabled = false
   ) {}
 
   static async create(
     base: LiveBrowserSession,
     originScope: readonly string[] = [LOOPBACK_SCOPE],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    fileTransferEnabled = false
   ): Promise<BrowserAutomationSession> {
     throwIfAborted(signal);
     // Never expose provider cookies, local storage or IndexedDB to an agent.
@@ -265,13 +270,25 @@ export class BrowserAutomationSession {
       throwIfAborted(signal);
       const page = await context.newPage();
       throwIfAborted(signal);
-      const session = new BrowserAutomationSession(page, context, ownedBrowser);
+      const session = new BrowserAutomationSession(page, context, ownedBrowser, fileTransferEnabled);
       session.setOriginScope(originScope);
       const pageWithRouting = page as Page & {
         route?: Page['route'];
         on?: Page['on'];
       };
-      if (typeof pageWithRouting.route === 'function') {
+      if (fileTransferEnabled) {
+        // File-transfer mode is explicitly isolated from cross-origin subresources.
+        // Do not allow WebSocket connections or provider context reuse.
+        await context.route('**/*', async (route) => {
+          const target = route.request().url();
+          if (!session.isAllowedUrl(target)) {
+            await route.abort('blockedbyclient');
+            return;
+          }
+          await route.continue();
+        });
+        await context.routeWebSocket('**/*', (socket) => { void socket.close(); });
+      } else if (typeof pageWithRouting.route === 'function') {
         await page.route('**/*', async (route) => {
           const request = route.request();
           if (
@@ -466,7 +483,79 @@ export class BrowserAutomationSession {
     }
 
     const timeout = timeoutMs(args);
+    if ((action === 'upload' || action === 'download') && !this.fileTransferEnabled) {
+      throw new BrowserAutomationUnavailableError('Browser file transfer is disabled by the operator.');
+    }
     try {
+      if (action === 'upload') {
+        this.assertAllowedUrl(this.page.url());
+        const selector = selectorArg(args);
+        const filename = stringArg(args, 'filename', { required: true, max: 128 });
+        if (!/^[A-Za-z0-9][A-Za-z0-9_. -]{0,127}$/.test(filename) || filename.endsWith('.')) {
+          throw new BrowserAutomationInputError('Upload filename must be a simple basename.');
+        }
+        const encoded = stringArg(args, 'data_base64', { required: true, max: Math.ceil(MAX_UPLOAD_BYTES / 3) * 4 });
+        const buffer = Buffer.from(encoded, 'base64');
+        if (!buffer.length || buffer.length > MAX_UPLOAD_BYTES || buffer.toString('base64') !== encoded) {
+          throw new BrowserAutomationInputError('Invalid or oversized upload payload.');
+        }
+        throwIfAborted(signal);
+        await this.page.locator(selector).first().setInputFiles({
+          name: filename, mimeType: 'application/octet-stream', buffer
+        }, { timeout });
+        throwIfAborted(signal);
+        this.assertAllowedUrl(this.page.url());
+        return { action, filename, bytes: buffer.length, sha256: createHash('sha256').update(buffer).digest('hex') };
+      }
+      if (action === 'download') {
+        const url = httpUrl(args);
+        this.assertAllowedUrl(this.page.url());
+        this.assertAllowedUrl(url);
+        if (new URL(url).origin !== new URL(this.page.url()).origin) {
+          throw new BrowserOriginDeniedError('File download must use the current page origin.');
+        }
+        const result = await this.page.evaluate(async ({ url, limit, timeout }) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeout);
+          try {
+            const response = await fetch(url, {
+              method: 'GET', credentials: 'same-origin', redirect: 'error',
+              cache: 'no-store', signal: controller.signal
+            });
+            if (!response.ok || !response.body || Number(response.headers.get('content-length') || 0) > limit) {
+              throw new Error('Download rejected or exceeds limit.');
+            }
+            const reader = response.body.getReader();
+            const output = new Uint8Array(limit);
+            let size = 0;
+            while (true) {
+              const next = await reader.read();
+              if (next.done) break;
+              if (size + next.value.byteLength > limit) {
+                await reader.cancel();
+                throw new Error('Download exceeds limit.');
+              }
+              output.set(next.value, size);
+              size += next.value.byteLength;
+            }
+            let binary = '';
+            for (let offset = 0; offset < size; offset += 8192) {
+              binary += String.fromCharCode(...output.subarray(offset, Math.min(size, offset + 8192)));
+            }
+            return { data: btoa(binary) };
+          } finally { clearTimeout(timer); }
+        }, { url, limit: MAX_DOWNLOAD_BYTES, timeout });
+        throwIfAborted(signal);
+        this.assertAllowedUrl(this.page.url());
+        if (typeof result.data !== 'string' || result.data.length > Math.ceil(MAX_DOWNLOAD_BYTES / 3) * 4) {
+          throw new BrowserAutomationResponseTooLargeError('Download exceeds bounded response.');
+        }
+        const data = Buffer.from(result.data, 'base64');
+        if (data.length > MAX_DOWNLOAD_BYTES || data.toString('base64') !== result.data) {
+          throw new BrowserAutomationInputError('Invalid downloaded bytes.');
+        }
+        return { action, bytes: data.length, data_base64: result.data, sha256: createHash('sha256').update(data).digest('hex') };
+      }
       if (action === 'diagnose') {
         this.assertAllowedUrl(this.page.url());
         if (Object.keys(args).length > 0) {
@@ -566,29 +655,30 @@ export class BrowserAutomationSession {
       const snapshot = await this.page.evaluate(
         ({ maxBodyChars, maxElementChars, maxElements }) => {
           const body = document.body?.innerText || '';
-          const nodes = Array.from(document.querySelectorAll(
+          const nodes = document.querySelectorAll<HTMLElement>(
             'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]'
-          )).slice(0, maxElements);
-          const elements = nodes.map((node, index) => {
-            const element = node as HTMLElement;
+          );
+          const elements = [];
+          for (let index = 0; index < Math.min(nodes.length, maxElements); index += 1) {
+            const element = nodes[index]!;
             const compact = (element.innerText || element.textContent || '')
               .replace(/\s+/g, ' ')
               .trim()
               .slice(0, maxElementChars);
-            return {
+            elements.push({
               index,
               text: compact,
-              ariaLabel: element.getAttribute('aria-label') || '',
-              placeholder: element.getAttribute('placeholder') || '',
-              href: element.getAttribute('href') || '',
-              name: element.getAttribute('name') || '',
-              id: element.id || '',
-              type: element.getAttribute('type') || '',
-              role: element.getAttribute('role') || ''
-            };
-          });
+              ariaLabel: (element.getAttribute('aria-label') || '').slice(0, maxElementChars),
+              placeholder: (element.getAttribute('placeholder') || '').slice(0, maxElementChars),
+              href: (element.getAttribute('href') || '').slice(0, 2048),
+              name: (element.getAttribute('name') || '').slice(0, 256),
+              id: (element.id || '').slice(0, 256),
+              type: (element.getAttribute('type') || '').slice(0, 128),
+              role: (element.getAttribute('role') || '').slice(0, 128)
+            });
+          }
           return {
-            title: document.title || '',
+            title: (document.title || '').slice(0, maxElementChars),
             body: body.slice(0, maxBodyChars),
             bodyLength: body.length,
             elements

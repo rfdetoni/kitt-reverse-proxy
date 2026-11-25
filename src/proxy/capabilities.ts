@@ -3,7 +3,7 @@ import type { AppConfig, JsonObject, JsonValue } from '../types.js';
 import type { SessionManager } from '../runtime/session-manager.js';
 import { AGENT_CONTRACT_HEADER, AGENT_CONTRACT_VERSION, AGENT_ROUTE_HEADER, AGENT_ROUTES } from '../runtime/agent-contract.js';
 import { SERVICE_NAME, SERVICE_VERSION } from '../version.js';
-import { BROWSER_AUTOMATION_ACTIONS } from '../runtime/browser-automation.js';
+import { BROWSER_AUTOMATION_ACTIONS, BROWSER_FILE_ACTIONS } from '../runtime/browser-automation.js';
 import { tracingContract } from '../observability/tracing.js';
 import { semanticLocatorContract } from '../runtime/semantic-locator.js';
 import { currentLogContentPolicy } from '../logger.js';
@@ -41,7 +41,8 @@ function browserAutomationContract(manager: SessionManager): JsonObject {
     default_origin_scope: 'loopback',
     top_level_navigation_enforced: true,
     popups_blocked: true,
-    actions: [...BROWSER_AUTOMATION_ACTIONS],
+    actions: [...BROWSER_AUTOMATION_ACTIONS, ...(manager.browserFileTransferSupported() ? BROWSER_FILE_ACTIONS : [])],
+    file_transfer_supported: manager.browserFileTransferSupported(),
     screenshot_formats: ['jpeg', 'png']
   };
 }
