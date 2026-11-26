@@ -9,9 +9,10 @@ import {
   completionToAnthropic
 } from './anthropic.js';
 import { parseRequestBody, sendProxyError } from './http-errors.js';
+import { isModelAllowedByPolicy, sendOpenAiError } from './openai.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 
-export function createAnthropicRouter(manager: SessionManager): Router {
+export function createAnthropicRouter(manager: SessionManager, allowedModels?: readonly string[]): Router {
   const router = Router();
 
   router.post('/v1/messages', async (req: Request, res: Response) => {
@@ -23,6 +24,10 @@ export function createAnthropicRouter(manager: SessionManager): Router {
         const requestedModel = typeof req.body?.model === 'string' && req.body.model.trim()
           ? req.body.model.trim()
           : manager.modelId;
+        if (!isModelAllowedByPolicy(res, requestedModel, manager.modelId, allowedModels)) {
+          sendOpenAiError(res, 403, 'Modelo não autorizado pela política de gateway.', 'model_not_allowed');
+          return;
+        }
 
         if (req.body?.stream === true) {
           const writer = new AnthropicStreamWriter(res, requestedModel);

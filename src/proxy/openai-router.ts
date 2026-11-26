@@ -27,6 +27,7 @@ import type { ChatExecutionOptions, ChatExecutionResult, JsonObject } from '../t
 import {
   ChatStreamWriter,
   completionToResponses,
+  isModelAllowedByPolicy,
   ResponsesStreamWriter,
   sendOpenAiError
 } from './openai.js';
@@ -480,7 +481,7 @@ function verifyAgentModelIdentity(body: JsonObject, manager: SessionManager): vo
   }
 }
 
-export function createOpenAiRouter(manager: SessionManager): Router {
+export function createOpenAiRouter(manager: SessionManager, allowedModels?: readonly string[]): Router {
   const router = Router();
   const responses = new ResponsesContinuationStore();
   const decisions = new DecisionAssistant(decisionSettingsFromEnv());
@@ -508,6 +509,11 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         });
         const contract = agentContractEnabled(req);
         if (contract) verifyAgentModelIdentity(validatedBody, manager);
+        const requestedModel = typeof validatedBody.model === 'string' ? validatedBody.model : undefined;
+        if (!isModelAllowedByPolicy(res, requestedModel, manager.modelId, allowedModels)) {
+          sendOpenAiError(res, 403, 'Modelo não autorizado pela política de gateway.', 'model_not_allowed');
+          return;
+        }
         const body = contract ? validatedBody : ensureAgentExecutionContext(validatedBody);
         const advice = await decisions.prepare(body, signal, contract);
         res.setHeader('X-Kitt-Decision-Status', advice.status);
@@ -564,6 +570,11 @@ export function createOpenAiRouter(manager: SessionManager): Router {
         });
         const contract = agentContractEnabled(req);
         if (contract) verifyAgentModelIdentity(converted, manager);
+        const requestedModel = typeof converted.model === 'string' ? converted.model : undefined;
+        if (!isModelAllowedByPolicy(res, requestedModel, manager.modelId, allowedModels)) {
+          sendOpenAiError(res, 403, 'Modelo não autorizado pela política de gateway.', 'model_not_allowed');
+          return;
+        }
         const body = contract ? converted : ensureAgentExecutionContext(converted);
         const advice = await decisions.prepare(body, signal, contract);
         res.setHeader('X-Kitt-Decision-Status', advice.status);

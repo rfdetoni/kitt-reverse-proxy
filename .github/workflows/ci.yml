@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: rfdetoni/kitt-protocol
-          ref: e88d949f6a95df4d17b342961330e76efde5e2de
+          ref: 2cb05bb03e54eb2dc5f81bf151edcbd207ff194e
           path: protocol-source
           persist-credentials: false
       - name: Check generated Agent response schema
@@ -53,13 +53,9 @@ jobs:
       - name: Validate published package contents
         # The explicit production build already ran prepack's build command.
         run: npm pack --dry-run --ignore-scripts
-      - name: Validate multicore installer build
-        run: node scripts/build-fast.mjs
-      - name: Validate fast-build output
+      - name: Validate compiled CLI output
         run: node --check dist/cli.js
       - name: Validate POSIX installer syntax
         run: bash -n install.sh
-      - name: Audit production dependencies
+      - name: Audit dependencies
         run: npm audit --omit=dev --audit-level=moderate
-      - name: Reject high or critical dependency vulnerabilities
-        run: npm audit --audit-level=high

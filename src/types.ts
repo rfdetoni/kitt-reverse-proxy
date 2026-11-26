@@ -29,6 +29,8 @@ export interface AppConfig {
   browserMode?: BrowserMode | undefined;
   cors: boolean;
   apiKey?: string;
+  vmApiKey?: string;
+  vmAllowedModels?: string[];
   browserFileTransfer?: boolean;
   profilePath?: string;
   saveProfilePath?: string;

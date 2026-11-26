@@ -124,13 +124,13 @@ export async function startProxyServer(input: {
   }
 
   // Authentication precedes body parsing so unauthenticated callers cannot force JSON allocation.
-  app.use(apiKeyMiddleware(config.apiKey));
+  app.use(apiKeyMiddleware(config.apiKey, config.vmApiKey));
   app.use(express.json({ limit: RESOURCE_LIMITS.httpRequestBytes, strict: true }));
 
   app.use(createManagementRouter(manager, config));
-  app.use(createOpenAiRouter(manager));
-  app.use(createAnthropicRouter(manager));
-  app.use(createOllamaRouter(manager));
+  app.use(createOpenAiRouter(manager, config.vmAllowedModels));
+  app.use(createAnthropicRouter(manager, config.vmAllowedModels));
+  app.use(createOllamaRouter(manager, config.vmAllowedModels));
 
   app.use((_req, res) => sendOpenAiError(res, 404, 'Endpoint não encontrado.', 'not_found'));
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

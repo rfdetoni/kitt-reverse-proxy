@@ -19,12 +19,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build proxy runtime target
-        run: docker build --target runtime -t kitt-reverse-proxy:runtime .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: kitt-reverse-proxy:runtime
+          cache-from: type=gha,scope=proxy-runtime
+          cache-to: type=gha,mode=max,scope=proxy-runtime
       - name: Build standalone proxy with Chromium
-        run: docker build --target standalone -t kitt-reverse-proxy:standalone .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: standalone
+          load: true
+          tags: kitt-reverse-proxy:standalone
+          cache-from: type=gha,scope=proxy-standalone
+          cache-to: type=gha,mode=max,scope=proxy-standalone
       - name: Build browser sidecar
-        run: docker build -f docker/browser.Dockerfile -t kitt-browser:test .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/browser.Dockerfile
+          load: true
+          tags: kitt-browser:test
+          cache-from: type=gha,scope=proxy-browser
+          cache-to: type=gha,mode=max,scope=proxy-browser
       - name: Smoke test browser sidecar
         shell: bash
         run: |
