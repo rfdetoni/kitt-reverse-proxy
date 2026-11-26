@@ -1,5 +1,9 @@
 # Changelog — K.I.T.T. Reverse Proxy
 
+## 5.4.32
+
+- Isolated opt-in browser byte transfer, strict tool-call contract, explicit model label verification, decoded-progress watchdog, dependency updates and CI build reuse.
+
 ## 5.4.30 — stable rich-editor prompt writes
 
 - For rich ChatGPT Web composers and prompts at least 8 KiB, use bounded direct DOM assignment instead of Playwright fill, avoiding the observed 14K-character fill timeout on a long conversation.
