@@ -14,9 +14,10 @@ import {
   validateOllamaChatBody
 } from './ollama.js';
 import { parseRequestBody, sendProxyError } from './http-errors.js';
+import { isModelAllowedByPolicy, sendOpenAiError } from './openai.js';
 import { withRequestLifecycle } from './request-lifecycle.js';
 
-export function createOllamaRouter(manager: SessionManager): Router {
+export function createOllamaRouter(manager: SessionManager, allowedModels?: readonly string[]): Router {
   const router = Router();
 
   router.get('/api/tags', (_req, res) => res.json(ollamaTagsResponse(manager.modelId)));
@@ -33,6 +34,10 @@ export function createOllamaRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const body = parseRequestBody(validateOllamaChatBody, req.body);
         const model = typeof body.model === 'string' && body.model.trim() ? body.model : manager.modelId;
+        if (!isModelAllowedByPolicy(res, model, manager.modelId, allowedModels)) {
+          sendOpenAiError(res, 403, 'Modelo não autorizado pela política de gateway.', 'model_not_allowed');
+          return;
+        }
         const bufferTools = requestMayReturnToolCalls(body) || Boolean(body.format);
 
         if (body.stream === true || body.stream === undefined) {
@@ -65,6 +70,10 @@ export function createOllamaRouter(manager: SessionManager): Router {
         const sessionId = req.get('x-kitt-session-id');
         const chatBody = parseRequestBody(ollamaGenerateBodyToChat, req.body);
         const model = typeof req.body?.model === 'string' && req.body.model.trim() ? req.body.model : manager.modelId;
+        if (!isModelAllowedByPolicy(res, model, manager.modelId, allowedModels)) {
+          sendOpenAiError(res, 403, 'Modelo não autorizado pela política de gateway.', 'model_not_allowed');
+          return;
+        }
 
         if (req.body?.stream === true || req.body?.stream === undefined) {
           const writer = new OllamaGenerateStreamWriter(res, model);

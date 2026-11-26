@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { fileURLToPath } from 'node:url';
 
 import { loadProviderPluginModules } from '../plugins/loader.js';
+import { isTrustedBrowserOrigin } from '../proxy/server.js';
 import { providerRegistry } from '../plugins/registry.js';
 import { ServiceManager, type ServiceModelOptions } from './service-manager.js';
 
@@ -238,9 +239,27 @@ function json(res: ServerResponse, status: number, value: unknown): void {
   res.end(body);
 }
 
+function isLoopbackHostHeader(hostHeader: string | string[] | undefined): boolean {
+  if (typeof hostHeader !== 'string' || !hostHeader.trim()) return false;
+  try {
+    const parsed = new URL(`http://${hostHeader.trim()}`);
+    return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export async function startControlServer(port = controlPort()): Promise<Server> {
   const server = createServer((req, res) => {
     void (async () => {
+      if (!isLoopbackHostHeader(req.headers.host)) {
+        json(res, 403, { schema_version: 1, error: 'invalid_host' });
+        return;
+      }
+      if (req.method === 'POST' && !isTrustedBrowserOrigin(typeof req.headers.origin === 'string' ? req.headers.origin : undefined)) {
+        json(res, 403, { schema_version: 1, error: 'origin_not_allowed' });
+        return;
+      }
       if (req.method === 'GET' && req.url === '/healthz') {
         json(res, 200, { schema_version: 1, status: 'ok', pid: process.pid });
         return;

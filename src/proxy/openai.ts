@@ -504,15 +504,40 @@ function secureEqual(left: string, right: string): boolean {
   return timingSafeEqual(digest(left), digest(right));
 }
 
-export function apiKeyMiddleware(apiKey?: string): (req: Request, res: Response, next: NextFunction) => void {
+export function apiKeyMiddleware(
+  apiKey?: string,
+  vmApiKey?: string
+): (req: Request, res: Response, next: NextFunction) => void {
   return (req, res, next) => {
-    if (!apiKey || req.path === '/healthz') { next(); return; }
+    if ((!apiKey && !vmApiKey) || req.path === '/healthz') { next(); return; }
     const bearer = req.header('authorization')?.replace(/^Bearer\s+/i, '');
     const supplied = bearer || req.header('x-api-key') || '';
-    if (!secureEqual(supplied, apiKey)) {
+    const adminMatch = Boolean(apiKey && secureEqual(supplied, apiKey));
+    const vmMatch = Boolean(vmApiKey && secureEqual(supplied, vmApiKey));
+    if (!adminMatch && !vmMatch) {
       sendOpenAiError(res, 401, 'API key local inválida.', 'invalid_api_key');
       return;
     }
+    if (!adminMatch && vmMatch) {
+      res.locals.vmScoped = true;
+      if (req.path === '/v1' || req.path.startsWith('/v1/kitt/')) {
+        sendOpenAiError(res, 403, 'Chave escopada de VM não pode acessar rotas administrativas.', 'vm_scope_forbidden');
+        return;
+      }
+    }
     next();
   };
+}
+
+export function isModelAllowedByPolicy(
+  res: Response,
+  requestedModel: string | undefined,
+  defaultModel: string,
+  allowedModels?: readonly string[]
+): boolean {
+  const vmScoped = res.locals?.vmScoped === true;
+  if (!vmScoped && (!allowedModels || allowedModels.length === 0)) return true;
+  const effective = (requestedModel ?? '').trim() || defaultModel;
+  const allowlist = allowedModels && allowedModels.length > 0 ? allowedModels : [defaultModel];
+  return allowlist.includes(effective);
 }
