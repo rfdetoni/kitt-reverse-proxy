@@ -45,3 +45,28 @@ test('browser diagnostics capture bounded real events without raw secrets', asyn
   assert.match(visible, /"fingerprint"/);
   assert.match(visible, /"status":500/);
 });
+
+
+test('browser upload only accepts bounded inline bytes, never host filenames', async () => {
+  let uploaded: unknown;
+  const page = {
+    url: () => 'https://example.org/',
+    isClosed: () => false,
+    locator: () => ({
+      first: () => ({
+        setInputFiles: async (payload: unknown) => { uploaded = payload; }
+      })
+    })
+  };
+  const context = { close: async () => undefined };
+  const enabled = new BrowserAutomationSession(page as never, context as never, undefined, true);
+  const disabled = new BrowserAutomationSession(page as never, context as never);
+  const args = { selector: '#file', filename: 'sample.txt', data_base64: 'YWJj' };
+  await assert.rejects(disabled.execute('upload', args, ['https://example.org']), /disabled/);
+  await assert.rejects(enabled.execute('upload', { ...args, filename: '../secret.txt' }, ['https://example.org']), /basename/);
+  await assert.rejects(enabled.execute('upload', { ...args, data_base64: '!' }, ['https://example.org']), /payload/);
+  const result = await enabled.execute('upload', args, ['https://example.org']);
+  assert.equal(result.bytes, 3);
+  assert.deepEqual(uploaded, { name: 'sample.txt', mimeType: 'application/octet-stream', buffer: Buffer.from('abc') });
+  await assert.rejects(enabled.execute('download', {url: 'https://other.org/file'}, ['https://example.org', 'https://other.org']), /current page origin/);
+});

@@ -201,6 +201,11 @@ export class SessionManager {
     return Boolean(this.defaultSession.browserSession);
   }
 
+  browserFileTransferSupported(): boolean {
+    return this.browserAutomationSupported() && this.options.config.browserFileTransfer === true
+      && Boolean(this.options.config.apiKey);
+  }
+
   private get automationIdleTimeoutMs(): number {
     return Math.min(
       120_000,
@@ -215,6 +220,9 @@ export class SessionManager {
     signal?: AbortSignal,
     originScope: readonly string[] = ['loopback']
   ): Promise<JsonObject> {
+    if (['upload', 'download'].includes(action.trim().toLowerCase()) && !this.browserFileTransferSupported()) {
+      throw new BrowserAutomationUnavailableError('Browser file transfer is disabled.');
+    }
     const session = await this.resolve(requestedId);
     try {
       if (!session.browserSession) {
@@ -250,7 +258,8 @@ export class SessionManager {
               session.browserAutomation = await BrowserAutomationSession.create(
                 session.browserSession!,
                 originScope,
-                signalWithShutdown
+                signalWithShutdown,
+                this.browserFileTransferSupported()
               );
             } finally {
               this.pendingAutomationPages -= 1;

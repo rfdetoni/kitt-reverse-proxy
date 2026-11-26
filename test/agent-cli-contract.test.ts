@@ -6,6 +6,7 @@ import type { SessionManager } from '../src/runtime/session-manager.js';
 function fakeManager(): SessionManager {
   return {
     browserAutomationSupported: () => true,
+    browserFileTransferSupported: () => false,
     capacity: () => ({
       provider: 'chatgpt',
       active: 1,
@@ -39,4 +40,8 @@ test('agent-cli contract preserves the stable reverse-proxy integration surface'
   assert.equal(sessions.version, 1);
   const browser = contract.browser_automation as Record<string, unknown>;
   assert.equal(browser.origin_scope_enforced, true);
+  assert.equal(browser.file_transfer_supported, false);
+  assert.ok(Array.isArray(browser.actions));
+  assert.equal(browser.actions.includes('upload'), false);
+  assert.equal(browser.actions.includes('download'), false);
 });

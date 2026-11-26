@@ -29,6 +29,7 @@ export interface AppConfig {
   browserMode?: BrowserMode | undefined;
   cors: boolean;
   apiKey?: string;
+  browserFileTransfer?: boolean;
   profilePath?: string;
   saveProfilePath?: string;
   userDataDir?: string;
